@@ -1,0 +1,349 @@
+import { useEffect, useRef, useState } from 'react'
+import { Terminal } from '@xterm/xterm'
+import { FitAddon } from '@xterm/addon-fit'
+import { SearchAddon } from '@xterm/addon-search'
+import { WebLinksAddon } from '@xterm/addon-web-links'
+import {
+  AlertCircle,
+  ChevronDown,
+  ChevronUp,
+  Loader2,
+  PlugZap,
+  RefreshCw,
+  Search,
+  X
+} from 'lucide-react'
+import type { SessionUi } from '@/stores/sessionStore'
+import { terminalRegistry, useSessionStore } from '@/stores/sessionStore'
+import { resolveDark, useSettingsStore } from '@/stores/settingsStore'
+import { getTerminalTheme } from '@/theme/terminalThemes'
+import { ContextMenu, useContextMenu, type MenuEntry } from '@/components/ui'
+import { call } from '@/lib/ipc'
+import { ensureZmodem, detachZmodem, bytesToBase64, requestZmodemConfirm } from '@/lib/zmodem'
+
+function ReconnectButton({ sessionId }: { sessionId: string }): JSX.Element {
+  return (
+    <button
+      className="btn btn-primary mt-1 h-7 px-3 text-xs"
+      onClick={() => useSessionStore.getState().reconnect(sessionId)}
+    >
+      <RefreshCw size={12} />
+      重新连接
+      <span className="text-2xs opacity-70">（或按 Enter）</span>
+    </button>
+  )
+}
+
+/**
+ * 终端视图：一个 SessionUi 对应一个 xterm 实例。
+ * - 实例挂到 terminalRegistry，会话数据事件由 App 层写入；
+ * - 容器尺寸变化（含标签切换、窗口缩放）自动 fit 并同步 cols/rows 到主进程；
+ * - Ctrl+F 打开搜索条，右键菜单提供 复制/粘贴/全选/清屏/查找。
+ */
+export function TerminalView({
+  session,
+  active
+}: {
+  session: SessionUi
+  active: boolean
+}): JSX.Element {
+  const sessionId = session.id
+  const containerRef = useRef<HTMLDivElement>(null)
+
+  const [searchOpen, setSearchOpen] = useState(false)
+  const [searchText, setSearchText] = useState('')
+  const [searchCount, setSearchCount] = useState<{ index: number; count: number }>({
+    index: -1,
+    count: 0
+  })
+
+  const { menu, openMenu, closeMenu } = useContextMenu<'context'>()
+
+  /* ---------- 初始化（每个会话一次） ---------- */
+  useEffect(() => {
+    const el = containerRef.current
+    if (!el) return
+
+    const { settings } = useSettingsStore.getState()
+    const term = new Terminal({
+      fontFamily: settings.terminal.fontFamily,
+      fontSize: settings.terminal.fontSize,
+      lineHeight: settings.terminal.lineHeight,
+      cursorStyle: settings.terminal.cursorStyle,
+      cursorBlink: settings.terminal.cursorBlink,
+      scrollback: settings.terminal.scrollback,
+      theme: getTerminalTheme(resolveDark(settings.theme)),
+      allowProposedApi: true,
+      macOptionIsMeta: true
+    })
+    const fit = new FitAddon()
+    const search = new SearchAddon()
+    term.loadAddon(fit)
+    term.loadAddon(search)
+    term.loadAddon(new WebLinksAddon())
+    term.open(el)
+
+    const doFit = (): void => {
+      if (!containerRef.current || containerRef.current.clientWidth === 0) return
+      try {
+        fit.fit()
+      } catch {
+        return
+      }
+      if (term.cols > 0 && term.rows > 0) {
+        useSessionStore.getState().setSize(sessionId, term.cols, term.rows)
+        void window.api.session.resize(sessionId, term.cols, term.rows)
+      }
+    }
+
+    // fit 合帧：ResizeObserver 在拖动窗口时会高频触发，若每次都新排一个 rAF
+    // 而不取消上一个，回调会无上限积压（每个都做一次 fit + IPC 往返）。
+    // 这里保留唯一的待执行句柄，重复触发只覆盖，确保每帧最多 fit 一次。
+    let fitRaf = 0
+    const scheduleFit = (): void => {
+      if (fitRaf) return
+      fitRaf = requestAnimationFrame(() => {
+        fitRaf = 0
+        doFit()
+      })
+    }
+
+    scheduleFit()
+    const resizeObserver = new ResizeObserver(scheduleFit)
+    resizeObserver.observe(el)
+
+    // 输入 -> 主进程
+    const dataDisposer = term.onData((data) => {
+      const st = useSessionStore.getState().sessions.find((x) => x.id === sessionId)?.status
+      if (st === 'disconnected' || st === 'error') {
+        // 断开状态下按回车直接重连
+        if (data === '\r') useSessionStore.getState().reconnect(sessionId)
+        return
+      }
+      void window.api.session.write(sessionId, data)
+    })
+
+    // 搜索计数
+    const searchResultDisposer = search.onDidChangeResults(({ resultIndex, resultCount }) => {
+      setSearchCount({ index: resultIndex, count: resultCount })
+    })
+
+    // 快捷键：Ctrl+Shift+C/V 复制粘贴；Ctrl+F 搜索
+    term.attachCustomKeyEventHandler((e) => {
+      if (e.type !== 'keydown') return true
+      const key = e.key.toLowerCase()
+      if (e.ctrlKey && e.shiftKey && key === 'c') {
+        const selection = term.getSelection()
+        if (selection) void call(window.api.clip.write(selection), { silent: true })
+        return false
+      }
+      if (e.ctrlKey && e.shiftKey && key === 'v') {
+        void call(window.api.clip.read(), { silent: true }).then((text) => {
+          if (text) term.paste(text)
+        })
+        return false
+      }
+      if (e.ctrlKey && !e.shiftKey && key === 'f') {
+        setSearchOpen(true)
+        return false
+      }
+      return true
+    })
+
+    terminalRegistry.set(sessionId, { term, fit, search })
+
+    // ZMODEM：挂上 Sentry，之后本会话的输出统一经它转发
+    // （协议帧被拦下，普通输出回落到 term.write）
+    ensureZmodem(sessionId, {
+      write: (text) => term.write(text),
+      send: (bytes) => {
+        // 协议控制字节是二进制，必须走专用通道；
+        // session.write 会按 UTF-8 编码，>127 的字节会失真。
+        void window.api.zmodem.sendBytes(sessionId, bytesToBase64(bytes))
+      },
+      confirm: (direction) => requestZmodemConfirm(direction),
+      afterTransfer: () => {
+        // 传输结束后补换行：远端 sz/rz 退出时不补 \r\n，
+        // 提示符会与最后一行进度挤在一起。
+        term.write('\r\n')
+      }
+    })
+
+    return () => {
+      terminalRegistry.delete(sessionId)
+      detachZmodem(sessionId)
+      cancelAnimationFrame(fitRaf)
+      resizeObserver.disconnect()
+      dataDisposer.dispose()
+      searchResultDisposer.dispose()
+      term.dispose()
+    }
+  }, [sessionId])
+
+  /* ---------- 设置变化：字体 / 主题实时生效 ---------- */
+  const terminalPrefs = useSettingsStore((s) => s.settings.terminal)
+  const themeMode = useSettingsStore((s) => s.settings.theme)
+  useEffect(() => {
+    const entry = terminalRegistry.get(sessionId)
+    if (!entry) return
+    entry.term.options.fontFamily = terminalPrefs.fontFamily
+    entry.term.options.fontSize = terminalPrefs.fontSize
+    entry.term.options.lineHeight = terminalPrefs.lineHeight
+    entry.term.options.cursorStyle = terminalPrefs.cursorStyle
+    entry.term.options.cursorBlink = terminalPrefs.cursorBlink
+    entry.term.options.scrollback = terminalPrefs.scrollback
+    entry.term.options.theme = getTerminalTheme(resolveDark(themeMode))
+    requestAnimationFrame(() => {
+      try {
+        entry.fit.fit()
+      } catch {
+        /* 容器不可见时忽略 */
+      }
+    })
+  }, [sessionId, terminalPrefs, themeMode])
+
+  /* ---------- 标签切换后重新 fit ---------- */
+  useEffect(() => {
+    if (!active) return
+    const raf = requestAnimationFrame(() => {
+      const entry = terminalRegistry.get(sessionId)
+      if (!entry) return
+      try {
+        entry.fit.fit()
+      } catch {
+        /* ignore */
+      }
+      entry.term.focus()
+    })
+    return () => cancelAnimationFrame(raf)
+  }, [active, sessionId])
+
+  /* ---------- 搜索 ---------- */
+  const runSearch = (text: string, backwards = false): void => {
+    const entry = terminalRegistry.get(sessionId)
+    if (!entry || !text) return
+    if (backwards) entry.search.findPrevious(text, { caseSensitive: false })
+    else entry.search.findNext(text, { caseSensitive: false })
+  }
+
+  const closeSearch = (): void => {
+    setSearchOpen(false)
+    terminalRegistry.get(sessionId)?.search.clearDecorations()
+    terminalRegistry.get(sessionId)?.term.focus()
+  }
+
+  /* ---------- 右键菜单 ---------- */
+  const menuItems: MenuEntry[] = [
+    {
+      label: '复制',
+      onClick: () => {
+        const entry = terminalRegistry.get(sessionId)
+        const selection = entry?.term.getSelection()
+        if (selection) void call(window.api.clip.write(selection), { silent: true })
+      }
+    },
+    {
+      label: '粘贴',
+      onClick: () => {
+        void call(window.api.clip.read(), { silent: true }).then((text) => {
+          if (text) {
+            terminalRegistry.get(sessionId)?.term.paste(text)
+            terminalRegistry.get(sessionId)?.term.focus()
+          }
+        })
+      }
+    },
+    { label: '全选', onClick: () => terminalRegistry.get(sessionId)?.term.selectAll() },
+    {
+      label: '查找',
+      separatorBefore: true,
+      onClick: () => setSearchOpen(true)
+    },
+    { label: '清屏', onClick: () => terminalRegistry.get(sessionId)?.term.clear() }
+  ]
+
+  /* ---------- 状态覆盖层 ---------- */
+  const showOverlay = session.status !== 'connected'
+
+  return (
+    <div className="relative flex h-full flex-col bg-app">
+      {/* 终端挂载点：内层容器不设 padding，保证 fit 计算的尺寸精确 */}
+      <div className="min-h-0 flex-1 px-3 pb-1 pt-2">
+        <div
+          ref={containerRef}
+          className="h-full w-full"
+          onContextMenu={(e) => openMenu(e, 'context')}
+        />
+      </div>
+
+      {/* 搜索条 */}
+      {searchOpen && (
+        <div className="absolute right-3 top-2 z-10 flex animate-pop-in items-center gap-1 rounded-lg border border-edge bg-panel/95 px-2 py-1 shadow-pop backdrop-blur-xl">
+          <Search size={12} className="text-ink-3" />
+          <input
+            autoFocus
+            value={searchText}
+            onChange={(e) => {
+              setSearchText(e.target.value)
+              runSearch(e.target.value)
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') runSearch(searchText, e.shiftKey)
+              if (e.key === 'Escape') closeSearch()
+            }}
+            placeholder="在终端中查找…"
+            className="h-6 w-44 selectable border-none bg-transparent text-xs text-ink outline-none placeholder:text-ink-3"
+          />
+          <span className="min-w-[52px] text-center font-mono text-2xs text-ink-3">
+            {searchCount.count > 0 ? `${searchCount.index + 1}/${searchCount.count}` : '无结果'}
+          </span>
+          <button
+            className="btn-icon h-5 w-5"
+            onClick={() => runSearch(searchText, true)}
+            title="上一个 (Shift+Enter)"
+          >
+            <ChevronUp size={12} />
+          </button>
+          <button className="btn-icon h-5 w-5" onClick={() => runSearch(searchText)} title="下一个 (Enter)">
+            <ChevronDown size={12} />
+          </button>
+          <button className="btn-icon h-5 w-5" onClick={closeSearch} title="关闭 (Esc)">
+            <X size={12} />
+          </button>
+        </div>
+      )}
+
+      {/* 连接中 / 错误 / 已断开 覆盖层 */}
+      {showOverlay && (
+        <div className="absolute inset-0 z-20 flex items-center justify-center bg-app/78 backdrop-blur-[1px]">
+          {session.status === 'connecting' && (
+            <div className="flex items-center gap-2.5 text-xs text-ink-2">
+              <Loader2 size={15} className="animate-spin text-accent" />
+              正在连接 {session.username}@{session.host}…
+            </div>
+          )}
+          {session.status === 'disconnected' && (
+            <div className="flex max-w-[420px] flex-col items-center gap-2 text-center">
+              <PlugZap size={22} className="text-ink-3" />
+              <div className="text-xs text-ink-2">连接已断开</div>
+              <div className="text-2xs text-ink-3">远端关闭了会话，或网络中断。</div>
+              <ReconnectButton sessionId={sessionId} />
+            </div>
+          )}
+          {session.status === 'error' && (
+            <div className="flex max-w-[460px] flex-col items-center gap-2 text-center">
+              <AlertCircle size={22} className="text-danger" />
+              <div className="text-xs font-medium text-ink">连接失败</div>
+              <div className="selectable break-all text-2xs leading-relaxed text-ink-3">
+                {session.error ?? '未知错误'}
+              </div>
+              <ReconnectButton sessionId={sessionId} />
+            </div>
+          )}
+        </div>
+      )}
+
+      {menu && <ContextMenu x={menu.x} y={menu.y} items={menuItems} onClose={closeMenu} />}
+    </div>
+  )
+}

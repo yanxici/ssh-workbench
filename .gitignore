@@ -1,0 +1,26 @@
+node_modules
+out
+dist
+.vite
+.tsc-verify
+*.local
+smoke-shot.png
+*.log
+
+# 打包产物 / 构建缓存
+dist-*
+*.tsbuildinfo
+smoke-result.json
+probe-*.json
+*.err
+
+# 本地 Claude 设置
+.claude/settings.local.json
+
+# 内部专用脚本（含公司设备信息 / 明文密码），只留本地，不上传
+scripts/set-charger-password.cjs
+scripts/set-xcmd-passwords.cjs
+scripts/switch-robot-to-password.cjs
+scripts/import-xcmd.cjs
+scripts/verify-xcmd-import.cjs
+scripts/gen-rtu-commands.cjs

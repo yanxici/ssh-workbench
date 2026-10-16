@@ -1,0 +1,610 @@
+import { useEffect, useState } from 'react'
+import {
+  ChevronDown,
+  ChevronRight,
+  Columns2,
+  Download,
+  FileText,
+  Folder,
+  FolderPlus,
+  Link2,
+  Loader2,
+  Pencil,
+  RefreshCw,
+  ShieldCheck,
+  Trash2,
+  Upload,
+  X
+} from 'lucide-react'
+import type { RemoteFile } from '@shared/types'
+import { useSftpStore } from '@/stores/sftpStore'
+import { useSessionStore } from '@/stores/sessionStore'
+import { useToastStore } from '@/stores/toastStore'
+import { call } from '@/lib/ipc'
+import { cn, formatBytes, remoteDirname, remoteJoin } from '@/lib/utils'
+import {
+  ConfirmDialog,
+  ContextMenu,
+  PromptDialog,
+  useContextMenu,
+  type MenuEntry
+} from '@/components/ui'
+
+/**
+ * 终端左侧的会话文件树（连接会话后自动打开，可折叠）。
+ * - 根为 `/`，自动展开到远端 home（可从 home 逐级往上浏览）
+ * - 目录懒加载：点开箭头才拉取子目录
+ * - 顶部路径栏显示当前目录（默认 home）
+ * - 双击：目录展开/收起并让终端同步 cd 到该目录，文件打开远程编辑器
+ * - 右键：编辑 / 上传到此处 / 新建文件夹 / 下载 / 重命名 / 权限 / 删除
+ * - 刷新机制：操作后 bump 全局 treeVersion，各级目录重新拉取（展开结构保留）
+ */
+
+/** 由 home 路径推导需要自动展开的目录链：/home/share → ['/home', '/home/share'] */
+function expandChain(home: string): string[] {
+  const parts = home.split('/').filter(Boolean)
+  const chain: string[] = []
+  let current = ''
+  for (const p of parts) {
+    current = `${current}/${p}`
+    chain.push(current)
+  }
+  return chain
+}
+
+/** 单引号转义，供 shell 安全使用：a'b → 'a'\''b' */
+function shellQuote(p: string): string {
+  return `'${p.replace(/'/g, `'\\''`)}'`
+}
+
+/**
+ * 路径含控制字符（如 ^C、回车、ESC）时不能发给终端：
+ * 这些字符会先被终端行规程 / readline 解释，单引号挡不住，恶意文件名可借此执行命令
+ */
+function isUnsafeForTerminal(p: string): boolean {
+  // eslint-disable-next-line no-control-regex
+  return /[\x00-\x1f\x7f]/.test(p)
+}
+
+export function SessionFileTree({
+  sessionId,
+  title,
+  onClose,
+  onOpenTransfer
+}: {
+  sessionId: string
+  title: string
+  onClose: () => void
+  onOpenTransfer: () => void
+}): JSX.Element {
+  const version = useSftpStore((s) => s.treeVersion)
+  const bumpTree = useSftpStore((s) => s.bumpTree)
+  const openEditor = useSftpStore((s) => s.openEditor)
+  /** 所属会话的连接状态：连接中不发 SFTP 请求，就绪后自动加载 */
+  const sessionStatus = useSessionStore(
+    (s) => s.sessions.find((x) => x.id === sessionId)?.status ?? 'disconnected'
+  )
+
+  const [ready, setReady] = useState(false)
+  const [autoExpand, setAutoExpand] = useState<string[]>([])
+  const [error, setError] = useState<string | null>(null)
+  const [selected, setSelected] = useState<RemoteFile | null>(null)
+  /** 手动重试计数（失败后点「重试」触发） */
+  const [attempt, setAttempt] = useState(0)
+  /** 当前目录（顶部路径栏显示；双击目录时更新并同步终端 cd） */
+  const [currentDir, setCurrentDir] = useState<string | null>(null)
+
+  // 初始化：根为 /，取 home 用于自动展开到主目录。
+  // 只有会话 connected 后才发起请求（修复「连接瞬间打开文件树」的竞态失败）
+  useEffect(() => {
+    if (sessionStatus !== 'connected') return
+    let cancelled = false
+    setError(null)
+    setReady(false)
+    setAutoExpand([])
+    setSelected(null)
+    void window.api.sftp.home(sessionId).then((res) => {
+      if (cancelled) return
+      if (res.ok) {
+        setAutoExpand(expandChain(res.data))
+        setCurrentDir(res.data || '/')
+      } else {
+        setError(res.error)
+      }
+      setReady(true)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [sessionId, sessionStatus, attempt])
+
+  /** 刷新：未就绪/出错时重跑初始化，否则整体重列目录 */
+  const refresh = (): void => {
+    if (error || !ready) setAttempt((n) => n + 1)
+    else bumpTree()
+  }
+
+  /** 上传目标：选中目录 > home > 根 */
+  const homePath = autoExpand[autoExpand.length - 1] ?? '/'
+  const uploadTarget = selected?.type === 'directory' ? selected.path : homePath
+
+  const handleUpload = (): void => {
+    if (!uploadTarget) return
+    void call(window.api.sftp.uploadDialog(sessionId, uploadTarget), {
+      errorTitle: '上传失败'
+    }).then((res) => {
+      if (res && !res.canceled) {
+        useToastStore.getState().push({
+          kind: 'info',
+          title: `已加入 ${res.count} 个上传任务`,
+          detail: `目标：${uploadTarget}`
+        })
+        bumpTree()
+      }
+    })
+  }
+
+  /** 双击目录：更新路径栏，并让终端 cd 过去 */
+  const enterDir = (dir: string): void => {
+    setCurrentDir(dir)
+    if (isUnsafeForTerminal(dir)) {
+      useToastStore.getState().push({
+        kind: 'error',
+        title: '未同步终端目录',
+        detail: '路径包含控制字符，为安全起见不自动 cd，请在终端手动进入'
+      })
+      return
+    }
+    void call(window.api.session.write(sessionId, `cd ${shellQuote(dir)}\r`), {
+      errorTitle: '终端同步目录失败'
+    })
+  }
+
+  const handleDownload = (): void => {
+    if (!selected) return
+    void call(window.api.sftp.downloadDialog(sessionId, [selected.path]), {
+      errorTitle: '下载失败'
+    }).then((res) => {
+      if (res && !res.canceled) {
+        useToastStore.getState().push({ kind: 'info', title: '已加入下载任务' })
+      }
+    })
+  }
+
+  return (
+    <div className="flex h-full min-h-0 flex-col bg-panel">
+      {/* 头部工具栏 */}
+      <div className="flex h-8 shrink-0 items-center gap-0.5 border-b border-edge-soft pl-2 pr-1">
+        <span className="shrink-0 text-2xs font-semibold text-ink-2">文件</span>
+        <span className="min-w-0 flex-1 truncate pl-1 text-2xs text-ink-3" title={title}>
+          {title}
+        </span>
+        <button
+          className="btn-icon h-6 w-6"
+          title={`上传文件到 ${selected?.type === 'directory' ? `「${selected.name}」` : '主目录'}`}
+          onClick={handleUpload}
+        >
+          <Upload size={12} />
+        </button>
+        <button
+          className="btn-icon h-6 w-6"
+          title={selected ? `下载「${selected.name}」` : '先选中一个文件/目录'}
+          disabled={!selected}
+          onClick={handleDownload}
+        >
+          <Download size={12} />
+        </button>
+        <button className="btn-icon h-6 w-6" title="刷新" onClick={refresh}>
+          <RefreshCw size={12} />
+        </button>
+        <button
+          className="btn-icon h-6 w-6"
+          title="双栏传输模式（本地 ↔ 远端，适合批量互传）"
+          onClick={onOpenTransfer}
+        >
+          <Columns2 size={12} />
+        </button>
+        <button className="btn-icon h-6 w-6" title="关闭文件面板" onClick={onClose}>
+          <X size={12} />
+        </button>
+      </div>
+
+      {/* 当前目录路径栏 */}
+      <div
+        className="flex h-6 shrink-0 items-center gap-1 border-b border-edge-soft px-2 text-ink-3"
+        title={currentDir ?? ''}
+      >
+        <Folder size={11} className="shrink-0 text-accent/70" />
+        {/* rtl + bdi：路径过长时省略号出现在左侧，保留末级目录可见 */}
+        <span className="selectable min-w-0 flex-1 truncate text-left font-mono text-[10px]" dir="rtl">
+          <bdi>{currentDir ?? '—'}</bdi>
+        </span>
+      </div>
+
+      {/* 树主体 */}
+      <div className="scroll-thin min-h-0 flex-1 overflow-auto py-1" onClick={() => setSelected(null)}>
+        {sessionStatus === 'connecting' ? (
+          <div className="flex items-center justify-center gap-2 py-6 text-2xs text-ink-3">
+            <Loader2 size={12} className="animate-spin" />
+            等待会话连接…
+          </div>
+        ) : sessionStatus === 'error' || sessionStatus === 'disconnected' ? (
+          <div className="px-3 py-4 text-2xs leading-relaxed text-ink-3">
+            会话{sessionStatus === 'error' ? '连接失败' : '已断开'}。
+            <div className="mt-1 text-ink-3/70">重新建立连接后，文件树会自动加载。</div>
+          </div>
+        ) : error ? (
+          <div className="flex flex-col items-start gap-2 px-3 py-4">
+            <div className="text-2xs leading-relaxed text-ink-3">{error}</div>
+            <button
+              className="flex items-center gap-1 rounded border border-edge px-2 py-1 text-2xs text-ink-2 transition-colors hover:bg-hover hover:text-ink"
+              onClick={() => setAttempt((n) => n + 1)}
+            >
+              <RefreshCw size={11} />
+              重试
+            </button>
+          </div>
+        ) : ready ? (
+          <TreeLevel
+            key={autoExpand.join('|')}
+            sessionId={sessionId}
+            path="/"
+            depth={0}
+            version={version}
+            autoExpand={autoExpand}
+            selectedPath={selected?.path ?? null}
+            onSelect={setSelected}
+            onOpenFile={(f) => void openEditor(f.path)}
+            onEnterDir={enterDir}
+            onRefresh={bumpTree}
+          />
+        ) : (
+          <div className="flex items-center justify-center gap-2 py-6 text-2xs text-ink-3">
+            <Loader2 size={12} className="animate-spin" />
+            加载中…
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+/* ------------------------------------------------------------------ *
+ *  目录层级（递归，懒加载）
+ * ------------------------------------------------------------------ */
+
+function TreeLevel({
+  sessionId,
+  path,
+  depth,
+  version,
+  autoExpand,
+  selectedPath,
+  onSelect,
+  onOpenFile,
+  onEnterDir,
+  onRefresh
+}: {
+  sessionId: string
+  path: string
+  depth: number
+  version: number
+  /** 需要自动展开的目录链（仅初始化时生效） */
+  autoExpand: string[]
+  selectedPath: string | null
+  onSelect: (f: RemoteFile) => void
+  onOpenFile: (f: RemoteFile) => void
+  onEnterDir: (dir: string) => void
+  onRefresh: () => void
+}): JSX.Element {
+  const [files, setFiles] = useState<RemoteFile[] | null>(null)
+  // 初始展开状态：自动展开链中属于本层子目录的项
+  const [openDirs, setOpenDirs] = useState<Set<string>>(
+    () => new Set(autoExpand.filter((p) => remoteDirname(p) === path))
+  )
+
+  useEffect(() => {
+    let cancelled = false
+    void call(window.api.sftp.list(sessionId, path), { silent: true }).then((list) => {
+      if (!cancelled) setFiles(list ?? [])
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [sessionId, path, version])
+
+  const toggleDir = (p: string): void => {
+    setOpenDirs((prev) => {
+      const next = new Set(prev)
+      if (next.has(p)) next.delete(p)
+      else next.add(p)
+      return next
+    })
+  }
+
+  if (!files) {
+    return (
+      <div className="flex items-center gap-2 py-1" style={{ paddingLeft: 10 + depth * 12 }}>
+        <Loader2 size={11} className="animate-spin text-ink-3" />
+      </div>
+    )
+  }
+
+  return (
+    <>
+      {files.map((f) => (
+        <div key={f.path}>
+          <TreeRow
+            file={f}
+            depth={depth}
+            expanded={openDirs.has(f.path)}
+            selected={selectedPath === f.path}
+            sessionId={sessionId}
+            onToggle={() => toggleDir(f.path)}
+            onSelect={onSelect}
+            onOpenFile={onOpenFile}
+            onEnterDir={onEnterDir}
+            onRefresh={onRefresh}
+          />
+          {f.type === 'directory' && openDirs.has(f.path) && (
+            <TreeLevel
+              sessionId={sessionId}
+              path={f.path}
+              depth={depth + 1}
+              version={version}
+              autoExpand={autoExpand}
+              selectedPath={selectedPath}
+              onSelect={onSelect}
+              onOpenFile={onOpenFile}
+              onEnterDir={onEnterDir}
+              onRefresh={onRefresh}
+            />
+          )}
+        </div>
+      ))}
+    </>
+  )
+}
+
+/* ------------------------------------------------------------------ *
+ *  单行（含右键菜单）
+ * ------------------------------------------------------------------ */
+
+function TreeRow({
+  file,
+  depth,
+  expanded,
+  selected,
+  sessionId,
+  onToggle,
+  onSelect,
+  onOpenFile,
+  onEnterDir,
+  onRefresh
+}: {
+  file: RemoteFile
+  depth: number
+  expanded: boolean
+  selected: boolean
+  sessionId: string
+  onToggle: () => void
+  onSelect: (f: RemoteFile) => void
+  onOpenFile: (f: RemoteFile) => void
+  onEnterDir: (dir: string) => void
+  onRefresh: () => void
+}): JSX.Element {
+  const { menu, openMenu, closeMenu } = useContextMenu<string>()
+  const [dialog, setDialog] = useState<null | 'mkdir' | 'rename' | 'chmod'>(null)
+  const [pendingDelete, setPendingDelete] = useState(false)
+
+  const isDir = file.type === 'directory'
+
+  /* ---------- 操作 ---------- */
+
+  const mkdirAt = async (value: string): Promise<void> => {
+    const done = await call(window.api.sftp.mkdir(sessionId, remoteJoin(file.path, value)), {
+      errorTitle: '新建文件夹失败'
+    })
+    if (done !== null) onRefresh()
+  }
+
+  const renameTo = async (value: string): Promise<void> => {
+    const done = await call(
+      window.api.sftp.rename(sessionId, file.path, remoteJoin(remoteDirname(file.path), value)),
+      { errorTitle: '重命名失败' }
+    )
+    if (done !== null) onRefresh()
+  }
+
+  const chmodTo = async (value: string): Promise<void> => {
+    const mode = parseInt(value, 8)
+    if (!Number.isFinite(mode)) return
+    const done = await call(window.api.sftp.chmod(sessionId, file.path, mode), {
+      errorTitle: '修改权限失败'
+    })
+    if (done !== null) {
+      useToastStore.getState().push({ kind: 'success', title: `权限已更新为 ${value}` })
+      onRefresh()
+    }
+  }
+
+  const removeThis = async (): Promise<void> => {
+    const done = await call(window.api.sftp.remove(sessionId, file.path), {
+      errorTitle: '删除失败'
+    })
+    if (done !== null) {
+      useToastStore.getState().push({ kind: 'success', title: `已删除「${file.name}」` })
+      onRefresh()
+    }
+  }
+
+  const uploadHere = async (): Promise<void> => {
+    const dir = isDir ? file.path : remoteDirname(file.path)
+    const res = await call(window.api.sftp.uploadDialog(sessionId, dir), {
+      errorTitle: '上传失败'
+    })
+    if (res && !res.canceled) {
+      useToastStore.getState().push({
+        kind: 'info',
+        title: `已加入 ${res.count} 个上传任务`,
+        detail: `目标：${dir}`
+      })
+      onRefresh()
+    }
+  }
+
+  const downloadHere = async (): Promise<void> => {
+    const res = await call(window.api.sftp.downloadDialog(sessionId, [file.path]), {
+      errorTitle: '下载失败'
+    })
+    if (res && !res.canceled) {
+      useToastStore.getState().push({ kind: 'info', title: '已加入下载任务' })
+    }
+  }
+
+  const menuItems = (): MenuEntry[] => [
+    ...(isDir
+      ? [
+          { label: expanded ? '收起' : '展开', onClick: onToggle },
+          { label: '终端进入此目录', onClick: () => onEnterDir(file.path) },
+          {
+            label: '上传文件到此处',
+            icon: <Upload size={12} />,
+            onClick: () => void uploadHere()
+          },
+          {
+            label: '新建文件夹',
+            icon: <FolderPlus size={12} />,
+            onClick: () => setDialog('mkdir')
+          }
+        ]
+      : [
+          {
+            label: '编辑',
+            icon: <Pencil size={12} />,
+            onClick: () => onOpenFile(file)
+          }
+        ]),
+    {
+      label: isDir ? '下载此目录' : '下载',
+      icon: <Download size={12} />,
+      onClick: () => void downloadHere()
+    },
+    { label: '重命名', onClick: () => setDialog('rename') },
+    {
+      label: '修改权限',
+      icon: <ShieldCheck size={12} />,
+      onClick: () => setDialog('chmod')
+    },
+    {
+      label: '删除',
+      icon: <Trash2 size={12} />,
+      danger: true,
+      separatorBefore: true,
+      onClick: () => setPendingDelete(true)
+    }
+  ]
+
+  return (
+    <>
+      <div
+        className={cn(
+          'flex cursor-default items-center gap-1.5 rounded-sm py-[2px] pr-1.5 text-xs',
+          selected ? 'bg-accent/15 text-ink' : 'text-ink-2 hover:bg-hover/60'
+        )}
+        style={{ paddingLeft: 6 + depth * 12 }}
+        onClick={(e) => {
+          e.stopPropagation()
+          onSelect(file)
+        }}
+        onDoubleClick={() => {
+          if (isDir) {
+            onToggle()
+            onEnterDir(file.path)
+          } else onOpenFile(file)
+        }}
+        onContextMenu={(e) => openMenu(e, file.path)}
+        title={file.path}
+      >
+        {isDir ? (
+          <button
+            className="flex h-3.5 w-3.5 shrink-0 items-center justify-center text-ink-3"
+            onClick={(e) => {
+              e.stopPropagation()
+              onToggle()
+            }}
+          >
+            {expanded ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
+          </button>
+        ) : (
+          <span className="w-3.5 shrink-0" />
+        )}
+
+        {isDir ? (
+          <Folder size={12} className="shrink-0 text-accent/80" />
+        ) : file.isLink ? (
+          <Link2 size={12} className="shrink-0 text-warning/80" />
+        ) : (
+          <FileText size={12} className="shrink-0 text-ink-3" />
+        )}
+
+        <span className="min-w-0 flex-1 truncate">{file.name}</span>
+
+        {!isDir && (
+          <span className="shrink-0 font-mono text-[10px] text-ink-3/70">
+            {formatBytes(file.size)}
+          </span>
+        )}
+      </div>
+
+      {menu && <ContextMenu x={menu.x} y={menu.y} items={menuItems()} onClose={closeMenu} />}
+
+      <PromptDialog
+        open={dialog !== null}
+        title={dialog === 'rename' ? '重命名' : dialog === 'chmod' ? '修改权限' : '新建文件夹'}
+        label={
+          dialog === 'chmod'
+            ? '权限（八进制，如 644 / 755 / 600）'
+            : dialog === 'rename'
+              ? '新名称'
+              : '文件夹名称'
+        }
+        defaultValue={
+          dialog === 'rename'
+            ? file.name
+            : dialog === 'chmod'
+              ? (file.mode & 0o777).toString(8).padStart(3, '0')
+              : ''
+        }
+        onCancel={() => setDialog(null)}
+        onConfirm={(value) => {
+          const kind = dialog
+          setDialog(null)
+          if (kind === 'mkdir') void mkdirAt(value)
+          else if (kind === 'rename') void renameTo(value)
+          else if (kind === 'chmod') void chmodTo(value)
+        }}
+      />
+
+      <ConfirmDialog
+        open={pendingDelete}
+        title="删除远程文件"
+        danger
+        confirmText="删除"
+        message={
+          <>
+            确定删除远端{isDir ? '目录' : '文件'}
+            <span className="font-medium text-ink">「{file.name}」</span>吗？
+            <div className="mt-2 selectable break-all font-mono text-2xs text-ink-3">{file.path}</div>
+            {isDir && <div className="mt-1 text-2xs text-danger">目录将被递归删除，不可恢复。</div>}
+          </>
+        }
+        onCancel={() => setPendingDelete(false)}
+        onConfirm={() => {
+          setPendingDelete(false)
+          void removeThis()
+        }}
+      />
+    </>
+  )
+}

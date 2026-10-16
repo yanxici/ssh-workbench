@@ -1,0 +1,237 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ================================================================== *
+ *  主题变量 —— 暗色为默认（:root），亮色通过 html.light 覆盖。
+ *  所有颜色以「R G B」三通道书写，配合 tailwind 的 <alpha-value>。
+ * ================================================================== */
+
+:root {
+  --c-app: 13 17 23; /* #0D1117 */
+  --c-panel: 22 27 34; /* #161B22 */
+  --c-raised: 28 33 40;
+  --c-hover: 33 39 48;
+  --c-edge: 48 54 61; /* #30363D */
+  --c-edge-soft: 33 38 45;
+  --c-ink: 230 237 243;
+  --c-ink-2: 154 164 178;
+  --c-ink-3: 110 118 129;
+  --c-accent: 88 166 255; /* #58A6FF */
+  --c-success: 63 185 80; /* #3FB950 */
+  --c-warning: 210 153 34; /* #D29922 */
+  --c-danger: 248 81 73; /* #F85149 */
+
+  color-scheme: dark;
+}
+
+.light {
+  --c-app: 240 242 245;
+  --c-panel: 255 255 255;
+  --c-raised: 255 255 255;
+  --c-hover: 243 245 247;
+  --c-edge: 208 215 222;
+  --c-edge-soft: 226 232 240;
+  --c-ink: 31 35 40;
+  --c-ink-2: 87 96 106;
+  --c-ink-3: 130 138 148;
+  --c-accent: 9 105 218;
+  --c-success: 26 127 55;
+  --c-warning: 154 103 0;
+  --c-danger: 207 34 46;
+
+  color-scheme: light;
+}
+
+/* ================================================================== *
+ *  基础
+ * ================================================================== */
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    @apply bg-app font-sans text-ink antialiased;
+    overflow: hidden;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+
+  /* 可编辑/可复制区域恢复文本选择 */
+  input,
+  textarea,
+  .selectable {
+    -webkit-user-select: text;
+    user-select: text;
+  }
+
+  ::selection {
+    background: rgb(var(--c-accent) / 0.35);
+  }
+}
+
+/* ================================================================== *
+ *  组件类
+ * ================================================================== */
+
+@layer components {
+  /* ---------- 按钮 ---------- */
+  .btn {
+    @apply inline-flex h-7 shrink-0 items-center justify-center gap-1.5 rounded-md border border-edge
+      bg-raised px-2.5 text-xs font-medium text-ink-2 transition-colors duration-100
+      hover:bg-hover hover:text-ink
+      disabled:pointer-events-none disabled:opacity-45;
+  }
+
+  .btn-primary {
+    @apply border-transparent bg-accent text-white hover:bg-accent/90 hover:text-white;
+  }
+
+  .btn-danger {
+    @apply border-transparent bg-danger text-white hover:bg-danger/90 hover:text-white;
+  }
+
+  .btn-ghost {
+    @apply border-transparent bg-transparent hover:bg-hover;
+  }
+
+  .btn-icon {
+    @apply inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-ink-3
+      transition-colors duration-100 hover:bg-hover hover:text-ink
+      disabled:pointer-events-none disabled:opacity-45;
+  }
+
+  /* ---------- 表单 ---------- */
+  .input {
+    @apply h-7 w-full rounded-md border border-edge bg-app px-2 text-xs text-ink outline-none
+      transition-colors duration-100 placeholder:text-ink-3
+      focus:border-accent/70 focus:ring-2 focus:ring-accent/15;
+  }
+
+  .textarea {
+    @apply w-full resize-none rounded-md border border-edge bg-app px-2 py-1.5 text-xs text-ink
+      outline-none transition-colors duration-100 placeholder:text-ink-3
+      focus:border-accent/70 focus:ring-2 focus:ring-accent/15;
+  }
+
+  .kbd {
+    @apply inline-block rounded border border-edge-soft bg-raised px-1 py-px font-mono text-[10px] text-ink-2;
+  }
+
+  .field-label {
+    @apply mb-1 block text-2xs font-medium tracking-wide text-ink-3;
+  }
+
+  /* ---------- 右键菜单 ---------- */
+  .menu {
+    @apply fixed z-50 min-w-[168px] animate-pop-in overflow-hidden rounded-lg border border-edge
+      bg-panel/95 p-1 shadow-pop backdrop-blur-xl;
+  }
+
+  .menu-item {
+    @apply flex w-full cursor-default items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs
+      text-ink-2 transition-colors duration-75 hover:bg-hover hover:text-ink;
+  }
+
+  .menu-item-danger {
+    @apply text-danger/90 hover:bg-danger/10 hover:text-danger;
+  }
+
+  .menu-sep {
+    @apply my-1 h-px bg-edge-soft;
+  }
+
+  /* ---------- 弹窗 ---------- */
+  .modal-overlay {
+    @apply fixed inset-0 z-40 flex animate-fade-in items-start justify-center bg-black/50
+      p-4 pt-[12vh] backdrop-blur-[2px];
+  }
+
+  .modal {
+    @apply flex max-h-[76vh] w-full max-w-lg animate-pop-in flex-col overflow-hidden rounded-xl
+      border border-edge bg-panel shadow-pop;
+  }
+
+  .modal-header {
+    @apply flex shrink-0 items-center justify-between border-b border-edge-soft px-4 py-3;
+  }
+
+  .modal-title {
+    @apply text-[13px] font-semibold text-ink;
+  }
+
+  .modal-body {
+    @apply min-h-0 flex-1 overflow-y-auto px-4 py-4;
+  }
+
+  .modal-footer {
+    @apply flex shrink-0 items-center justify-end gap-2 border-t border-edge-soft px-4 py-3;
+  }
+
+  /* ---------- 其他 ---------- */
+  .kbd {
+    @apply rounded border border-edge bg-raised px-1.5 py-0.5 font-mono text-[10px] leading-none text-ink-2;
+  }
+
+  .badge {
+    @apply inline-flex items-center gap-1 rounded-full border border-edge bg-raised px-2 py-0.5
+      text-2xs text-ink-2;
+  }
+}
+
+/* ================================================================== *
+ *  工具类
+ * ================================================================== */
+
+@layer utilities {
+  .drag-region {
+    -webkit-app-region: drag;
+  }
+
+  .no-drag {
+    -webkit-app-region: no-drag;
+  }
+
+  /* 细滚动条 */
+  .scroll-thin {
+    scrollbar-width: thin;
+    scrollbar-color: rgb(var(--c-edge)) transparent;
+  }
+
+  .scroll-thin::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  .scroll-thin::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .scroll-thin::-webkit-scrollbar-thumb {
+    border: 2px solid transparent;
+    border-radius: 8px;
+    background: rgb(var(--c-edge));
+    background-clip: content-box;
+  }
+
+  .scroll-thin::-webkit-scrollbar-thumb:hover {
+    background: rgb(var(--c-ink-3));
+    background-clip: content-box;
+  }
+}
+
+/* ================================================================== *
+ *  xterm 微调
+ * ================================================================== */
+
+.xterm {
+  padding: 0;
+}
+
+.xterm .xterm-viewport {
+  background-color: transparent !important;
+}

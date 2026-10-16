@@ -1,0 +1,30 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "outDir": ".tsc-verify",
+    "rootDir": "src",
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "strict": false,
+    "baseUrl": ".",
+    "paths": {
+      "@shared/*": ["src/shared/*"]
+    }
+  },
+  "include": [
+    "src/main/util/parseSshCommand.ts",
+    "src/main/util/socks5.ts",
+    "src/main/util/reportFormat.ts",
+    "src/main/util/parseProcSample.ts",
+    "src/main/util/cidr.ts",
+    "src/main/util/arp.ts",
+    "src/main/util/lineDiff.ts",
+    "src/main/util/mdns.ts",
+    "src/main/util/zip.ts",
+    "src/main/util/proxySockets.ts",
+    "src/shared/arpVendor.ts",
+    "src/main/data/diagTemplates.ts"
+  ]
+}

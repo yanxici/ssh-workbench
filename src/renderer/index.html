@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <title>SSH Workbench</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!--
+      收紧 CSP：
+      - script-src 去掉 'unsafe-eval'（源码与 xterm/react/zmodem 均无 eval / new Function），
+        生产构建产物只有外链 module 脚本，无需 'unsafe-inline'。
+      - 保留 style-src 'unsafe-inline'：xterm 会写内联样式，Tailwind 亦依赖内联。
+      - connect-src 保留 ws/http/https：终端与诊断需要连接任意远端地址。
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' ws: http: https:"
+    />
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

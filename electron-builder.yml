@@ -1,0 +1,32 @@
+appId: com.sshworkbench.app
+productName: SSH Workbench
+directories:
+  buildResources: build
+  output: dist-final
+# ssh2 的 cpu-features 为可选加密加速（纯 JS 回退即可），跳过 native rebuild 避免依赖本机 VS
+npmRebuild: false
+files:
+  - out/**
+  - package.json
+  - '!**/.vscode/*'
+  - '!src/*'
+  - '!electron.vite.config.{js,ts,mjs,cjs}'
+  - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json}'
+  - '!{tailwind.config.js,postcss.config.js,DESIGN.md,README.md}'
+asarUnpack:
+  - resources/**
+win:
+  target:
+    - nsis
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+mac:
+  target:
+    - dmg
+  category: public.app-category.developer-tools
+linux:
+  target:
+    - AppImage
+  category: Development
