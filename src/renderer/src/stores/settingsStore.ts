@@ -1,10 +1,12 @@
 import { create } from 'zustand'
 import type { AppSettings, ThemeMode } from '@shared/types'
 import { call } from '@/lib/ipc'
+import { getThemeVariant, type ThemeVars } from '@/theme/colorThemes'
 
 /** 与主进程 DEFAULT_SETTINGS 对齐的兜底值（加载完成前使用） */
 const FALLBACK: AppSettings = {
   theme: 'dark',
+  colorTheme: 'workbench',
   terminal: {
     fontFamily: "'JetBrains Mono', 'Cascadia Code', Consolas, 'Microsoft YaHei Mono', monospace",
     fontSize: 13.5,
@@ -28,8 +30,22 @@ export function resolveDark(mode: ThemeMode): boolean {
   return mode === 'dark'
 }
 
-function applyTheme(mode: ThemeMode): void {
-  document.documentElement.classList.toggle('light', !resolveDark(mode))
+/**
+ * 把配色主题写进 CSS 变量。
+ * 直接覆盖 html 上的内联变量，优先级高于 index.css 里的 :root / .light 兜底值，
+ * 这样切换主题无需重新加载样式表，也不会闪烁。
+ */
+function applyThemeVars(vars: ThemeVars): void {
+  const root = document.documentElement
+  for (const [key, value] of Object.entries(vars)) {
+    root.style.setProperty(`--c-${key}`, value)
+  }
+}
+
+function applyTheme(mode: ThemeMode, colorTheme: string | undefined): void {
+  const dark = resolveDark(mode)
+  document.documentElement.classList.toggle('light', !dark)
+  applyThemeVars(getThemeVariant(colorTheme, dark).vars)
 }
 
 let mediaBound = false
@@ -49,14 +65,14 @@ export const useSettingsStore = create<SettingsState>()((set) => ({
     const s = await call(window.api.settings.get(), { silent: true })
     const settings = s ?? FALLBACK
     set({ settings, loaded: true })
-    applyTheme(settings.theme)
+    applyTheme(settings.theme, settings.colorTheme)
 
     // 「跟随系统」时响应系统主题变化（只绑定一次）
     if (!mediaBound) {
       mediaBound = true
       window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
         const current = useSettingsStore.getState().settings
-        if (current.theme === 'system') applyTheme('system')
+        if (current.theme === 'system') applyTheme('system', current.colorTheme)
       })
     }
   },
@@ -65,7 +81,7 @@ export const useSettingsStore = create<SettingsState>()((set) => ({
     const next = await call(window.api.settings.set(patch))
     if (next) {
       set({ settings: next })
-      applyTheme(next.theme)
+      applyTheme(next.theme, next.colorTheme)
     }
   }
 }))

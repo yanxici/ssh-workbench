@@ -61,6 +61,7 @@ const knownHostStore = new JsonStore<Record<string, KnownHost>>(
 
 export const DEFAULT_SETTINGS: AppSettings = {
   theme: 'dark',
+  colorTheme: 'workbench',
   terminal: {
     fontFamily: "'JetBrains Mono', 'Cascadia Code', Consolas, 'Microsoft YaHei Mono', monospace",
     fontSize: 13.5,

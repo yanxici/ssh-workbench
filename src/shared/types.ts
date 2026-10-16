@@ -184,6 +184,15 @@ export interface SessionInfo {
 
 export type ThemeMode = 'dark' | 'light' | 'system'
 
+/**
+ * 配色主题（界面外壳 + 终端调色板联动）。
+ * 与 ThemeMode 是两个正交维度：
+ *   theme     决定明暗（dark / light / 跟随系统）
+ *   colorTheme 在这套明暗之上换一整套配色
+ * 每个配色主题都同时提供 dark 与 light 两套变量，因此任意组合都成立。
+ */
+export type ColorThemeId = 'workbench' | 'dracula' | 'nord' | 'solarized' | 'onedark' | 'gruvbox'
+
 export interface TerminalPrefs {
   fontFamily: string
   fontSize: number
@@ -195,6 +204,8 @@ export interface TerminalPrefs {
 
 export interface AppSettings {
   theme: ThemeMode
+  /** 配色主题（缺省为 workbench，即原有 GitHub 风格配色） */
+  colorTheme?: ColorThemeId
   terminal: TerminalPrefs
   /** 常用命令面板位置 */
   commandPanelPosition: 'right' | 'bottom' | 'floating'

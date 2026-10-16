@@ -571,6 +571,7 @@ function registerIpc(): void {
  *  窗口
  * ------------------------------------------------------------------ */
 
+
 /** 冒烟自检：--smoke / SSHW_SMOKE=1 启动 → 渲染完成后截图 → 写结果文件（userData + cwd 双落盘）→ 退出 */
 function runSmoke(win: BrowserWindow): void {
   const report = (status: string, extra: Record<string, unknown> = {}): void => {

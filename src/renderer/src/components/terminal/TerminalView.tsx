@@ -16,7 +16,7 @@ import {
 import type { SessionUi } from '@/stores/sessionStore'
 import { terminalRegistry, useSessionStore } from '@/stores/sessionStore'
 import { resolveDark, useSettingsStore } from '@/stores/settingsStore'
-import { getTerminalTheme } from '@/theme/terminalThemes'
+import { getXtermTheme } from '@/theme/colorThemes'
 import { ContextMenu, useContextMenu, type MenuEntry } from '@/components/ui'
 import { call } from '@/lib/ipc'
 import { ensureZmodem, detachZmodem, bytesToBase64, requestZmodemConfirm } from '@/lib/zmodem'
@@ -72,7 +72,7 @@ export function TerminalView({
       cursorStyle: settings.terminal.cursorStyle,
       cursorBlink: settings.terminal.cursorBlink,
       scrollback: settings.terminal.scrollback,
-      theme: getTerminalTheme(resolveDark(settings.theme)),
+      theme: getXtermTheme(settings.colorTheme, resolveDark(settings.theme)),
       allowProposedApi: true,
       macOptionIsMeta: true
     })
@@ -183,6 +183,7 @@ export function TerminalView({
   /* ---------- 设置变化：字体 / 主题实时生效 ---------- */
   const terminalPrefs = useSettingsStore((s) => s.settings.terminal)
   const themeMode = useSettingsStore((s) => s.settings.theme)
+  const colorTheme = useSettingsStore((s) => s.settings.colorTheme)
   useEffect(() => {
     const entry = terminalRegistry.get(sessionId)
     if (!entry) return
@@ -192,7 +193,7 @@ export function TerminalView({
     entry.term.options.cursorStyle = terminalPrefs.cursorStyle
     entry.term.options.cursorBlink = terminalPrefs.cursorBlink
     entry.term.options.scrollback = terminalPrefs.scrollback
-    entry.term.options.theme = getTerminalTheme(resolveDark(themeMode))
+    entry.term.options.theme = getXtermTheme(colorTheme, resolveDark(themeMode))
     requestAnimationFrame(() => {
       try {
         entry.fit.fit()
@@ -200,7 +201,7 @@ export function TerminalView({
         /* 容器不可见时忽略 */
       }
     })
-  }, [sessionId, terminalPrefs, themeMode])
+  }, [sessionId, terminalPrefs, themeMode, colorTheme])
 
   /* ---------- 标签切换后重新 fit ---------- */
   useEffect(() => {

@@ -5,7 +5,7 @@ import { Pause, Play, RotateCcw, ScrollText } from 'lucide-react'
 import type { SessionLogFile } from '@shared/types'
 import { call } from '@/lib/ipc'
 import { resolveDark, useSettingsStore } from '@/stores/settingsStore'
-import { getTerminalTheme } from '@/theme/terminalThemes'
+import { getXtermTheme } from '@/theme/colorThemes'
 
 interface CastEvent {
   t: number
@@ -60,7 +60,7 @@ export function LogPlayerDialog({
       fontFamily: settings.terminal.fontFamily,
       fontSize: settings.terminal.fontSize,
       lineHeight: settings.terminal.lineHeight,
-      theme: getTerminalTheme(resolveDark(settings.theme)),
+      theme: getXtermTheme(settings.colorTheme, resolveDark(settings.theme)),
       disableStdin: true,
       cursorBlink: false,
       scrollback: 10000
