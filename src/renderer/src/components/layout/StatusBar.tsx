@@ -34,7 +34,9 @@ export function StatusBar(): JSX.Element {
   const transfers = useSftpStore((s) => s.transfers)
   const showDock = useSftpStore((s) => s.showDock)
 
-  const active = transfers.filter((t) => t.status === 'running' || t.status === 'pending')
+  const active = transfers.filter(
+    (t) => t.status === 'running' || t.status === 'pending' || t.status === 'paused'
+  )
   const activeKnownTotal = active.reduce((sum, t) => sum + (t.total > 0 ? t.total : 0), 0)
   const activeKnownDone = active.reduce(
     (sum, t) => sum + (t.total > 0 ? Math.min(t.transferred, t.total) : 0),

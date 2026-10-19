@@ -406,7 +406,7 @@ export interface TransferTask {
   remotePath: string
   transferred: number
   total: number
-  status: 'pending' | 'running' | 'done' | 'error' | 'canceled'
+  status: 'pending' | 'running' | 'paused' | 'done' | 'error' | 'canceled'
   error?: string
   speedBps?: number
   /** 进度单位：字节（单文件）或文件个数（目录递归传输）；缺省按 bytes 处理 */

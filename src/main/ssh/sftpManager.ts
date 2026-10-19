@@ -1,8 +1,9 @@
-import type { SFTPWrapper, Stats } from 'ssh2'
+import type { OpenMode, SFTPWrapper, Stats } from 'ssh2'
 import { promises as fs } from 'node:fs'
+import type { FileHandle } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
-import type { RemoteFile, TransferProgressEvent } from '@shared/types'
+import type { RemoteFile, TransferProgressEvent, TransferTask } from '@shared/types'
 import { sessionManager } from './sessionManager'
 
 /**
@@ -20,6 +21,66 @@ type ProgressHandler = (event: TransferProgressEvent) => void
 
 const PROGRESS_THROTTLE_MS = 150
 const EDIT_SIZE_LIMIT = 2 * 1024 * 1024
+
+/** 分块传输：单块大小与在途并发数（兼顾吞吐与可中断粒度） */
+const CHUNK_SIZE = 256 * 1024
+const CHUNK_INFLIGHT = 6
+/** 同时进行的传输任务数（暂停中的任务不会挡住队列里的其他任务） */
+const MAX_CONCURRENT_TRANSFERS = 3
+
+/**
+ * 传输控制块：暂停/继续/取消都作用在这里。
+ *
+ * ssh2 的 fastGet/fastPut 是一次性调用、无法中断，所以文件传输改成
+ * 「open → 分块 read/write → close」引擎，块与块之间检查这里的标志：
+ * - paused  → 停在循环里等唤醒（句柄保留，继续时原地续传）
+ * - cancelled → 抛出 TransferCancelledError，清理半截文件
+ * - halt    → 出错时让其余并发块尽快退出
+ */
+interface TransferControl {
+  sessionId: string
+  direction: 'upload' | 'download'
+  localPath: string
+  remotePath: string
+  transferred: number
+  total: number
+  unit: 'bytes' | 'files'
+  paused: boolean
+  cancelled: boolean
+  halt: boolean
+  waiters: Array<() => void>
+}
+
+class TransferCancelledError extends Error {
+  constructor() {
+    super('传输已取消')
+    this.name = 'TransferCancelledError'
+  }
+}
+
+class TransferAbortedError extends Error {
+  constructor() {
+    super('传输已中断')
+    this.name = 'TransferAbortedError'
+  }
+}
+
+/** 唤醒所有挂在暂停点上的等待者 */
+function wake(ctl: TransferControl): void {
+  const waiters = ctl.waiters.splice(0)
+  for (const w of waiters) w()
+}
+
+/** 暂停点：可在每个分块之间调用 */
+async function checkpoint(ctl: TransferControl): Promise<void> {
+  if (ctl.cancelled) throw new TransferCancelledError()
+  if (ctl.halt) throw new TransferAbortedError()
+  while (ctl.paused && !ctl.cancelled && !ctl.halt) {
+    await new Promise<void>((resolve) => ctl.waiters.push(resolve))
+  }
+  if (ctl.cancelled) throw new TransferCancelledError()
+  if (ctl.halt) throw new TransferAbortedError()
+}
 
 /* ------------------------------ 工具 ------------------------------ */
 
@@ -62,6 +123,104 @@ function pRename(sftp: SFTPWrapper, from: string, to: string): Promise<void> {
   })
 }
 
+/* --------------------------- 分块读写原语 --------------------------- */
+
+function pOpen(sftp: SFTPWrapper, path: string, mode: OpenMode): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    sftp.open(path, mode, (err, handle) => (err ? reject(err) : resolve(handle)))
+  })
+}
+
+function pClose(sftp: SFTPWrapper, handle: Buffer): Promise<void> {
+  return new Promise((resolve) => {
+    sftp.close(handle, () => resolve())
+  })
+}
+
+function pFstat(sftp: SFTPWrapper, handle: Buffer): Promise<Stats> {
+  return new Promise((resolve, reject) => {
+    sftp.fstat(handle, (err, stats) => (err ? reject(err) : resolve(stats)))
+  })
+}
+
+function pRead(
+  sftp: SFTPWrapper,
+  handle: Buffer,
+  buffer: Buffer,
+  offset: number,
+  length: number,
+  position: number
+): Promise<number> {
+  return new Promise((resolve, reject) => {
+    sftp.read(handle, buffer, offset, length, position, (err, bytesRead) => {
+      if (err) reject(err)
+      else resolve(bytesRead)
+    })
+  })
+}
+
+function pWrite(
+  sftp: SFTPWrapper,
+  handle: Buffer,
+  buffer: Buffer,
+  offset: number,
+  length: number,
+  position: number
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    sftp.write(handle, buffer, offset, length, position, (err) =>
+      err ? reject(err) : resolve()
+    )
+  })
+}
+
+/** 删除传输失败/取消后残留的半截文件（失败无所谓） */
+async function silentUnlinkLocal(path: string): Promise<void> {
+  await fs.unlink(path).catch(() => undefined)
+}
+
+async function silentUnlinkRemote(sftp: SFTPWrapper, path: string): Promise<void> {
+  await new Promise<void>((resolve) => {
+    sftp.unlink(path, () => resolve())
+  })
+}
+
+/**
+ * 进度上报器：节流 + 平均速度。所有传输路径共用，保证渲染层看到的事件形状一致。
+ */
+function makeReporter(
+  ctl: TransferControl,
+  taskId: string,
+  emit: (e: TransferProgressEvent) => void
+): { report: (force?: boolean) => void; elapsed: () => number } {
+  const startedAt = Date.now()
+  let lastEmit = 0
+  let lastBytes = 0
+  const base = (): Omit<TransferProgressEvent, 'status' | 'speedBps'> => ({
+    taskId,
+    sessionId: ctl.sessionId,
+    direction: ctl.direction,
+    localPath: ctl.localPath,
+    remotePath: ctl.remotePath,
+    transferred: ctl.transferred,
+    total: ctl.total,
+    unit: ctl.unit
+  })
+
+  return {
+    report: (force?: boolean): void => {
+      const now = Date.now()
+      if (!force && now - lastEmit < PROGRESS_THROTTLE_MS) return
+      const span = Math.max(now - (lastEmit || startedAt), 1)
+      const speed = ((ctl.transferred - lastBytes) * 1000) / span
+      lastEmit = now
+      lastBytes = ctl.transferred
+      emit({ ...base(), status: 'running', speedBps: Math.max(0, Math.round(speed)) })
+    },
+    elapsed: (): number => Date.now() - startedAt
+  }
+}
+
 /* ------------------------------ 管理器 ------------------------------ */
 
 /** 导出类供回归脚本驱动（生产只使用下方的单例） */
@@ -70,11 +229,83 @@ export class SftpManager {
   /** 正在挂载中的 SFTP 通道（并发请求共享同一次挂载，避免重复 sftp 子系统） */
   private pendingMounts = new Map<string, Promise<SFTPWrapper>>()
   private onProgress: ProgressHandler | null = null
-  /** 传输串行队列 */
-  private chain: Promise<void> = Promise.resolve()
-
+  /** 在途/排队中的传输控制块：暂停、继续、取消都从这里找 */
+  private controls = new Map<string, TransferControl>()
+  /** 传输并发度（同时进行的任务数）；暂停中的任务仍占用一个位，避免队列无限漂移 */
+  private running = 0
+  private waiters: Array<() => void> = []
   setProgressHandler(handler: ProgressHandler): void {
     this.onProgress = handler
+  }
+
+  /* ------------------------------ 传输控制 ------------------------------ */
+
+  /** 暂停某个传输任务（排队中的任务也可以先暂停，轮到它时直接停住） */
+  pauseTransfer(taskId: string): boolean {
+    const ctl = this.controls.get(taskId)
+    if (!ctl || ctl.cancelled) return false
+    if (ctl.paused) return true
+    ctl.paused = true
+    this.emit({
+      taskId,
+      sessionId: ctl.sessionId,
+      direction: ctl.direction,
+      localPath: ctl.localPath,
+      remotePath: ctl.remotePath,
+      transferred: ctl.transferred,
+      total: ctl.total,
+      status: 'paused',
+      unit: ctl.unit
+    })
+    return true
+  }
+
+  /** 继续被暂停的传输 */
+  resumeTransfer(taskId: string): boolean {
+    const ctl = this.controls.get(taskId)
+    if (!ctl || ctl.cancelled || !ctl.paused) return false
+    ctl.paused = false
+    wake(ctl)
+    this.emit({
+      taskId,
+      sessionId: ctl.sessionId,
+      direction: ctl.direction,
+      localPath: ctl.localPath,
+      remotePath: ctl.remotePath,
+      transferred: ctl.transferred,
+      total: ctl.total,
+      status: 'running',
+      unit: ctl.unit
+    })
+    return true
+  }
+
+  /** 终止传输（排队中的会直接跳过；传输中的在下一个分块边界退出并清理半截文件） */
+  cancelTransfer(taskId: string): boolean {
+    const ctl = this.controls.get(taskId)
+    if (!ctl || ctl.cancelled) return false
+    ctl.cancelled = true
+    ctl.paused = false
+    wake(ctl)
+    // 立刻回一帧 canceled：排队中的任务可能要等并发位空出来才真正退出，
+    // 界面不该在这段时间里继续显示"传输中"。
+    this.emit({
+      taskId,
+      sessionId: ctl.sessionId,
+      direction: ctl.direction,
+      localPath: ctl.localPath,
+      remotePath: ctl.remotePath,
+      transferred: ctl.transferred,
+      total: ctl.total,
+      status: 'canceled',
+      unit: ctl.unit
+    })
+    return true
+  }
+
+  /** 是否还有任务在跑（供测试/诊断使用） */
+  hasActiveTransfers(): boolean {
+    return this.controls.size > 0
   }
 
   /** 会话关闭时清理对应 SFTP 通道 */
@@ -274,23 +505,13 @@ export class SftpManager {
       taskIds.push(taskId)
       const remotePath = joinRemote(remoteDir, basename(localPath))
       this.enqueue(
-        async () => {
+        async (ctl) => {
           const sftp = await this.getSftp(sessionId)
           const st = await fs.stat(localPath).catch(() => null)
           if (st?.isDirectory()) {
-            await transferUploadDir(sftp, sessionId, taskId, localPath, remotePath, (e) =>
-              this.emit(e)
-            )
+            await transferUploadDir(sftp, ctl, taskId, (e) => this.emit(e))
           } else {
-            await transferUpload(
-              sftp,
-              sessionId,
-              taskId,
-              localPath,
-              remotePath,
-              (e) => this.emit(e),
-              st?.isFile() ? st.size : 0
-            )
+            await transferUpload(sftp, ctl, taskId, (e) => this.emit(e))
           }
         },
         sessionId,
@@ -310,23 +531,13 @@ export class SftpManager {
       taskIds.push(taskId)
       const localPath = join(localDir, basename(remotePath))
       this.enqueue(
-        async () => {
+        async (ctl) => {
           const sftp = await this.getSftp(sessionId)
           const st = await pStat(sftp, remotePath).catch(() => null)
           if (st?.isDirectory()) {
-            await transferDownloadDir(sftp, sessionId, taskId, remotePath, localPath, (e) =>
-              this.emit(e)
-            )
+            await transferDownloadDir(sftp, ctl, taskId, (e) => this.emit(e))
           } else {
-            await transferDownload(
-              sftp,
-              sessionId,
-              taskId,
-              remotePath,
-              localPath,
-              (e) => this.emit(e),
-              st?.isFile() ? st.size : 0
-            )
+            await transferDownload(sftp, ctl, taskId, (e) => this.emit(e))
           }
         },
         sessionId,
@@ -339,43 +550,100 @@ export class SftpManager {
     return taskIds
   }
 
-  /** 串行排队 */
+  /** 注册任务并按并发度调度（暂停/继续/取消都靠 controls 里的控制块） */
   private enqueue(
-    task: () => Promise<void>,
+    build: (ctl: TransferControl) => Promise<void>,
     sessionId: string,
     taskId: string,
     direction: 'upload' | 'download',
     localPath: string,
     remotePath: string
   ): void {
-    this.emit({
-      taskId,
+    const ctl: TransferControl = {
       sessionId,
       direction,
       localPath,
       remotePath,
       transferred: 0,
       total: 0,
-      status: 'pending'
-    })
+      unit: 'bytes',
+      paused: false,
+      cancelled: false,
+      halt: false,
+      waiters: []
+    }
+    this.controls.set(taskId, ctl)
+    this.emit({ ...this.baseEvent(ctl, taskId), status: 'pending' })
+
     const run = async (): Promise<void> => {
+      // 排队期间就被取消：不占并发位，直接落终态
+      if (ctl.cancelled) {
+        this.controls.delete(taskId)
+        this.emit({ ...this.baseEvent(ctl, taskId), status: 'canceled' })
+        return
+      }
+      await this.acquire()
       try {
-        await task()
+        await build(ctl)
+        this.emit({ ...this.baseEvent(ctl, taskId), status: 'done' })
       } catch (err) {
-        this.emit({
-          taskId,
-          sessionId,
-          direction,
-          localPath,
-          remotePath,
-          transferred: 0,
-          total: 0,
-          status: 'error',
-          error: err instanceof Error ? err.message : String(err)
-        })
+        if (err instanceof TransferCancelledError) {
+          this.emit({ ...this.baseEvent(ctl, taskId), status: 'canceled' })
+        } else if (err instanceof TransferAbortedError) {
+          this.emit({
+            ...this.baseEvent(ctl, taskId),
+            status: 'error',
+            error: '传输已中断'
+          })
+        } else {
+          this.emit({
+            ...this.baseEvent(ctl, taskId),
+            status: 'error',
+            error: err instanceof Error ? err.message : String(err)
+          })
+        }
+      } finally {
+        this.controls.delete(taskId)
+        this.release()
       }
     }
-    this.chain = this.chain.then(run, run)
+    void run()
+  }
+
+  /** 并发闸门：同时最多 MAX_CONCURRENT_TRANSFERS 个任务 */
+  private acquire(): Promise<void> {
+    if (this.running < MAX_CONCURRENT_TRANSFERS) {
+      this.running += 1
+      return Promise.resolve()
+    }
+    return new Promise<void>((resolve) => {
+      this.waiters.push(() => {
+        this.running += 1
+        resolve()
+      })
+    })
+  }
+
+  private release(): void {
+    this.running = Math.max(0, this.running - 1)
+    const next = this.waiters.shift()
+    if (next) next()
+  }
+
+  private baseEvent(
+    ctl: TransferControl,
+    taskId: string
+  ): Omit<TransferProgressEvent, 'status'> {
+    return {
+      taskId,
+      sessionId: ctl.sessionId,
+      direction: ctl.direction,
+      localPath: ctl.localPath,
+      remotePath: ctl.remotePath,
+      transferred: ctl.transferred,
+      total: ctl.total,
+      unit: ctl.unit
+    }
   }
 
   private emit(event: TransferProgressEvent): void {
@@ -383,193 +651,196 @@ export class SftpManager {
   }
 }
 
-async function transferUpload(
-  sftp: SFTPWrapper,
-  sessionId: string,
+/* ------------------------------ 分块传输引擎 ------------------------------ */
+
+/**
+ * 单文件以「open → 批量 read/write → close」方式传输。
+ *
+ * 为什么不用 fastGet/fastPut：那是一次性调用，只有 step 回调，没有任何中断句柄，
+ * 暂停/终止无从下手。这里在每批分块之间调用 checkpoint(ctl)，暂停时原地等待，
+ * 取消时抛 TransferCancelledError，随后清理半截文件。
+ *
+ * 一批 = CHUNK_INFLIGHT 个 CHUNK_SIZE 块（≈1.5MB），吞吐接近 fastGet，中断粒度可接受。
+ */
+
+function eventOf(
+  ctl: TransferControl,
   taskId: string,
+  status: TransferTask['status'],
+  extra: Partial<TransferProgressEvent> = {}
+): TransferProgressEvent {
+  return {
+    taskId,
+    sessionId: ctl.sessionId,
+    direction: ctl.direction,
+    localPath: ctl.localPath,
+    remotePath: ctl.remotePath,
+    transferred: ctl.transferred,
+    total: ctl.total,
+    unit: ctl.unit,
+    status,
+    ...extra
+  }
+}
+
+/** 上传单个文件（本地 → 远端），返回实际写入字节数 */
+async function uploadFileChunked(
+  sftp: SFTPWrapper,
+  ctl: TransferControl,
   localPath: string,
   remotePath: string,
-  emit: (e: TransferProgressEvent) => void,
-  knownTotal = 0
-): Promise<void> {
-  const startedAt = Date.now()
-  const total = Math.max(knownTotal, 0)
-
-  let transferred = 0
-  let lastEmit = Date.now()
-  let lastBytes = 0
-  // stat 失败时已知总量为 0，首帧只能画空槽；一旦 step 回调给出总量就立刻发一帧，
-  // 不再等节流窗口，否则进度条会一直停在 0%。
-  let publishedTotal = total > 0
-
-  // 先把已知总大小发出去：渲染层第一帧就能画出 0% 的完整进度条，
-  // 而不是显示一个 total=0、永远停在 0% 的空槽。
-  emit({
-    taskId,
-    sessionId,
-    direction: 'upload',
-    localPath,
-    remotePath,
-    transferred: 0,
-    total,
-    status: 'running',
-    speedBps: 0,
-    unit: 'bytes'
-  })
-
+  onBytes: (transferred: number, total: number) => void
+): Promise<number> {
+  const local = await fs.open(localPath, 'r')
+  let handle: Buffer | null = null
+  let written = 0
   try {
-    await new Promise<void>((resolve, reject) => {
-      sftp.fastPut(
-        localPath,
-        remotePath,
-        {
-          step: (bytes, _chunk, stepTotal) => {
-            transferred = Math.max(transferred, bytes)
-            const now = Date.now()
-            const needTotal = !publishedTotal && (stepTotal || 0) > 0
-            if (!needTotal && now - lastEmit < PROGRESS_THROTTLE_MS) return
-            if (needTotal) publishedTotal = true
-            const speed = (transferred - lastBytes) / Math.max((now - lastEmit) / 1000, 0.001)
-            lastEmit = now
-            lastBytes = transferred
-            emit({
-              taskId,
-              sessionId,
-              direction: 'upload',
-              localPath,
-              remotePath,
-              transferred,
-              total: total || stepTotal || 0,
-              status: 'running',
-              speedBps: Math.round(speed),
-              unit: 'bytes'
-            })
-          }
-        },
-        (err) => (err ? reject(err) : resolve())
+    const st = await local.stat()
+    const total = st.size
+    onBytes(0, total)
+    handle = await pOpen(sftp, remotePath, 'w')
+    let pos = 0
+    for (;;) {
+      await checkpoint(ctl)
+      const batch: Array<{ pos: number; bytes: number; buf: Buffer }> = []
+      for (let i = 0; i < CHUNK_INFLIGHT && pos < total; i += 1) {
+        const len = Math.min(CHUNK_SIZE, total - pos)
+        const buf = Buffer.allocUnsafe(len)
+        const { bytesRead } = await local.read(buf, 0, len, pos)
+        if (bytesRead <= 0) break
+        batch.push({ pos, bytes: bytesRead, buf })
+        pos += bytesRead
+        if (bytesRead < len) break
+      }
+      if (batch.length === 0) break
+      await Promise.all(
+        batch.map((c) => pWrite(sftp, handle as Buffer, c.buf, 0, c.bytes, c.pos))
       )
-    })
-    // 结束时以总大小为准确值：大文件传输的最后一次 step 可能被节流吞掉，
-    // 小文件则可能一次 step 都没有，沿用 lastBytes 会让进度条停在 0%。
-    const finalBytes = Math.max(transferred, total)
-    emit({
-      taskId,
-      sessionId,
-      direction: 'upload',
-      localPath,
-      remotePath,
-      transferred: finalBytes,
-      total: finalBytes,
-      status: 'done',
-      speedBps: Math.round(finalBytes / Math.max((Date.now() - startedAt) / 1000, 0.001)),
-      unit: 'bytes'
-    })
+      written += batch.reduce((n, c) => n + c.bytes, 0)
+      onBytes(written, total)
+    }
+    return written
   } catch (err) {
-    emit({
-      taskId,
-      sessionId,
-      direction: 'upload',
-      localPath,
-      remotePath,
-      transferred,
-      total: total || transferred,
-      status: 'error',
-      error: err instanceof Error ? err.message : String(err),
-      unit: 'bytes'
-    })
+    if (handle) await silentUnlinkRemote(sftp, remotePath)
+    throw err
+  } finally {
+    if (handle) await pClose(sftp, handle)
+    await local.close().catch(() => undefined)
   }
+}
+
+/** 下载单个文件（远端 → 本地），返回实际写入字节数 */
+async function downloadFileChunked(
+  sftp: SFTPWrapper,
+  ctl: TransferControl,
+  remotePath: string,
+  localPath: string,
+  onBytes: (transferred: number, total: number) => void
+): Promise<number> {
+  await fs.mkdir(dirname(localPath), { recursive: true })
+  let handle: Buffer | null = null
+  let local: FileHandle | null = null
+  let pos = 0
+  try {
+    handle = await pOpen(sftp, remotePath, 'r')
+    // stat 可能因权限失败，fstat 拿句柄更可靠；都拿不到就靠读到 EOF 定位总量
+    const st = await pFstat(sftp, handle).catch(() => null)
+    const total = st && st.isFile() ? st.size : 0
+    local = await fs.open(localPath, 'w')
+    onBytes(0, total)
+    for (;;) {
+      await checkpoint(ctl)
+      const pending: Array<Promise<{ pos: number; bytes: number; buf: Buffer }>> = []
+      for (let i = 0; i < CHUNK_INFLIGHT; i += 1) {
+        const chunkPos = pos + i * CHUNK_SIZE
+        if (total > 0 && chunkPos >= total) break
+        const len = total > 0 ? Math.min(CHUNK_SIZE, total - chunkPos) : CHUNK_SIZE
+        const buf = Buffer.allocUnsafe(len)
+        pending.push(
+          pRead(sftp, handle as Buffer, buf, 0, len, chunkPos).then((bytes) => ({
+            pos: chunkPos,
+            bytes,
+            buf
+          }))
+        )
+      }
+      if (pending.length === 0) break
+      const chunks = await Promise.all(pending)
+      let eof = false
+      for (const c of chunks) {
+        if (c.bytes <= 0) {
+          eof = true
+          break
+        }
+        await (local as FileHandle).write(c.buf, 0, c.bytes, c.pos)
+        pos = c.pos + c.bytes
+        onBytes(pos, total)
+      }
+      if (eof) break
+    }
+    return pos
+  } catch (err) {
+    if (local) {
+      await local.close().catch(() => undefined)
+      local = null
+    }
+    await silentUnlinkLocal(localPath)
+    throw err
+  } finally {
+    if (local) await local.close().catch(() => undefined)
+    if (handle) await pClose(sftp, handle)
+  }
+}
+
+/* ------------------------------ 单文件任务 ------------------------------ */
+
+async function transferUpload(
+  sftp: SFTPWrapper,
+  ctl: TransferControl,
+  taskId: string,
+  emit: (e: TransferProgressEvent) => void
+): Promise<void> {
+  ctl.unit = 'bytes'
+  ctl.transferred = 0
+  ctl.total = 0
+  const reporter = makeReporter(ctl, taskId, emit)
+  // 首帧必须带上真实总量：本地 stat 一拿到就强制发一帧，否则进度条会先空槽再跳。
+  let announced = false
+  const onBytes = (transferred: number, total: number): void => {
+    ctl.transferred = transferred
+    if (total > 0) ctl.total = total
+    const force = !announced && ctl.total > 0
+    if (force) announced = true
+    reporter.report(force)
+  }
+  const written = await uploadFileChunked(sftp, ctl, ctl.localPath, ctl.remotePath, onBytes)
+  if (!announced) reporter.report(true)
+  ctl.transferred = Math.max(written, ctl.total)
+  ctl.total = ctl.transferred
 }
 
 async function transferDownload(
   sftp: SFTPWrapper,
-  sessionId: string,
+  ctl: TransferControl,
   taskId: string,
-  remotePath: string,
-  localPath: string,
-  emit: (e: TransferProgressEvent) => void,
-  knownTotal = 0
+  emit: (e: TransferProgressEvent) => void
 ): Promise<void> {
-  const startedAt = Date.now()
-  const total = Math.max(knownTotal, 0)
-
-  let transferred = 0
-  let lastEmit = Date.now()
-  let lastBytes = 0
-  // 同 upload：stat 失败时首帧 total=0，靠第一次 step 的总量把进度条补满。
-  let publishedTotal = total > 0
-
-  emit({
-    taskId,
-    sessionId,
-    direction: 'download',
-    localPath,
-    remotePath,
-    transferred: 0,
-    total,
-    status: 'running',
-    speedBps: 0,
-    unit: 'bytes'
-  })
-
-  try {
-    await new Promise<void>((resolve, reject) => {
-      sftp.fastGet(
-        remotePath,
-        localPath,
-        {
-          step: (bytes, _chunk, stepTotal) => {
-            transferred = Math.max(transferred, bytes)
-            const now = Date.now()
-            const needTotal = !publishedTotal && (stepTotal || 0) > 0
-            if (!needTotal && now - lastEmit < PROGRESS_THROTTLE_MS) return
-            if (needTotal) publishedTotal = true
-            const speed = (transferred - lastBytes) / Math.max((now - lastEmit) / 1000, 0.001)
-            lastEmit = now
-            lastBytes = transferred
-            emit({
-              taskId,
-              sessionId,
-              direction: 'download',
-              localPath,
-              remotePath,
-              transferred,
-              total: total || stepTotal || 0,
-              status: 'running',
-              speedBps: Math.round(speed),
-              unit: 'bytes'
-            })
-          }
-        },
-        (err) => (err ? reject(err) : resolve())
-      )
-    })
-    const finalBytes = Math.max(transferred, total)
-    emit({
-      taskId,
-      sessionId,
-      direction: 'download',
-      localPath,
-      remotePath,
-      transferred: finalBytes,
-      total: finalBytes,
-      status: 'done',
-      speedBps: Math.round(finalBytes / Math.max((Date.now() - startedAt) / 1000, 0.001)),
-      unit: 'bytes'
-    })
-  } catch (err) {
-    emit({
-      taskId,
-      sessionId,
-      direction: 'download',
-      localPath,
-      remotePath,
-      transferred,
-      total: total || transferred,
-      status: 'error',
-      error: err instanceof Error ? err.message : String(err),
-      unit: 'bytes'
-    })
+  ctl.unit = 'bytes'
+  ctl.transferred = 0
+  ctl.total = 0
+  const reporter = makeReporter(ctl, taskId, emit)
+  let announced = false
+  const onBytes = (transferred: number, total: number): void => {
+    ctl.transferred = transferred
+    if (total > 0) ctl.total = total
+    const force = !announced && ctl.total > 0
+    if (force) announced = true
+    reporter.report(force)
   }
+  const written = await downloadFileChunked(sftp, ctl, ctl.remotePath, ctl.localPath, onBytes)
+  if (!announced) reporter.report(true)
+  ctl.transferred = Math.max(written, ctl.total)
+  ctl.total = ctl.transferred
 }
 
 /* ------------------------------ 目录递归传输 ------------------------------ */
@@ -629,164 +900,63 @@ async function ensureRemoteDir(sftp: SFTPWrapper, dirPath: string): Promise<void
   }
 }
 
-function fastPutP(sftp: SFTPWrapper, local: string, remote: string): Promise<void> {
-  return new Promise((resolve, reject) => {
-    sftp.fastPut(local, remote, (err) => (err ? reject(err) : resolve()))
-  })
-}
-
-function fastGetP(sftp: SFTPWrapper, remote: string, local: string): Promise<void> {
-  return new Promise((resolve, reject) => {
-    sftp.fastGet(remote, local, (err) => (err ? reject(err) : resolve()))
-  })
-}
-
-/** 上传目录：进度按"已完成文件数 / 总文件数" */
+/** 上传目录：进度按"已完成文件数 / 总文件数"，每个文件内部同样可分块暂停/取消 */
 async function transferUploadDir(
   sftp: SFTPWrapper,
-  sessionId: string,
+  ctl: TransferControl,
   taskId: string,
-  localDir: string,
-  remoteDir: string,
   emit: (e: TransferProgressEvent) => void
 ): Promise<void> {
+  const localDir = ctl.localPath
+  // ctl.remotePath = 目标目录 + 本地目录名；目录上传的语义是把本地目录内容铺进目标目录，
+  // 所以这里取它的父目录（与旧实现 joinRemote(remoteDir, f.rel) 保持一致）。
+  const remoteDir = ctl.remotePath.slice(0, ctl.remotePath.lastIndexOf('/')) || '/'
   const files = await walkLocal(localDir)
-  const total = files.length
-  emit({
-    taskId,
-    sessionId,
-    direction: 'upload',
-    localPath: localDir,
-    remotePath: remoteDir,
-    transferred: 0,
-    total,
-    status: 'running',
-    unit: 'files'
-  })
+  ctl.unit = 'files'
+  ctl.total = files.length
+  ctl.transferred = 0
+  emit(eventOf(ctl, taskId, 'running'))
 
   let done = 0
-  let lastEmit = 0
-  try {
-    for (const f of files) {
-      const target = joinRemote(remoteDir, f.rel)
-      await ensureRemoteDir(sftp, target.slice(0, target.lastIndexOf('/')) || '/')
-      await fastPutP(sftp, f.full, target)
-      done += 1
-      const now = Date.now()
-      if (now - lastEmit >= PROGRESS_THROTTLE_MS) {
-        lastEmit = now
-        emit({
-          taskId,
-          sessionId,
-          direction: 'upload',
-          localPath: localDir,
-          remotePath: remoteDir,
-          transferred: done,
-          total,
-          status: 'running',
-          unit: 'files'
-        })
-      }
-    }
-    emit({
-      taskId,
-      sessionId,
-      direction: 'upload',
-      localPath: localDir,
-      remotePath: remoteDir,
-      transferred: total,
-      total,
-      status: 'done',
-      unit: 'files'
-    })
-  } catch (err) {
-    emit({
-      taskId,
-      sessionId,
-      direction: 'upload',
-      localPath: localDir,
-      remotePath: remoteDir,
-      transferred: done,
-      total,
-      status: 'error',
-      error: err instanceof Error ? err.message : String(err),
-      unit: 'files'
-    })
+  for (const f of files) {
+    await checkpoint(ctl)
+    const target = joinRemote(remoteDir, f.rel)
+    const targetDir = target.slice(0, target.lastIndexOf('/')) || '/'
+    await ensureRemoteDir(sftp, targetDir)
+    await uploadFileChunked(sftp, ctl, f.full, target, () => undefined)
+    done += 1
+    ctl.transferred = done
+    emit(eventOf(ctl, taskId, 'running'))
   }
+  ctl.transferred = ctl.total
 }
 
 /** 下载目录：进度按"已完成文件数 / 总文件数" */
 async function transferDownloadDir(
   sftp: SFTPWrapper,
-  sessionId: string,
+  ctl: TransferControl,
   taskId: string,
-  remoteDir: string,
-  localDir: string,
   emit: (e: TransferProgressEvent) => void
 ): Promise<void> {
+  const remoteDir = ctl.remotePath
+  // ctl.localPath 已经是"目标目录/远端目录名"，目录内文件直接铺在它下面
+  const localDir = ctl.localPath
   const files = await walkRemote(sftp, remoteDir)
-  const total = files.length
-  emit({
-    taskId,
-    sessionId,
-    direction: 'download',
-    localPath: localDir,
-    remotePath: remoteDir,
-    transferred: 0,
-    total,
-    status: 'running',
-    unit: 'files'
-  })
+  ctl.unit = 'files'
+  ctl.total = files.length
+  ctl.transferred = 0
+  emit(eventOf(ctl, taskId, 'running'))
 
   let done = 0
-  let lastEmit = 0
-  try {
-    for (const f of files) {
-      const target = join(localDir, basename(remoteDir), ...f.rel.split('/'))
-      await fs.mkdir(dirname(target), { recursive: true })
-      await fastGetP(sftp, f.full, target)
-      done += 1
-      const now = Date.now()
-      if (now - lastEmit >= PROGRESS_THROTTLE_MS) {
-        lastEmit = now
-        emit({
-          taskId,
-          sessionId,
-          direction: 'download',
-          localPath: localDir,
-          remotePath: remoteDir,
-          transferred: done,
-          total,
-          status: 'running',
-          unit: 'files'
-        })
-      }
-    }
-    emit({
-      taskId,
-      sessionId,
-      direction: 'download',
-      localPath: localDir,
-      remotePath: remoteDir,
-      transferred: total,
-      total,
-      status: 'done',
-      unit: 'files'
-    })
-  } catch (err) {
-    emit({
-      taskId,
-      sessionId,
-      direction: 'download',
-      localPath: localDir,
-      remotePath: remoteDir,
-      transferred: done,
-      total,
-      status: 'error',
-      error: err instanceof Error ? err.message : String(err),
-      unit: 'files'
-    })
+  for (const f of files) {
+    await checkpoint(ctl)
+    const target = join(localDir, ...f.rel.split('/'))
+    await downloadFileChunked(sftp, ctl, f.full, target, () => undefined)
+    done += 1
+    ctl.transferred = done
+    emit(eventOf(ctl, taskId, 'running'))
   }
+  ctl.transferred = ctl.total
 }
 
 export const sftpManager = new SftpManager()

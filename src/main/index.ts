@@ -370,6 +370,9 @@ function registerIpc(): void {
   handle(IPC.SFTP_DOWNLOAD, (sessionId: string, remotePaths: string[], localDir: string) =>
     sftpManager.download(sessionId, remotePaths, localDir)
   )
+  handle(IPC.SFTP_TRANSFER_PAUSE, (taskId: string) => sftpManager.pauseTransfer(taskId))
+  handle(IPC.SFTP_TRANSFER_RESUME, (taskId: string) => sftpManager.resumeTransfer(taskId))
+  handle(IPC.SFTP_TRANSFER_CANCEL, (taskId: string) => sftpManager.cancelTransfer(taskId))
 
   // 通过系统对话框选择文件/目录（文件树面板的单点上传/下载）
   handle(IPC.SFTP_UPLOAD_DIALOG, async (sessionId: string, remoteDir: string) => {
@@ -757,7 +760,11 @@ if (!gotLock) {
 
     sftpManager.setProgressHandler((event) => {
       mainWindow?.webContents.send(IPC.EVT_TRANSFER_PROGRESS, event)
-      if (event.status === 'running' || event.status === 'pending') {
+      if (
+        event.status === 'running' ||
+        event.status === 'pending' ||
+        event.status === 'paused'
+      ) {
         activeTransfers.set(event.taskId, {
           transferred: event.transferred,
           total: event.total

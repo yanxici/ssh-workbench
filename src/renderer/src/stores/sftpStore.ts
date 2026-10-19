@@ -57,6 +57,10 @@ interface SftpState {
   uploadPaths: (localPaths: string[], remoteDir?: string) => Promise<void>
   downloadPaths: (remotePaths: string[], localDir?: string) => Promise<void>
   applyProgress: (e: TransferProgressEvent) => void
+  /** 暂停 / 继续 / 终止单个传输任务（主进程负责真正停住分块循环） */
+  pauseTask: (id: string) => Promise<void>
+  resumeTask: (id: string) => Promise<void>
+  cancelTask: (id: string) => Promise<void>
   clearFinished: () => void
 
   openEditor: (path: string) => Promise<void>
@@ -232,12 +236,46 @@ export const useSftpStore = create<SftpState>()((set, get) => ({
 
   setDockCollapsed: (collapsed) => set({ dockCollapsed: collapsed }),
 
+  pauseTask: async (id) => {
+    // 先本地置 paused：主进程的下一个分块边界才真正停住，界面不该等着
+    set((s) => ({
+      transfers: s.transfers.map((t) =>
+        t.id === id && (t.status === 'running' || t.status === 'pending')
+          ? { ...t, status: 'paused' as const, speedBps: 0 }
+          : t
+      )
+    }))
+    await window.api.sftp.pauseTransfer(id)
+  },
+
+  resumeTask: async (id) => {
+    set((s) => ({
+      transfers: s.transfers.map((t) =>
+        t.id === id && t.status === 'paused' ? { ...t, status: 'running' as const } : t
+      )
+    }))
+    await window.api.sftp.resumeTransfer(id)
+  },
+
+  cancelTask: async (id) => {
+    set((s) => ({
+      transfers: s.transfers.map((t) =>
+        t.id === id && (t.status === 'running' || t.status === 'pending' || t.status === 'paused')
+          ? { ...t, status: 'canceled' as const, speedBps: 0, finishedAt: Date.now() }
+          : t
+      )
+    }))
+    await window.api.sftp.cancelTransfer(id)
+  },
+
   showDock: () => set({ dockClosed: false, dockCollapsed: false }),
 
   closeDock: () =>
     set((s) => ({
       dockClosed: true,
-      transfers: s.transfers.filter((t) => t.status === 'pending' || t.status === 'running')
+      transfers: s.transfers.filter(
+        (t) => t.status === 'pending' || t.status === 'running' || t.status === 'paused'
+      )
     })),
 
   dismissTask: (id) =>
@@ -246,7 +284,7 @@ export const useSftpStore = create<SftpState>()((set, get) => ({
   clearFinished: () =>
     set((s) => ({
       transfers: s.transfers.filter(
-        (t) => t.status === 'pending' || t.status === 'running'
+        (t) => t.status === 'pending' || t.status === 'running' || t.status === 'paused'
       )
     })),
 

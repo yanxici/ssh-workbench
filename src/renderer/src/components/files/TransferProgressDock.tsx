@@ -5,6 +5,8 @@
  * - 右下角常驻（不依赖文件管理面板是否打开），新任务开始时自动重新出现；
  * - 单文件显示字节进度、实时速度与剩余时间，长文件一眼能看出还要多久；
  * - 目录传输按"已完成文件数 / 总文件数"显示，不把文件数误当字节数；
+ * - 每个任务都能暂停 / 继续 / 终止：主进程在分块边界检查控制标志，
+ *   终止后本地半截文件会被清理；
  * - 全部结束后保留几秒再自动消失，失败记录保留更久，可单条移除；
  * - 折叠后仍保留总进度条，底部状态栏另有入口。
  */
@@ -17,7 +19,10 @@ import {
   CheckCircle2,
   ChevronDown,
   ChevronUp,
+  Ban,
   Loader2,
+  Pause,
+  Play,
   X
 } from 'lucide-react'
 import type { TransferTask } from '@shared/types'
@@ -27,6 +32,13 @@ import { cn, formatBytes } from '@/lib/utils'
 /** 超过该大小或持续该时长，才认为值得弹出进度浮层（避免小文件一闪而过） */
 const LONG_TASK_BYTES = 8 * 1024 * 1024
 const LONG_TASK_MS = 1200
+
+/** 仍在队列里的状态（paused 不是终态，计时清空时必须算作活动） */
+const LIVE: TransferTask['status'][] = ['pending', 'running', 'paused']
+
+function isLive(task: TransferTask): boolean {
+  return LIVE.includes(task.status)
+}
 
 function fileName(p: string): string {
   return p.split(/[\\/]/).filter(Boolean).pop() ?? p
@@ -69,13 +81,16 @@ function amountText(task: TransferTask): { left: string; right: string } {
         ? [task.speedBps ? `${formatBytes(task.speedBps)}/s` : null, etaText(task)]
             .filter(Boolean)
             .join(' · ')
-        : ''
+        : task.status === 'paused'
+          ? '已暂停，可继续'
+          : ''
   }
 }
 
 function statusText(task: TransferTask): string {
   if (task.status === 'pending') return '排队中'
   if (task.status === 'running') return `${taskPercent(task)}%`
+  if (task.status === 'paused') return '已暂停'
   if (task.status === 'done') return '完成'
   if (task.status === 'canceled') return '已取消'
   return '失败'
@@ -93,9 +108,10 @@ export function TransferProgressDock(): JSX.Element | null {
   /** 是否已经见过"值得展示"的传输（长文件或持续超过 1.2 秒） */
   const [worthShowing, setWorthShowing] = useState(false)
 
-  const active = transfers.filter((t) => t.status === 'running' || t.status === 'pending')
+  const active = transfers.filter(isLive)
   const failed = transfers.filter((t) => t.status === 'error')
   const done = transfers.filter((t) => t.status === 'done')
+  const pausedCount = transfers.filter((t) => t.status === 'paused').length
 
   // 总进度按"已完成量 / 总已知量"加权：排队中(total 未知)的任务不会把比例拉到 0%，
   // 也不会出现主文件 57% 而标题写 28% 的割裂感。
@@ -118,16 +134,12 @@ export function TransferProgressDock(): JSX.Element | null {
     if (worthShowing) return
     if (transfers.length === 0) return
     const now = Date.now()
-    const isLong = transfers.some(
-      (t) =>
-        (t.status === 'running' || t.status === 'pending') &&
-        (t.total >= LONG_TASK_BYTES || now - t.startedAt >= LONG_TASK_MS)
-    )
+    const isLong = transfers.some((t) => isLive(t) && (t.total >= LONG_TASK_BYTES || now - t.startedAt >= LONG_TASK_MS))
     if (isLong) {
       setWorthShowing(true)
       return
     }
-    const pending = transfers.filter((t) => t.status === 'running' || t.status === 'pending')
+    const pending = transfers.filter(isLive)
     if (pending.length === 0) return
     const remain = Math.min(
       ...pending.map((t) => Math.max(0, LONG_TASK_MS - (Date.now() - t.startedAt)))
@@ -140,10 +152,11 @@ export function TransferProgressDock(): JSX.Element | null {
     if (transfers.length === 0) setWorthShowing(false)
   }, [transfers])
 
-  // 全部结束后自动收起：成功保留 5 秒，失败保留 12 秒方便看原因
+  // 全部结束后自动收起：成功保留 5 秒，失败保留 12 秒方便看原因。
+  // 暂停中的任务不算结束，否则浮层会在暂停期间自己消失。
   useEffect(() => {
     if (transfers.length === 0) return
-    if (transfers.some((t) => t.status === 'running' || t.status === 'pending')) return
+    if (transfers.some(isLive)) return
     const t = setTimeout(
       () => clearFinished(),
       transfers.some((x) => x.status === 'error') ? 12000 : 5000
@@ -162,7 +175,7 @@ export function TransferProgressDock(): JSX.Element | null {
     <div
       className={cn(
         'fixed bottom-[34px] right-3 z-[35] animate-slide-up',
-        collapsed ? 'w-[250px]' : 'w-[360px] max-w-[calc(100vw-24px)]'
+        collapsed ? 'w-[250px]' : 'w-[380px] max-w-[calc(100vw-24px)]'
       )}
     >
       <div className="overflow-hidden rounded-lg border border-edge bg-panel/95 shadow-pop backdrop-blur">
@@ -174,18 +187,33 @@ export function TransferProgressDock(): JSX.Element | null {
             onClick={() => setCollapsed(!collapsed)}
           >
             {active.length > 0 ? (
-              <Loader2 size={14} className="shrink-0 animate-spin text-accent" />
+              <Loader2
+                size={14}
+                className={cn(
+                  'shrink-0 text-accent',
+                  pausedCount === active.length ? '' : 'animate-spin'
+                )}
+              />
             ) : failed.length > 0 ? (
               <AlertTriangle size={14} className="shrink-0 text-danger" />
             ) : (
               <CheckCircle2 size={14} className="shrink-0 text-success" />
             )}
             <span className="shrink-0 text-xs font-semibold">
-              {active.length > 0 ? '传输中' : failed.length > 0 ? '传输失败' : '传输完成'}
+              {active.length > 0
+                ? pausedCount === active.length
+                  ? '已暂停'
+                  : '传输中'
+                : failed.length > 0
+                  ? '传输失败'
+                  : '传输完成'}
             </span>
             {active.length > 0 ? (
               <span className="truncate text-2xs text-ink-3">
                 {active.length} 项 · {overall}%
+                {pausedCount > 0 && pausedCount < active.length
+                  ? ` · ${pausedCount} 项暂停`
+                  : ''}
               </span>
             ) : (
               <span className="truncate text-2xs text-ink-3">
@@ -212,14 +240,17 @@ export function TransferProgressDock(): JSX.Element | null {
         {active.length > 0 && (
           <div className="h-1.5 bg-raised">
             <div
-              className="h-full rounded-r-full bg-accent transition-[width] duration-200"
+              className={cn(
+                'h-full rounded-r-full transition-[width] duration-200',
+                pausedCount === active.length ? 'bg-ink-3' : 'bg-accent'
+              )}
               style={{ width: `${Math.max(overall, 1)}%` }}
             />
           </div>
         )}
 
         {!collapsed && (
-          <div className="scroll-thin max-h-[232px] space-y-1 overflow-y-auto border-t border-edge-soft p-1.5">
+          <div className="scroll-thin max-h-[248px] space-y-1 overflow-y-auto border-t border-edge-soft p-1.5">
             {transfers.map((task) => (
               <TransferRow key={task.id} task={task} onDismiss={() => dismissTask(task.id)} />
             ))}
@@ -228,9 +259,7 @@ export function TransferProgressDock(): JSX.Element | null {
 
         {!collapsed && finished && (
           <div className="flex items-center gap-2 border-t border-edge-soft px-2.5 py-1">
-            <span className="flex-1 text-2xs text-ink-3">
-              传输队列已结束
-            </span>
+            <span className="flex-1 text-2xs text-ink-3">传输队列已结束</span>
             <button
               className="text-2xs text-ink-3 transition-colors hover:text-ink"
               onClick={clearFinished}
@@ -251,17 +280,30 @@ function TransferRow({
   task: TransferTask
   onDismiss: () => void
 }): JSX.Element {
+  const pauseTask = useSftpStore((s) => s.pauseTask)
+  const resumeTask = useSftpStore((s) => s.resumeTask)
+  const cancelTask = useSftpStore((s) => s.cancelTask)
+
   const pct = taskPercent(task)
   const name = fileName(task.direction === 'upload' ? task.localPath : task.remotePath)
   const amount = amountText(task)
   const failed = task.status === 'error'
+  const paused = task.status === 'paused'
+  const canPause = task.status === 'running'
+  const canResume = paused
+  const canCancel = isLive(task)
+
   const barColor = failed
     ? 'bg-danger'
     : task.status === 'done'
       ? 'bg-success'
-      : task.status === 'pending'
-        ? 'bg-ink-3/60'
-        : 'bg-accent'
+      : task.status === 'canceled'
+        ? 'bg-ink-3/50'
+        : paused
+          ? 'bg-ink-3'
+          : task.status === 'pending'
+            ? 'bg-ink-3/60'
+            : 'bg-accent'
 
   return (
     <div className="group rounded-md px-1.5 py-1 transition-colors hover:bg-raised/60">
@@ -282,15 +324,51 @@ function TransferRow({
         <span
           className={cn(
             'shrink-0 font-mono text-2xs',
-            failed ? 'text-danger' : task.status === 'done' ? 'text-success' : 'text-ink-3'
+            failed
+              ? 'text-danger'
+              : task.status === 'done'
+                ? 'text-success'
+                : paused
+                  ? 'text-warning'
+                  : 'text-ink-3'
           )}
         >
           {statusText(task)}
         </span>
+
+        {/* 传输控制：暂停 / 继续 / 终止 */}
+        {canResume && (
+          <button
+            className="flex h-4 w-4 shrink-0 items-center justify-center rounded text-ink-3 transition-colors hover:bg-hover hover:text-accent"
+            title="继续传输"
+            onClick={() => void resumeTask(task.id)}
+          >
+            <Play size={10} />
+          </button>
+        )}
+        {canPause && (
+          <button
+            className="flex h-4 w-4 shrink-0 items-center justify-center rounded text-ink-3 transition-colors hover:bg-hover hover:text-accent"
+            title="暂停传输"
+            onClick={() => void pauseTask(task.id)}
+          >
+            <Pause size={10} />
+          </button>
+        )}
+        {canCancel && (
+          <button
+            className="flex h-4 w-4 shrink-0 items-center justify-center rounded text-ink-3 transition-colors hover:bg-hover hover:text-danger"
+            title="终止传输（已传输的部分会丢弃）"
+            onClick={() => void cancelTask(task.id)}
+          >
+            <Ban size={10} />
+          </button>
+        )}
+
         <button
           className={cn(
             'shrink-0 text-ink-3 opacity-0 transition-opacity hover:text-ink group-hover:opacity-100',
-            task.status === 'running' || task.status === 'pending' ? 'invisible' : ''
+            isLive(task) ? 'invisible' : ''
           )}
           title="从列表移除"
           onClick={onDismiss}
@@ -306,12 +384,16 @@ function TransferRow({
             barColor,
             task.status === 'pending' && 'animate-pulse-soft'
           )}
-          style={{ width: `${task.status === 'done' ? 100 : Math.max(pct, task.status === 'running' ? 1 : 0)}%` }}
+          style={{
+            width: `${task.status === 'done' ? 100 : Math.max(pct, task.status === 'running' ? 1 : 0)}%`
+          }}
         />
       </div>
 
       <div className="mt-0.5 flex items-center gap-2 font-mono text-[10px] leading-3 text-ink-3">
-        <span className="min-w-0 flex-1 truncate">{failed ? task.error ?? '传输失败' : amount.left}</span>
+        <span className="min-w-0 flex-1 truncate">
+          {failed ? task.error ?? '传输失败' : amount.left}
+        </span>
         {!failed && amount.right && (
           <span className="shrink-0 whitespace-nowrap">{amount.right}</span>
         )}

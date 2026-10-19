@@ -69,6 +69,9 @@ export const IPC = {
   SFTP_DOWNLOAD: 'sftp:download',
   SFTP_UPLOAD_DIALOG: 'sftp:upload-dialog',
   SFTP_DOWNLOAD_DIALOG: 'sftp:download-dialog',
+  SFTP_TRANSFER_PAUSE: 'sftp:transfer-pause',
+  SFTP_TRANSFER_RESUME: 'sftp:transfer-resume',
+  SFTP_TRANSFER_CANCEL: 'sftp:transfer-cancel',
 
   /* ---------------- ZMODEM 文件传输（sz / rz） ---------------- */
   ZM_PICK_FILES: 'zm:pick-files',
