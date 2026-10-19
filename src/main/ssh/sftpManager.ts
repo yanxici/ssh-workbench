@@ -64,7 +64,8 @@ function pRename(sftp: SFTPWrapper, from: string, to: string): Promise<void> {
 
 /* ------------------------------ 管理器 ------------------------------ */
 
-class SftpManager {
+/** 导出类供回归脚本驱动（生产只使用下方的单例） */
+export class SftpManager {
   private wrappers = new Map<string, SFTPWrapper>()
   /** 正在挂载中的 SFTP 通道（并发请求共享同一次挂载，避免重复 sftp 子系统） */
   private pendingMounts = new Map<string, Promise<SFTPWrapper>>()
@@ -281,7 +282,15 @@ class SftpManager {
               this.emit(e)
             )
           } else {
-            await transferUpload(sftp, sessionId, taskId, localPath, remotePath, (e) => this.emit(e))
+            await transferUpload(
+              sftp,
+              sessionId,
+              taskId,
+              localPath,
+              remotePath,
+              (e) => this.emit(e),
+              st?.isFile() ? st.size : 0
+            )
           }
         },
         sessionId,
@@ -309,8 +318,14 @@ class SftpManager {
               this.emit(e)
             )
           } else {
-            await transferDownload(sftp, sessionId, taskId, remotePath, localPath, (e) =>
-              this.emit(e)
+            await transferDownload(
+              sftp,
+              sessionId,
+              taskId,
+              remotePath,
+              localPath,
+              (e) => this.emit(e),
+              st?.isFile() ? st.size : 0
             )
           }
         },
@@ -374,9 +389,21 @@ async function transferUpload(
   taskId: string,
   localPath: string,
   remotePath: string,
-  emit: (e: TransferProgressEvent) => void
+  emit: (e: TransferProgressEvent) => void,
+  knownTotal = 0
 ): Promise<void> {
   const startedAt = Date.now()
+  const total = Math.max(knownTotal, 0)
+
+  let transferred = 0
+  let lastEmit = Date.now()
+  let lastBytes = 0
+  // stat 失败时已知总量为 0，首帧只能画空槽；一旦 step 回调给出总量就立刻发一帧，
+  // 不再等节流窗口，否则进度条会一直停在 0%。
+  let publishedTotal = total > 0
+
+  // 先把已知总大小发出去：渲染层第一帧就能画出 0% 的完整进度条，
+  // 而不是显示一个 total=0、永远停在 0% 的空槽。
   emit({
     taskId,
     sessionId,
@@ -384,14 +411,11 @@ async function transferUpload(
     localPath,
     remotePath,
     transferred: 0,
-    total: 0,
+    total,
     status: 'running',
-    speedBps: 0
+    speedBps: 0,
+    unit: 'bytes'
   })
-
-  let lastEmit = 0
-  let lastBytes = 0
-  let lastTotal = 0
 
   try {
     await new Promise<void>((resolve, reject) => {
@@ -399,13 +423,15 @@ async function transferUpload(
         localPath,
         remotePath,
         {
-          step: (transferred, _chunk, total) => {
+          step: (bytes, _chunk, stepTotal) => {
+            transferred = Math.max(transferred, bytes)
             const now = Date.now()
-            if (now - lastEmit < PROGRESS_THROTTLE_MS) return
+            const needTotal = !publishedTotal && (stepTotal || 0) > 0
+            if (!needTotal && now - lastEmit < PROGRESS_THROTTLE_MS) return
+            if (needTotal) publishedTotal = true
             const speed = (transferred - lastBytes) / Math.max((now - lastEmit) / 1000, 0.001)
             lastEmit = now
             lastBytes = transferred
-            lastTotal = total
             emit({
               taskId,
               sessionId,
@@ -413,25 +439,30 @@ async function transferUpload(
               localPath,
               remotePath,
               transferred,
-              total,
+              total: total || stepTotal || 0,
               status: 'running',
-              speedBps: Math.round(speed)
+              speedBps: Math.round(speed),
+              unit: 'bytes'
             })
           }
         },
         (err) => (err ? reject(err) : resolve())
       )
     })
+    // 结束时以总大小为准确值：大文件传输的最后一次 step 可能被节流吞掉，
+    // 小文件则可能一次 step 都没有，沿用 lastBytes 会让进度条停在 0%。
+    const finalBytes = Math.max(transferred, total)
     emit({
       taskId,
       sessionId,
       direction: 'upload',
       localPath,
       remotePath,
-      transferred: lastBytes,
-      total: lastTotal,
+      transferred: finalBytes,
+      total: finalBytes,
       status: 'done',
-      speedBps: Math.round(lastBytes / Math.max((Date.now() - startedAt) / 1000, 0.001))
+      speedBps: Math.round(finalBytes / Math.max((Date.now() - startedAt) / 1000, 0.001)),
+      unit: 'bytes'
     })
   } catch (err) {
     emit({
@@ -440,10 +471,11 @@ async function transferUpload(
       direction: 'upload',
       localPath,
       remotePath,
-      transferred: lastBytes,
-      total: lastTotal,
+      transferred,
+      total: total || transferred,
       status: 'error',
-      error: err instanceof Error ? err.message : String(err)
+      error: err instanceof Error ? err.message : String(err),
+      unit: 'bytes'
     })
   }
 }
@@ -454,9 +486,18 @@ async function transferDownload(
   taskId: string,
   remotePath: string,
   localPath: string,
-  emit: (e: TransferProgressEvent) => void
+  emit: (e: TransferProgressEvent) => void,
+  knownTotal = 0
 ): Promise<void> {
   const startedAt = Date.now()
+  const total = Math.max(knownTotal, 0)
+
+  let transferred = 0
+  let lastEmit = Date.now()
+  let lastBytes = 0
+  // 同 upload：stat 失败时首帧 total=0，靠第一次 step 的总量把进度条补满。
+  let publishedTotal = total > 0
+
   emit({
     taskId,
     sessionId,
@@ -464,14 +505,11 @@ async function transferDownload(
     localPath,
     remotePath,
     transferred: 0,
-    total: 0,
+    total,
     status: 'running',
-    speedBps: 0
+    speedBps: 0,
+    unit: 'bytes'
   })
-
-  let lastEmit = 0
-  let lastBytes = 0
-  let lastTotal = 0
 
   try {
     await new Promise<void>((resolve, reject) => {
@@ -479,13 +517,15 @@ async function transferDownload(
         remotePath,
         localPath,
         {
-          step: (transferred, _chunk, total) => {
+          step: (bytes, _chunk, stepTotal) => {
+            transferred = Math.max(transferred, bytes)
             const now = Date.now()
-            if (now - lastEmit < PROGRESS_THROTTLE_MS) return
+            const needTotal = !publishedTotal && (stepTotal || 0) > 0
+            if (!needTotal && now - lastEmit < PROGRESS_THROTTLE_MS) return
+            if (needTotal) publishedTotal = true
             const speed = (transferred - lastBytes) / Math.max((now - lastEmit) / 1000, 0.001)
             lastEmit = now
             lastBytes = transferred
-            lastTotal = total
             emit({
               taskId,
               sessionId,
@@ -493,25 +533,28 @@ async function transferDownload(
               localPath,
               remotePath,
               transferred,
-              total,
+              total: total || stepTotal || 0,
               status: 'running',
-              speedBps: Math.round(speed)
+              speedBps: Math.round(speed),
+              unit: 'bytes'
             })
           }
         },
         (err) => (err ? reject(err) : resolve())
       )
     })
+    const finalBytes = Math.max(transferred, total)
     emit({
       taskId,
       sessionId,
       direction: 'download',
       localPath,
       remotePath,
-      transferred: lastBytes,
-      total: lastTotal,
+      transferred: finalBytes,
+      total: finalBytes,
       status: 'done',
-      speedBps: Math.round(lastBytes / Math.max((Date.now() - startedAt) / 1000, 0.001))
+      speedBps: Math.round(finalBytes / Math.max((Date.now() - startedAt) / 1000, 0.001)),
+      unit: 'bytes'
     })
   } catch (err) {
     emit({
@@ -520,10 +563,11 @@ async function transferDownload(
       direction: 'download',
       localPath,
       remotePath,
-      transferred: lastBytes,
-      total: lastTotal,
+      transferred,
+      total: total || transferred,
       status: 'error',
-      error: err instanceof Error ? err.message : String(err)
+      error: err instanceof Error ? err.message : String(err),
+      unit: 'bytes'
     })
   }
 }
@@ -606,7 +650,6 @@ async function transferUploadDir(
   remoteDir: string,
   emit: (e: TransferProgressEvent) => void
 ): Promise<void> {
-  const startedAt = Date.now()
   const files = await walkLocal(localDir)
   const total = files.length
   emit({
@@ -618,7 +661,7 @@ async function transferUploadDir(
     transferred: 0,
     total,
     status: 'running',
-    speedBps: 0
+    unit: 'files'
   })
 
   let done = 0
@@ -641,7 +684,7 @@ async function transferUploadDir(
           transferred: done,
           total,
           status: 'running',
-          speedBps: Math.round(done / Math.max((now - startedAt) / 1000, 0.001))
+          unit: 'files'
         })
       }
     }
@@ -654,7 +697,7 @@ async function transferUploadDir(
       transferred: total,
       total,
       status: 'done',
-      speedBps: Math.round(total / Math.max((Date.now() - startedAt) / 1000, 0.001))
+      unit: 'files'
     })
   } catch (err) {
     emit({
@@ -666,7 +709,8 @@ async function transferUploadDir(
       transferred: done,
       total,
       status: 'error',
-      error: err instanceof Error ? err.message : String(err)
+      error: err instanceof Error ? err.message : String(err),
+      unit: 'files'
     })
   }
 }
@@ -680,7 +724,6 @@ async function transferDownloadDir(
   localDir: string,
   emit: (e: TransferProgressEvent) => void
 ): Promise<void> {
-  const startedAt = Date.now()
   const files = await walkRemote(sftp, remoteDir)
   const total = files.length
   emit({
@@ -692,7 +735,7 @@ async function transferDownloadDir(
     transferred: 0,
     total,
     status: 'running',
-    speedBps: 0
+    unit: 'files'
   })
 
   let done = 0
@@ -715,7 +758,7 @@ async function transferDownloadDir(
           transferred: done,
           total,
           status: 'running',
-          speedBps: Math.round(done / Math.max((now - startedAt) / 1000, 0.001))
+          unit: 'files'
         })
       }
     }
@@ -728,7 +771,7 @@ async function transferDownloadDir(
       transferred: total,
       total,
       status: 'done',
-      speedBps: Math.round(total / Math.max((Date.now() - startedAt) / 1000, 0.001))
+      unit: 'files'
     })
   } catch (err) {
     emit({
@@ -740,7 +783,8 @@ async function transferDownloadDir(
       transferred: done,
       total,
       status: 'error',
-      error: err instanceof Error ? err.message : String(err)
+      error: err instanceof Error ? err.message : String(err),
+      unit: 'files'
     })
   }
 }

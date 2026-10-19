@@ -43,6 +43,7 @@ import { CommandPanel } from '@/components/commands/CommandPanel'
 import { CommandEditor } from '@/components/commands/CommandEditor'
 import { RemoteEditorDialog } from '@/components/files/RemoteEditorDialog'
 import { SessionFileTree } from '@/components/files/SessionFileTree'
+import { TransferProgressDock } from '@/components/files/TransferProgressDock'
 import { TerminalView } from '@/components/terminal/TerminalView'
 import { ZmodemOverlay } from '@/components/terminal/ZmodemOverlay'
 import { HistoryPanel } from '@/components/panels/HistoryPanel'
@@ -271,6 +272,11 @@ export function App(): JSX.Element {
     const offDiscover = window.api.on.discoverProgress((e) => {
       useDiscoveryStore.getState().applyProgress(e)
     })
+    // SFTP 上传/下载进度：这是进度条的数据入口，缺失时任务永远停在 pending，
+    // 界面看起来就是"长文件下载没有任何传输进度"。
+    const offTransfer = window.api.on.transferProgress((e) => {
+      useSftpStore.getState().applyProgress(e)
+    })
     return () => {
       offData()
       offStatus()
@@ -281,6 +287,7 @@ export function App(): JSX.Element {
       offMetrics()
       offFwLog()
       offDiscover()
+      offTransfer()
     }
   }, [])
 
@@ -645,6 +652,9 @@ export function App(): JSX.Element {
 
       {/* ================= 状态栏 ================= */}
       <StatusBar />
+
+      {/* 全局传输进度浮层：不依赖文件管理面板，长文件下载也能随时看到进度 */}
+      <TransferProgressDock />
 
       {/* 顶栏「更多功能」菜单（窄窗口下的功能入口） */}      {moreMenu && (
         <ContextMenu

@@ -1,7 +1,8 @@
-import { Unplug } from 'lucide-react'
+import { ArrowDownToLine, ArrowUpFromLine, Unplug } from 'lucide-react'
 import type { ConnStatus } from '@shared/types'
 import { useSessionStore } from '@/stores/sessionStore'
 import { useConnectionStore } from '@/stores/connectionStore'
+import { useSftpStore } from '@/stores/sftpStore'
 import { cn, latencyLevel } from '@/lib/utils'
 
 const STATUS_TEXT: Record<ConnStatus, string> = {
@@ -30,6 +31,28 @@ export function StatusBar(): JSX.Element {
   const session = useSessionStore((s) => s.sessions.find((x) => x.id === s.activeId) ?? null)
   const count = useSessionStore((s) => s.sessions.length)
   const savedCount = useConnectionStore((s) => s.connections.length)
+  const transfers = useSftpStore((s) => s.transfers)
+  const showDock = useSftpStore((s) => s.showDock)
+
+  const active = transfers.filter((t) => t.status === 'running' || t.status === 'pending')
+  const activeKnownTotal = active.reduce((sum, t) => sum + (t.total > 0 ? t.total : 0), 0)
+  const activeKnownDone = active.reduce(
+    (sum, t) => sum + (t.total > 0 ? Math.min(t.transferred, t.total) : 0),
+    0
+  )
+  const activePct =
+    activeKnownTotal > 0
+      ? Math.round((activeKnownDone / activeKnownTotal) * 100)
+      : active.length > 0
+        ? Math.round(
+            (active.reduce(
+              (sum, t) => sum + (t.total > 0 ? Math.min(t.transferred / t.total, 1) : 0),
+              0
+            ) /
+              active.length) *
+              100
+          )
+        : 0
 
   return (
     <div className="flex h-[26px] shrink-0 items-center gap-3 border-t border-edge-soft bg-panel px-3 text-2xs text-ink-3">
@@ -66,6 +89,26 @@ export function StatusBar(): JSX.Element {
       )}
 
       <span className="flex-1" />
+
+      {active.length > 0 && (
+        <>
+          <button
+            className="flex items-center gap-1 rounded px-1 py-0.5 text-accent transition-colors hover:bg-hover"
+            title="查看传输进度"
+            onClick={showDock}
+          >
+            {active[0].direction === 'upload' ? (
+              <ArrowUpFromLine size={10} />
+            ) : (
+              <ArrowDownToLine size={10} />
+            )}
+            <span>
+              {active.length} 项 · {activePct}%
+            </span>
+          </button>
+          <span className="text-edge">|</span>
+        </>
+      )}
 
       {count > 1 && <span>共 {count} 个会话</span>}
       <span className="text-edge">|</span>

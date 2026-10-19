@@ -1,13 +1,12 @@
-import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, FolderTree, X } from 'lucide-react'
-import type { TransferTask } from '@shared/types'
+import { ArrowDownToLine, ArrowLeft, ArrowRight, FolderTree, X } from 'lucide-react'
 import { useSftpStore } from '@/stores/sftpStore'
-import { cn, formatBytes } from '@/lib/utils'
 import { LocalPane } from './LocalPane'
 import { RemotePane } from './RemotePane'
 
 /**
  * SFTP 文件管理面板（覆盖主区域的双栏视图）。
- * 左：本地文件系统；右：远端设备文件系统；中间：上传/下载按钮；底部：传输队列。
+ * 左：本地文件系统；右：远端设备文件系统；中间：上传/下载按钮。
+ * 传输进度统一由全局 TransferProgressDock 展示（不随面板开关消失）。
  */
 export function FileManagerPanel(): JSX.Element | null {
   const open = useSftpStore((s) => s.open)
@@ -18,8 +17,13 @@ export function FileManagerPanel(): JSX.Element | null {
   const uploadPaths = useSftpStore((s) => s.uploadPaths)
   const downloadPaths = useSftpStore((s) => s.downloadPaths)
   const transfers = useSftpStore((s) => s.transfers)
+  const showDock = useSftpStore((s) => s.showDock)
 
   if (!open) return null
+
+  const activeCount = transfers.filter(
+    (t) => t.status === 'running' || t.status === 'pending'
+  ).length
 
   return (
     <div className="fixed inset-x-0 bottom-[26px] top-[38px] z-30 flex flex-col bg-app">
@@ -32,6 +36,19 @@ export function FileManagerPanel(): JSX.Element | null {
         <span className="hidden truncate text-2xs text-ink-3 lg:block">
           双击目录进入 · 双击远程文件编辑 · 拖拽两侧互相传输
         </span>
+        {transfers.length > 0 && (
+          <button
+            className="flex items-center gap-1 rounded border border-edge-soft px-1.5 py-0.5 text-2xs text-ink-3 transition-colors hover:bg-hover hover:text-ink"
+            title="打开传输进度浮层"
+            onClick={showDock}
+          >
+            <ArrowDownToLine
+              size={11}
+              className={activeCount > 0 ? 'text-accent' : 'text-success'}
+            />
+            {activeCount > 0 ? `${activeCount} 项传输中` : '传输记录'}
+          </button>
+        )}
         <button className="btn-icon" title="关闭 (Esc)" onClick={close}>
           <X size={14} />
         </button>
@@ -66,87 +83,6 @@ export function FileManagerPanel(): JSX.Element | null {
           <RemotePane />
         </div>
       </div>
-
-      {transfers.length > 0 && <TransferQueue />}
-    </div>
-  )
-}
-
-/* ------------------------------------------------------------------ *
- *  传输队列
- * ------------------------------------------------------------------ */
-
-function TransferQueue(): JSX.Element {
-  const transfers = useSftpStore((s) => s.transfers)
-  const clearFinished = useSftpStore((s) => s.clearFinished)
-  const running = transfers.filter((t) => t.status === 'running' || t.status === 'pending').length
-
-  return (
-    <div className="shrink-0 border-t border-edge bg-panel/70 px-3 pb-2 pt-1.5">
-      <div className="mb-1 flex items-center gap-2">
-        <span className="text-2xs font-semibold text-ink-2">传输队列</span>
-        {running > 0 && <span className="text-2xs text-accent">{running} 个进行中</span>}
-        <span className="flex-1" />
-        <button
-          className="text-2xs text-ink-3 transition-colors hover:text-ink"
-          onClick={clearFinished}
-        >
-          清除已完成
-        </button>
-      </div>
-      <div className="scroll-thin max-h-[110px] space-y-1 overflow-y-auto pr-1">
-        {transfers.map((t) => (
-          <TransferRow key={t.id} task={t} />
-        ))}
-      </div>
-    </div>
-  )
-}
-
-function TransferRow({ task }: { task: TransferTask }): JSX.Element {
-  const pct = task.total > 0 ? Math.round((task.transferred / task.total) * 100) : 0
-  const name =
-    task.direction === 'upload'
-      ? (task.localPath.split(/[\\/]/).pop() ?? task.localPath)
-      : (task.remotePath.split('/').pop() ?? task.remotePath)
-
-  return (
-    <div className="flex items-center gap-2 text-2xs">
-      {task.direction === 'upload' ? (
-        <ArrowUp size={11} className="shrink-0 text-accent" />
-      ) : (
-        <ArrowDown size={11} className="shrink-0 text-success" />
-      )}
-      <span
-        className="w-[200px] shrink-0 truncate text-ink-2"
-        title={task.direction === 'upload' ? task.localPath : task.remotePath}
-      >
-        {name}
-      </span>
-      <div className="h-1 min-w-0 flex-1 overflow-hidden rounded-full bg-raised">
-        <div
-          className={cn(
-            'h-full rounded-full transition-all duration-200',
-            task.status === 'error'
-              ? 'bg-danger'
-              : task.status === 'done'
-                ? 'bg-success'
-                : 'bg-accent'
-          )}
-          style={{ width: `${task.status === 'done' ? 100 : pct}%` }}
-        />
-      </div>
-      <span className="w-[190px] shrink-0 text-right font-mono text-ink-3">
-        {task.status === 'pending' && '排队中'}
-        {task.status === 'running' &&
-          `${pct}%${task.speedBps ? ` · ${formatBytes(task.speedBps)}/s` : ''}`}
-        {task.status === 'done' && `完成 · ${task.total > 0 ? formatBytes(task.total) : ''}`}
-        {task.status === 'error' && (
-          <span className="text-danger" title={task.error}>
-            失败：{task.error?.slice(0, 36)}
-          </span>
-        )}
-      </span>
     </div>
   )
 }

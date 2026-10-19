@@ -83,6 +83,29 @@ import { testConnection } from './ssh/testConnection'
 
 let mainWindow: BrowserWindow | null = null
 
+/** 正在进行的传输任务（用于任务栏进度条；完成/失败即移除） */
+const activeTransfers = new Map<string, { transferred: number; total: number }>()
+
+/** 把当前所有传输任务聚合成 Windows 任务栏进度；没有任务时清除 */
+function updateTaskbarProgress(): void {
+  const win = mainWindow
+  if (!win || win.isDestroyed()) return
+  if (activeTransfers.size === 0) {
+    win.setProgressBar(-1)
+    return
+  }
+  const tasks = [...activeTransfers.values()].filter((t) => t.total > 0)
+  if (tasks.length === 0) {
+    // 总大小未知（例如目录还在遍历）：任务栏显示不确定态
+    win.setProgressBar(2)
+    return
+  }
+  const ratio =
+    tasks.reduce((sum, t) => sum + Math.min(t.transferred / t.total, 1), 0) / tasks.length
+  // 传输中最多显示 99%，避免任务栏提前显示"已完成"
+  win.setProgressBar(Math.min(Math.max(ratio, 0), 0.999))
+}
+
 /* ------------------------------------------------------------------ *
  *  启动日志与全局异常 —— 排查"静默退出"的关键抓手
  * ------------------------------------------------------------------ */
@@ -734,6 +757,15 @@ if (!gotLock) {
 
     sftpManager.setProgressHandler((event) => {
       mainWindow?.webContents.send(IPC.EVT_TRANSFER_PROGRESS, event)
+      if (event.status === 'running' || event.status === 'pending') {
+        activeTransfers.set(event.taskId, {
+          transferred: event.transferred,
+          total: event.total
+        })
+      } else {
+        activeTransfers.delete(event.taskId)
+      }
+      updateTaskbarProgress()
     })
 
     tunnelManager.setStatusHandler((info) => {

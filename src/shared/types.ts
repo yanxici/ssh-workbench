@@ -409,6 +409,8 @@ export interface TransferTask {
   status: 'pending' | 'running' | 'done' | 'error' | 'canceled'
   error?: string
   speedBps?: number
+  /** 进度单位：字节（单文件）或文件个数（目录递归传输）；缺省按 bytes 处理 */
+  unit?: 'bytes' | 'files'
   startedAt: number
   finishedAt?: number
 }
@@ -433,6 +435,8 @@ export interface TransferProgressEvent {
   status: TransferTask['status']
   error?: string
   speedBps?: number
+  /** 进度单位：bytes=字节数，files=已完成文件数（目录传输） */
+  unit?: 'bytes' | 'files'
 }
 
 /* ------------------------------------------------------------------ *

@@ -416,7 +416,8 @@ export function ToastHost(): JSX.Element {
   const dismiss = useToastStore((s) => s.dismiss)
 
   return (
-    <div className="pointer-events-none fixed bottom-10 right-3 z-[70] flex w-[340px] flex-col gap-2">
+    // 右上角通知：避开左下传输进度浮层与状态栏，避免长任务进行时被通知遮挡
+    <div className="pointer-events-none fixed right-3 top-[46px] z-[70] flex w-[340px] flex-col gap-2">
       {toasts.map((t) => {
         const cfg = TOAST_ICON[t.kind] ?? TOAST_ICON.info
         return (

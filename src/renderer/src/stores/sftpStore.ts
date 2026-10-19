@@ -28,6 +28,14 @@ interface SftpState {
 
   /** 传输队列 */
   transfers: TransferTask[]
+  /** 全局传输进度浮层：折叠为小条 */
+  dockCollapsed: boolean
+  /** 用户手动关掉了浮层；新任务开始时会自动重新出现 */
+  dockClosed: boolean
+  setDockCollapsed: (collapsed: boolean) => void
+  showDock: () => void
+  closeDock: () => void
+  dismissTask: (id: string) => void
 
   /** 远程编辑器 */
   editing: { path: string; content: string } | null
@@ -80,6 +88,8 @@ export const useSftpStore = create<SftpState>()((set, get) => ({
   remoteSel: [],
 
   transfers: [],
+  dockCollapsed: false,
+  dockClosed: false,
   editing: null,
   treeVersion: 0,
 
@@ -193,8 +203,13 @@ export const useSftpStore = create<SftpState>()((set, get) => ({
       const finished = e.status === 'done' || e.status === 'error' || e.status === 'canceled'
       const updated: TransferTask = {
         ...base,
-        transferred: e.transferred || base.transferred,
-        total: e.total || base.total,
+        // 传输是单调递增的：晚到的旧事件（节流队列）不能把进度条往回拉
+        transferred:
+          e.status === 'pending'
+            ? base.transferred
+            : Math.max(base.transferred, Math.max(0, e.transferred || 0)),
+        total: e.total > 0 ? e.total : base.total,
+        unit: e.unit ?? base.unit,
         status: e.status,
         error: e.error,
         speedBps: e.speedBps,
@@ -204,7 +219,8 @@ export const useSftpStore = create<SftpState>()((set, get) => ({
       const next = [...s.transfers]
       if (idx >= 0) next[idx] = updated
       else next.push(updated)
-      return { transfers: next }
+      // 新任务出现时，即使上次手动关掉了浮层也要重新展示进度
+      return { transfers: next, dockClosed: idx >= 0 ? s.dockClosed : false }
     })
 
     // 传输完成后刷新对应侧的列表，让新文件马上可见
@@ -213,6 +229,19 @@ export const useSftpStore = create<SftpState>()((set, get) => ({
       else void get().refreshLocal()
     }
   },
+
+  setDockCollapsed: (collapsed) => set({ dockCollapsed: collapsed }),
+
+  showDock: () => set({ dockClosed: false, dockCollapsed: false }),
+
+  closeDock: () =>
+    set((s) => ({
+      dockClosed: true,
+      transfers: s.transfers.filter((t) => t.status === 'pending' || t.status === 'running')
+    })),
+
+  dismissTask: (id) =>
+    set((s) => ({ transfers: s.transfers.filter((t) => t.id !== id) })),
 
   clearFinished: () =>
     set((s) => ({
