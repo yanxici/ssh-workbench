@@ -61,6 +61,12 @@ declare module 'zmodem.js' {  /** Sentry 检测到疑似 ZMODEM 起始序列时�
     on(evt: 'session_end', cb: () => void): this
     on(evt: 'garbage', cb: (octets: number[]) => void): this
     on(evt: string, cb: (...args: unknown[]) => void): this
+    /**
+     * 只在 session 类型为 receive 时可用。
+     * 必须调用，才会发出第一个 ZRINIT 开始协商；不调用则远端 sz 永远等待。
+     * 返回值在收到第一个 offer / 会话结束时兑现。
+     */
+    start(): Promise<ZmodemOffer | undefined>
     /** 只在 session 类型为 send 时可用 */
     send_offer(params: FileDetails): Promise<ZmodemTransfer | undefined>
     close(): void

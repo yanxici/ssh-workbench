@@ -272,12 +272,20 @@ export const api = {
     pickFiles: (): Promise<
       IpcResult<{ canceled: boolean; files: Array<{ name: string; size: number; data: string }> }>
     > => invoke(IPC.ZM_PICK_FILES),
-    saveFile: (
+    /** 选一次保存文件夹（多文件 sz 只问一次） */
+    pickDir: (): Promise<IpcResult<{ canceled: boolean; token?: string; dir?: string }>> =>
+      invoke(IPC.ZM_PICK_DIR),
+    /** 在已选目录建目标文件（重名自动编号） */
+    saveBegin: (
+      token: string,
       suggestedName: string
-    ): Promise<IpcResult<{ canceled: boolean; token?: string; path?: string }>> =>
-      invoke(IPC.ZM_SAVE_FILE, suggestedName),
-    writeFile: (token: string, base64: string): Promise<IpcResult<{ path: string; size: number }>> =>
-      invoke(IPC.ZM_WRITE_FILE, token, base64),
+    ): Promise<IpcResult<{ saveId: string; path: string }>> =>
+      invoke(IPC.ZM_SAVE_BEGIN, token, suggestedName),
+    /** 追加一块数据，避免整份文件驻留渲染进程内存 */
+    saveAppend: (saveId: string, base64: string): Promise<IpcResult<{ bytes: number }>> =>
+      invoke(IPC.ZM_SAVE_APPEND, saveId, base64),
+    saveFinish: (saveId: string): Promise<IpcResult<{ path: string; size: number }>> =>
+      invoke(IPC.ZM_SAVE_FINISH, saveId),
     sendBytes: (sessionId: string, base64: string): Promise<IpcResult<void>> =>
       invoke(IPC.ZM_SEND_BYTES, sessionId, base64)
   },

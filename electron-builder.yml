@@ -18,10 +18,15 @@ asarUnpack:
 win:
   target:
     - nsis
+    - portable
 nsis:
   oneClick: false
   allowToChangeInstallationDirectory: true
   createDesktopShortcut: true
+# 免安装版：单个 exe，双击即用，不写注册表、不建开始菜单项
+portable:
+  artifactName: ${productName}-${version}-portable.${ext}
+  requestExecutionLevel: user
 mac:
   target:
     - dmg

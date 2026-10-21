@@ -75,8 +75,10 @@ export const IPC = {
 
   /* ---------------- ZMODEM 文件传输（sz / rz） ---------------- */
   ZM_PICK_FILES: 'zm:pick-files',
-  ZM_SAVE_FILE: 'zm:save-file',
-  ZM_WRITE_FILE: 'zm:write-file',
+  ZM_PICK_DIR: 'zm:pick-dir',
+  ZM_SAVE_BEGIN: 'zm:save-begin',
+  ZM_SAVE_APPEND: 'zm:save-append',
+  ZM_SAVE_FINISH: 'zm:save-finish',
   ZM_SEND_BYTES: 'zm:send-bytes',
 
   /* ---------------- 本地文件系统（文件管理器左侧栏） ---------------- */

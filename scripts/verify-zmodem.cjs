@@ -184,19 +184,28 @@ const ZM_START = [42, 42, 24, 66, 48]
 /* ---------- 4. IPC / preload 暴露面 ---------- */
 ;(function testIpcSurface() {
   const ipc = fs.readFileSync(path.join(ROOT, 'src/shared/ipc.ts'), 'utf8')
-  for (const ch of ['ZM_PICK_FILES', 'ZM_SAVE_FILE', 'ZM_WRITE_FILE', 'ZM_SEND_BYTES']) {
+  for (const ch of [
+    'ZM_PICK_FILES',
+    'ZM_PICK_DIR',
+    'ZM_SAVE_BEGIN',
+    'ZM_SAVE_APPEND',
+    'ZM_SAVE_FINISH',
+    'ZM_SEND_BYTES'
+  ]) {
     check(`IPC 通道 ${ch} 已定义`, ipc.includes(ch))
   }
 
   const pre = fs.readFileSync(path.join(ROOT, 'src/preload/index.ts'), 'utf8')
-  for (const m of ['pickFiles', 'saveFile', 'writeFile', 'sendBytes']) {
+  for (const m of ['pickFiles', 'pickDir', 'saveBegin', 'saveAppend', 'saveFinish', 'sendBytes']) {
     check(`preload 暴露 zmodem.${m}`, new RegExp(`\\b${m}:`).test(pre))
   }
 
   const main = fs.readFileSync(path.join(ROOT, 'src/main/index.ts'), 'utf8')
   check('主进程推送 raw（base64）', /raw: raw\?\.length \? raw\.toString\('base64'\)/.test(main))
-  check('保存走一次性 token，禁止任意路径', /zmSavePaths\.delete\(token\)/.test(main))
-  check('saveFile 对文件名做 basename 清洗', /basename\(String\(suggestedName/.test(main))
+  check('接收目录用一次性文件夹令牌，禁止任意路径', /zmDirTokens\.get\(token\)/.test(main))
+  check('接收按块追加落盘（不再整份驻留内存）', /appendFileSync\(rec\.path, buf\)/.test(main))
+  check('文件名做 basename 与保留字符清洗', /const safeFileName = \(name: string\)/.test(main))
+  check('同名文件自动加序号，不覆盖', /while \(existsSync\(candidate\)\)/.test(main))
   check('pickFiles 返回 base64 内容', /data: buf\.toString\('base64'\)/.test(main))
 })()
 
@@ -206,6 +215,14 @@ const ZM_START = [42, 42, 24, 66, 48]
   check('创建 Sentry', /new Sentry\(/.test(zm))
   check('发送原始字节用 sess.sender', /sender:/.test(zm))
   check('处理 offer 事件（接收方向）', /session\.on\('offer'/.test(zm))
+  // 回归：Receive 会话必须 start() 才会发 ZRINIT，缺了它就是「sz 卡在收取中」
+  check('接收方向调用 session.start()', /await session\.start\(\)/.test(zm))
+  check('检测被 retract 后记住用户选择（autoConfirm）', /state\.autoConfirm = direction/.test(zm))
+  check('有超时看门狗，不会一直转圈', /AUTO_CONFIRM_TIMEOUT_MS/.test(zm))
+  check('协议异常后 abort 复位，避免终端被吞', /function recoverFromError/.test(zm))
+  check('提供 abortZmodem 中断入口', /export function abortZmodem/.test(zm))
+  check('接收先选目录再向远端要数据', /direction === 'receive' && !state\.saveDirToken/.test(zm))
+  check('接收分块落盘，不整份驻留内存', /RECEIVE_FLUSH_BYTES/.test(zm))
   check('使用 send_offer（发送方向）', /send_offer\(/.test(zm))
   check('发送完成后 close 会话', /session\.close\(\)/.test(zm))
   check('无确认处理器时默认拒绝', /if \(!confirmHandler\) return Promise\.resolve\(false\)/.test(zm))
@@ -267,6 +284,9 @@ const ZM_START = [42, 42, 24, 66, 48]
   )
   check('UI 对 receive 显示「接收」文案', /receiving \? '接收远端文件'/.test(ui))
   check('UI 对 send 显示「发送」文案', /'发送文件到远端'/.test(ui))
+  check('UI 提供「中断」按钮', /中断当前传输/.test(ui))
+  check('UI 支持 Esc 中断', /e\.key !== 'Escape'/.test(ui))
+  check('UI 提示接收需先选文件夹', /保存文件夹/.test(ui))
 })()
 
 /* ---------- 7. 传输残渣识别（用户反馈：结束后残留乱码与 **B01 头） ---------- */
