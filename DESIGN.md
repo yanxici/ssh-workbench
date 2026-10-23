@@ -1,7 +1,7 @@
 # SSH Workbench — 整体方案与设计文档
 
 > 轻量级 SSH 客户端 + 嵌入式技术支持工作台
-> 更新时间：2026-10-14 ｜ 阶段：P0（核心闭环）已实现
+> 更新时间：2026-10-23 ｜ 阶段：v1.0.0，P0–P3 已实现，P4（主题 / 传输控制 / ZMODEM 下载 / 免安装版 / 界面重构）已实现
 
 ---
 
@@ -17,8 +17,9 @@
 |---|---|---|
 | 桌面框架 | **Electron 33 + electron-vite** | 经评估后确定（见下方决策记录）；Node 22 环境零额外前置，ssh2 生态成熟 |
 | 前端 | React 18 + TypeScript + Vite | 组件生态完整，类型贯通主/渲染进程 |
-| UI | Tailwind CSS（语义色变量）+ lucide-react | 双主题切换只换 CSS 变量；图标按名字动态解析 |
+| UI | Tailwind CSS（语义色变量）+ lucide-react | 主题切换只换 CSS 变量（7 套配色 × 明暗，见 §5.7）；图标按名字动态解析 |
 | 终端 | @xterm/xterm + addon-fit / addon-search / addon-web-links | 事实标准 |
+| 文件传输 | zmodem.js（`rz` / `sz`）+ ssh2 SFTP 分块读写 | 终端内传文件；SFTP 支持暂停续传 |
 | SSH | ssh2（主进程） | 支持密码 / 私钥 / Agent / ProxyJump / SFTP / forwardOut，纯 JS 可运行 |
 | 状态管理 | Zustand | 轻、无样板代码 |
 | 本地存储 | **JSON 文件**（`userData/data/`） | 零 native 依赖（better-sqlite3 需按 Electron ABI 重建，团队机器易装不上）；数据量小；可读可改、方便备份。封装在 repository 层，将来换 SQLite 只动这一层 |
@@ -37,7 +38,9 @@
 ```
 ssh-workbench/
 ├─ electron.vite.config.ts        # 三端构建配置（main / preload / renderer）
-├─ electron-builder.yml           # 打包配置（win nsis / mac dmg / linux AppImage）
+├─ electron-builder.yml           # 打包配置（win nsis + portable / mac dmg / linux AppImage）
+├─ build/ · resources/            # 多尺寸 icon.ico / icon.png（scripts/make-icon.cjs 生成）
+├─ scripts/                       # make-icon.cjs、verify-*.cjs 自检脚本、probe-* 一次性排查脚本
 ├─ tailwind.config.js             # 语义色 -> CSS 变量映射
 ├─ src/
 │  ├─ shared/                     # 三端共享（唯一契约来源）
@@ -50,10 +53,12 @@ ssh-workbench/
 │  │  │  ├─ repository.ts         #   连接/命令/历史/设置/已知主机 CRUD（唯一持久化入口）
 │  │  │  └─ vault.ts              #   凭据保险箱（safeStorage 加密）
 │  │  ├─ ssh/
+│  │  │  ├─ sftpManager.ts        #   SFTP 管理 + 传输队列（分块读写、暂停/续传/取消、进度节流上报）
 │  │  │  ├─ connectConfig.ts      #   连接配置构建（认证/指纹校验）+ 建连原语 + 错误翻译
 │  │  │  ├─ sessionManager.ts     #   会话管理（跳板链/shell/合帧转发/延迟探测）
 │  │  │  └─ testConnection.ts     #   测试连接
-│  │  ├─ util/parseSshCommand.ts  #   剪贴板 ssh 命令解析
+│  │  ├─ ssh/ 其余               #   exec / batchExec / diagnostics / metrics / firmware / netScan / portForward
+│  │  ├─ util/                    #   parseSshCommand、socks5、proxySockets、zip、lineDiff、mdns、arp 等纯函数
 │  │  └─ data/seedCommands.ts     #   内置常用命令（42 条，首次运行注入）
 │  ├─ preload/
 │  │  ├─ index.ts                 # contextBridge 暴露 window.api（类型化）
@@ -63,17 +68,19 @@ ssh-workbench/
 │     └─ src/
 │        ├─ App.tsx               # 布局总装 + 全局快捷键 + 事件订阅 + 拖拽执行
 │        ├─ styles/index.css      # 主题变量（暗/亮）+ 组件类（btn/input/menu/modal）
-│        ├─ theme/terminalThemes.ts
+│        ├─ theme/colorThemes.ts  # 7 套配色 × 明暗（界面 CSS 变量 + xterm 主题同源）
 │        ├─ lib/                  # utils / ipc 解包助手 / 图标白名单
 │        │  ├─ fuzzy.ts           #   零依赖模糊匹配（子串 + 子序列，带命中区间）
 │        │  ├─ commandSearch.ts   #   命令检索：字段加权 / 中英同义 / 使用热度 / 范围索引
 │        │  ├─ layout.ts          #   栏宽规格表（上下限 / 拖拽换算 / 夹取）
-│        │  └─ shortcuts.ts       #   快捷键动作表与默认键位
-│        ├─ stores/               # zustand：settings/connection/session/command/execution/toast/ui
+│        │  ├─ shortcuts.ts       #   快捷键动作表与默认键位
+│        │  └─ zmodem.ts          #   ZMODEM 会话（Sentry 接管字节流、分块保存）
+│        ├─ stores/               # zustand：settings/layout/connection/session/command/execution/sftp/toast/ui 等
 │        └─ components/
-│           ├─ layout/            #   TabBar / StatusBar / PaneResizer
+│           ├─ layout/            #   TitleBar / ActivityBar / SideNav / MainWorkspace / CommandRail / TabBar / StatusBar / PaneResizer
 │           ├─ connections/       #   ConnectionSidebar / ConnectionEditor
-│           ├─ terminal/          #   TerminalView（xterm 集成）
+│           ├─ terminal/          #   TerminalView（xterm 集成）/ ZmodemOverlay
+│           ├─ files/             #   FileExplorer / SessionFileTree / 双栏 Local/RemotePane / TransferProgressDock
 │           ├─ commands/          #   CommandPanel / CommandCenter / CommandEditor / Highlight
 │           ├─ panels/            #   HistoryPanel
 │           ├─ settings/          #   SettingsPanel
@@ -246,6 +253,27 @@ xterm.write  ◀──webContents.send── EVT_SESSION_DATA ◀── shell da
 
 **卡片视觉**：常态 `border-edge bg-app hover:bg-hover`，选中 `border-accent/50 bg-select`。不用 `bg-raised`（#fafafa）压 `bg-panel`（#f8f9fa）—— 两层只差 1.5%，126 个按钮会糊成一片没有边界；白底 + 实边框才读得出「这是一堆可以按的东西」。右上角单槽互斥：平时显示角标（收藏 / 需确认 / 有变量），悬停交叉淡入操作（收藏 / 编辑），只改 `opacity`，不产生位移。
 
+### 5.7 配色主题（v1.0.0）
+
+- `src/renderer/src/theme/colorThemes.ts` 定义 `COLOR_THEMES`：VS Code 浅色（默认）、Workbench、Dracula、Nord、Solarized、One Dark、Gruvbox，每套都有 `dark` / `light` 两个 `ThemeVariant` = 界面 CSS 变量 `vars` + xterm `terminal` 主题，**界面与终端同源**，切换时不会出现终端与外壳配色脱节；
+- 设置项分两层：`settings.theme` 决定明暗（dark / light / 跟随系统），`settings.colorTheme` 在其上换整套配色；
+- 回归：`node scripts/verify-theme.cjs`。
+
+### 5.8 SFTP 传输进度与暂停 / 续传 / 取消
+
+- 主进程 `SftpManager` 传输前先 `stat` 填总量，进度按 `PROGRESS_THROTTLE_MS = 150` 节流上报，结束时补齐 100%；目录传输按文件数计数，失败保留已传字节与错误原因；
+- **分块读写**：`CHUNK_SIZE = 256KB` × `CHUNK_INFLIGHT = 6`（一批约 1.5MB，吞吐接近 `fastGet`、中断粒度可接受）。暂停冻结进度，继续时从已传位置续传；取消或失败会清理未完成的半截文件；
+- IPC：`sftp:transfer-pause / resume / cancel`；任务状态新增 `paused` —— **`paused` 不是终态**，清理计时必须把它算作活动任务（`LIVE = ['pending','running','paused']`）；
+- 渲染层：`TransferProgressDock` 进度面板（速度、队列、暂停/继续/取消按钮），状态栏显示传输状态；
+- 回归：`node scripts/verify-transfer-progress.cjs`（含暂停续传、取消、上传一致性）。
+
+### 5.9 ZMODEM（rz / sz）
+
+- `src/renderer/src/lib/zmodem.ts`：每会话一个 `Sentry` 插在「主进程原始字节 → 终端」之间，检测到起始序列后**需用户确认**才接管；必须喂 `SessionDataEvent.raw`（base64 原始字节），未被协议接管的字节用 `TextDecoder({stream:true})` 解回文本，避免中文乱码；
+- **sz 下载修复**：改为先选保存目录（`zm:pick-dir`，多文件复用同一目录令牌），再按 `zm:save-begin / append / finish` 分块流式写入，替代原先整文件攒在内存里一次性写盘；
+- 接收方向三个曾导致终端卡死的点：Receive 会话必须 `start()` 发首个 ZRINIT；选目录期间远端重发起始帧导致 "Stale ZMODEM session" 时要记住用户选择、下次检测直接接管；协议解析抛错后必须 abort 并复位 Sentry；
+- 回归：`verify-zmodem.cjs` / `verify-zmodem-decode.cjs` / `verify-zmodem-renderer.cjs` / `verify-zmodem-e2e.cjs`。
+
 ## 6. 安全设计
 
 | 项 | 实现 |
@@ -270,13 +298,17 @@ xterm.write  ◀──webContents.send── EVT_SESSION_DATA ◀── shell da
 | **P2-c** | **客户/设备档案**（关联连接/命令分组/诊断报告） + **资源仪表盘**（实时 CPU/内存/磁盘/温度/网络曲线，多会话） | ✅ 完成 |
 | **P3-a** | **固件升级助手**（选择→上传→SHA256 双端校验→流式升级→重启等待上线→启动日志）、**设备发现**（网段 TCP 扫描 + ARP 厂商 + 反向 DNS + mDNS 服务发现）、**配置备份对比**（备份/行级 diff/还原，自动 .bak） | ✅ 完成 |
 | **P3-b** | **报告 zip 打包**（报告+日志+历史+配置备份一键打包，零依赖自实现 zip，Python 跨校验）、**连接代理接线**（SOCKS5 / HTTP CONNECT，密码走凭据保险箱） | ✅ 完成 |
-| **P3-c** | 插件系统（JS 脚本扩展命令/诊断/报告模板）、**快捷键自定义**（已完成）、**命令面板底部/浮动位置**（底部已完成，floating 待办） | 🟡 部分完成 |
+| **P3-c** | **快捷键自定义**（已完成）、命令面板位置（已被 P4-d 的右侧常驻命令栏取代）；插件系统顺延至待办 | 🟡 部分完成 |
 | **P3-d** | **命令检索重构**（模糊匹配 + 中英同义 + 使用热度 + 范围索引）、**Ctrl+K 命令中心**、**栏宽可拖拽**（四栏 + 双击复位 + 设置面板数值化）、视觉精緻度收尾 | ✅ 完成 |
 | **P3-e** | **命令管理器按钮墙**（无搜索词时按分组堆叠按钮，扫读替代搜索）、**大列表性能专项**（2929 条连接不再卡顿）、**视觉硬约束**（禁 backdrop-filter / 过渡 ≤150ms） | ✅ 完成 |
+| **P4-a**（v1.0.0） | **配色主题**：7 套配色 × 明暗，界面与终端联动（§5.7） | ✅ 完成 |
+| **P4-b** | **SFTP 传输进度**（实时进度/速度/队列面板）+ **暂停/继续/取消**（分块读写断点续传，§5.8） | ✅ 完成 |
+| **P4-c** | **sz 下载修复**（选择保存目录 + 分块流式写入，§5.9）+ **Windows 免安装版**（portable 单 exe） | ✅ 完成 |
+| **P4-d** | **界面重构**：标题栏 + 活动栏 + 可拖拽侧栏 / 右侧常驻命令栏（§5.5、§5.6）、Ctrl+K 命令中心、任务栏图标修复（多尺寸 ico） | ✅ 完成 |
+| **待办** | 插件系统（JS 脚本扩展命令/诊断/报告模板） | ⏳ 未开始 |
+| **已确认不做** | 安全与审计（除已实现的主机指纹/凭据加密/危险命令确认外不再扩展）、工单集成、VNC/RDP 入口、网络诊断工具、命令栏浮动形态 | ⏭️ 用户明确不需要 |
 
 > P3-a 附注：新增通用能力 `window.api.exec.run(sessionId, cmd, timeout)`（任意面板可执行一次性命令）；连接编辑器状态上收到 `uiStore`，支持任意面板带预设呼出（设备发现 →「新建连接」即用此能力）。
-| **已确认不做** | 安全与审计（除已实现的主机指纹/凭据加密/危险命令确认外不再扩展）、工单集成、VNC/RDP 入口、网络诊断工具 | ⏭️ 用户明确不需要 |
-| **P3** | 固件升级助手、设备发现（mDNS/ARP）、工单集成、插件系统、VNC/RDP 入口、配置备份对比、快捷键自定义、命令面板底部/浮动位置 | 待开发 |
 
 ### 7.1 缺陷修复记录（重要）
 
@@ -311,7 +343,8 @@ npm run dev          # 开发模式（热更新）
 npm run typecheck    # 主进程 + 渲染层类型检查
 npm run smoke        # 冒烟自检（注意：本机 ELECTRON_RUN_AS_NODE=1 会让它崩，见下表）
 npm run build        # electron-vite build → out/（不是 npx vite build，后者找不到 index.html）
-npm run build:win    # 打包 Windows 安装包（默认 output dist-final）
+npm run build:win    # 打包 Windows 安装包 + 免安装版（默认 output dist-final）
+npm run build:win:portable  # 只打免安装版：SSH Workbench-<version>-portable.exe（不写注册表、不建开始菜单）
 ```
 
 本机实际使用的打包命令（产物目录可换，避免覆盖正在运行的版本）：
@@ -365,12 +398,10 @@ env -u ELECTRON_RUN_AS_NODE ./node_modules/electron/dist/electron.exe . --smoke 
 
 > 诊断备忘：主进程内置启动阶段日志（`[main] boot/app ready/seed commands done/ipc registered/window created`）与全局异常捕获，配合 `ELECTRON_ENABLE_LOGGING=1` 可快速区分「native 层问题」与「JS 层问题」。
 
-## 9. 已知限制与技术债（P0）
+## 9. 已知限制与技术债
 
-- 代理（SOCKS5/HTTP，数据模型已预留 `proxy` 字段）未接线，当前支持直连 + ProxyJump 链；
 - 命令栏固定常驻右侧并固定三列（`WALL_COLS = 3`），不再提供「底部横条 / 浮动」形态 —— `commandPanelPosition` 字段仅为老配置兼容保留，渲染层已无消费者；
-- 快捷键已可自定义（含 Ctrl+K 命令中心），默认组合：Ctrl+N 新建连接 / Ctrl+K 命令中心 / Ctrl+, 设置 / Ctrl+B 折叠面板 / Ctrl+Tab 切换标签 / Ctrl+Shift+W 关标签 / Ctrl+Shift+C/V 复制粘贴 / Ctrl+F 终端搜索；
-- 会话日志持久化在 P1（当前仅内存回滚缓冲）；
+- 快捷键已可自定义（含 Ctrl+K 命令中心），默认组合：Ctrl+N 新建连接 / Ctrl+K 命令中心 / Ctrl+, 设置 / Ctrl+B 折叠侧栏 / Ctrl+Alt+B 折叠命令栏 / Ctrl+Tab 切换标签 / Ctrl+Shift+W 关标签 / Ctrl+Shift+C/V 复制粘贴 / Ctrl+F 终端搜索；
 - 大量输出（如 `cat` 大文件）时合帧窗口可考虑自适应放大（当前固定 8ms）；
 - 中英同义表 `SYNONYMS` 是手工维护的 22 组，新增命令分组时不会自动扩展 —— 需要新词时改表并跑 `scripts/verify-synonyms.cjs`。
 
@@ -383,6 +414,9 @@ node scripts/verify-command-search.cjs   # 模糊匹配 / 字段加权 / 排序 
 node scripts/verify-synonyms.cjs         # 中英同义扩展 + 别名检索回归（28 项）
 node scripts/verify-layout.cjs           # 双栏宽度夹取 / 拖拽换算 / 方向 / 升级兼容（77 项）
 node scripts/verify-group-order.cjs      # 分组顺序与拖拽落点（18 项）
+node scripts/verify-theme.cjs            # 配色主题（P4-a）
+node scripts/verify-transfer-progress.cjs # SFTP 进度 / 暂停续传 / 取消（P4-b）
+for f in scripts/verify-zmodem*.cjs; do node "$f"; done  # ZMODEM 协议 / 解码 / 渲染层 / 端到端（P4-c，4 个脚本）
 ```
 
 界面与交互用真实 Electron 跑一条脚本化回归（`npm run smoke` 在本机受 `ELECTRON_RUN_AS_NODE` 干扰，用下面的直接调用）：

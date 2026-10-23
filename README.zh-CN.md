@@ -10,15 +10,18 @@
 - 连接管理：分组、标签、颜色；支持密码、私钥（PEM / OpenSSH / PuTTY `.ppk`）、SSH Agent、keyboard-interactive 认证
 - ProxyJump 跳板链、SOCKS5 / HTTP CONNECT 代理
 - 从剪贴板识别 `ssh user@host -p 22` 命令，一键新建连接
-- 多标签终端（xterm.js），支持搜索、主题、自定义快捷键、ZMODEM（`rz` / `sz`）
+- 多标签终端（xterm.js），支持搜索、自定义快捷键、ZMODEM（`rz` / `sz`，`sz` 下载可选保存目录、分块流式写入）
 - 连接加密导出 / 导入，可在电脑之间迁移
 
 **常用命令面板**
 - 单击执行，支持 `{{变量}}`、危险命令二次确认、分组、拖拽、搜索、收藏、历史
 - JSON 导入导出
+- 右侧常驻命令栏（固定三列按钮墙，`Ctrl+Alt+B` 开合）
+- 命令中心（`Ctrl+K`）：模糊检索、中英同义、按使用热度排序、全键盘操作
 
 **文件与隧道**
-- 终端旁的 SFTP 文件树、双栏传输模式、传输队列、远程编辑（自动 `.bak` 备份）
+- 终端旁的 SFTP 文件树、双栏传输模式、远程编辑（自动 `.bak` 备份）
+- 传输队列：实时进度与速度，支持暂停 / 继续（从已传位置续传）/ 取消（自动清理半截文件）
 - 端口转发：本地（`-L`）、远程（`-R`）、动态 SOCKS5（`-D`）
 
 **技术支持工作台**
@@ -30,6 +33,10 @@
 - 设备发现：网段 TCP 扫描、ARP 厂商识别、反向 DNS、mDNS
 - 配置备份，行级 diff 对比与还原
 - 报告、日志、历史、备份一键打包为 zip
+
+**界面**
+- 标题栏 + 活动栏 + 可拖拽侧栏与命令栏（拖动调宽，双击复位）
+- 7 套配色主题（VS Code 浅色、Workbench、Dracula、Nord、Solarized、One Dark、Gruvbox），各含明暗两版，界面与终端联动
 
 **安全**
 - 凭据使用系统密钥加密（Electron `safeStorage`）
@@ -53,7 +60,9 @@ npm run dev                   # 开发模式（热更新）
 | `npm run dev` | 开发模式（F12 打开 DevTools） |
 | `npm run typecheck` | 主进程 + 渲染层类型检查 |
 | `npm run smoke` | 冒烟自检：构建、启动、截图、退出 |
-| `npm run build:win` | 打包 Windows 安装包 |
+| `npm run build:win` | 打包 Windows 安装包（NSIS）+ 免安装版 |
+| `npm run build:win:portable` | 仅打包免安装版（单 exe，不写注册表） |
+| `npm run icon` | 重新生成多尺寸应用图标 |
 | `npm run build:mac` / `build:linux` | 打包 macOS / Linux 版本 |
 | `node scripts/verify-*.cjs` | 各模块的独立测试脚本 |
 
