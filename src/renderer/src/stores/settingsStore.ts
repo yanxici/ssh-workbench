@@ -5,10 +5,10 @@ import { getThemeVariant, type ThemeVars } from '@/theme/colorThemes'
 
 /** 与主进程 DEFAULT_SETTINGS 对齐的兜底值（加载完成前使用） */
 const FALLBACK: AppSettings = {
-  theme: 'dark',
-  colorTheme: 'workbench',
+  theme: 'light',
+  colorTheme: 'vscode',
   terminal: {
-    fontFamily: "'JetBrains Mono', 'Cascadia Code', Consolas, 'Microsoft YaHei Mono', monospace",
+    fontFamily: "'JetBrains Mono', 'Fira Code', Consolas, monospace",
     fontSize: 13.5,
     lineHeight: 1.35,
     cursorStyle: 'block',
@@ -44,7 +44,14 @@ function applyThemeVars(vars: ThemeVars): void {
 
 function applyTheme(mode: ThemeMode, colorTheme: string | undefined): void {
   const dark = resolveDark(mode)
+  /*
+   * 两个类都要切：颜色本身由内联变量覆盖，但 `--shadow-pop` 这类「非颜色主题项」
+   * 只在 index.css 的 .light / .dark 分支里，不挂 .dark 就会在暗色下拿到浅色投影
+   * （结果是黑底上的浮层几乎没有边界）。classList.toggle 的第二个参数是 force，
+   * 两个都写才不会出现「既没有 .light 也没有 .dark」的空档。
+   */
   document.documentElement.classList.toggle('light', !dark)
+  document.documentElement.classList.toggle('dark', dark)
   applyThemeVars(getThemeVariant(colorTheme, dark).vars)
 }
 

@@ -8,6 +8,9 @@ npmRebuild: false
 files:
   - out/**
   - package.json
+  # 运行时资源（窗口图标）。主进程 createWindow() 会读 resources/icon.png，
+  # 不列进来的话它只存在于仓库里，asar 内没有 → 打包后任务栏又是白方块。
+  - resources/**
   - '!**/.vscode/*'
   - '!src/*'
   - '!electron.vite.config.{js,ts,mjs,cjs}'
@@ -15,7 +18,22 @@ files:
   - '!{tailwind.config.js,postcss.config.js,DESIGN.md,README.md}'
 asarUnpack:
   - resources/**
+# 窗口图标额外拷一份到 resources/ 根（asar 之外）。主进程优先读这个路径：
+# asar 内的路径虽然 Electron 能透明重定向，但窗口图标是在原生层加载的，
+# 放外面的普通文件最稳妥。
+extraResources:
+  - from: resources/icon.png
+    to: icon.png
+  # 同一份多尺寸 ico 也给运行时用：TaskBar 在缩放比 1.25/1.5 下会自己挑尺寸，
+  # 给 ico 就不用它去缩 png。
+  - from: resources/icon.ico
+    to: icon.ico
 win:
+  # 显式指定多尺寸 .ico（16/24/32/48/64/128/256，见 scripts/make-icon.cjs）。
+  # 只给 build/icon.png 时，electron-builder 转出的 ico 里只有一条 256×256 的
+  # PNG 记录：Windows 任务栏要 24/32px，只能让 GDI 现场缩 256 的图，缩放后
+  # 白边把绿色糊掉 —— 表现就是「图标明明是绿的，任务栏却发白」。
+  icon: build/icon.ico
   target:
     - nsis
     - portable

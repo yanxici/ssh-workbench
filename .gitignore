@@ -13,6 +13,8 @@ dist-*
 smoke-result.json
 probe-*.json
 *.err
+# 冒烟用的临时 user-data-dir（内含整份业务数据副本，不要提交）
+.smoke-*/
 
 # 本地 Claude 设置
 .claude/settings.local.json
@@ -24,3 +26,7 @@ scripts/switch-robot-to-password.cjs
 scripts/import-xcmd.cjs
 scripts/verify-xcmd-import.cjs
 scripts/gen-rtu-commands.cjs
+# 图标排查的临时产物（Electron user-data 缓存 / 任务栏截图）
+.probe-icon/
+/probe-*.png
+/tb-*.png

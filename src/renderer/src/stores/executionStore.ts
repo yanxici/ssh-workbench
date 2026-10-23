@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import type { Command, CommandVariable } from '@shared/types'
 import { call } from '@/lib/ipc'
+import { useCommandStore } from './commandStore'
 import { useSessionStore } from './sessionStore'
 import { useSettingsStore } from './settingsStore'
 import { useToastStore } from './toastStore'
@@ -83,6 +84,13 @@ export const useExecutionStore = create<ExecutionState>()((set, get) => {
       errorTitle: '发送命令失败'
     })
     if (written === null) return
+
+    // 热度打点：「最近 / 最常用」的数据全靠这里。
+    // 先本地自增让命令中心的排序立刻反映本次执行，再异步落盘（不阻塞发送）。
+    if (request.snippetId) {
+      useCommandStore.getState().bumpUseCount(request.snippetId)
+      void call(window.api.command.touch(request.snippetId), { silent: true })
+    }
 
     void call(
       window.api.history.add({

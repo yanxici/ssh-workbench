@@ -117,7 +117,7 @@ export function Toggle({
           14px 旋钮的合法区间是 left 0~14px，取 1px / 14px 保证两端都不越界。 */}
       <span
         className={cn(
-          'absolute top-[1px] h-[14px] w-[14px] rounded-full bg-white shadow-sm transition-all duration-150',
+          'absolute top-[1px] h-[14px] w-[14px] rounded-full bg-white shadow-sm transition-[left] duration-150',
           checked ? 'left-[14px]' : 'left-[1px]'
         )}
       />
@@ -285,14 +285,19 @@ export function EmptyState({
   hint?: string
   action?: ReactNode
 }): JSX.Element {
+  /*
+   * 空态观感取舍：
+   * 原来图标外面套了一个 56px 圆角描边方块（border + bg-panel），远看像个
+   * 加载骨架占位，而且描边色与周围边框叠在一起，整块显得「有一团脏东西」。
+   * 现在把图标本身降到 45% 透明直接放出去，靠留白和字号层级建立秩序 ——
+   * 空态是「没有内容」的状态，不该比有内容时更抢眼。
+   */
   return (
     <div className="flex h-full flex-col items-center justify-center gap-2 px-8 text-center">
-      <div className="mb-1 flex h-14 w-14 items-center justify-center rounded-2xl border border-edge-soft bg-panel text-ink-3">
-        {icon}
-      </div>
-      <div className="text-[13px] font-medium text-ink-2">{title}</div>
-      {hint && <div className="max-w-[320px] text-xs leading-relaxed text-ink-3">{hint}</div>}
-      {action && <div className="mt-2">{action}</div>}
+      <span className="mb-1 text-ink-3/45">{icon}</span>
+      <div className="text-sm font-medium text-ink-2">{title}</div>
+      {hint && <div className="max-w-[340px] text-xs leading-relaxed text-ink-3">{hint}</div>}
+      {action && <div className="mt-1.5">{action}</div>}
     </div>
   )
 }
@@ -423,7 +428,7 @@ export function ToastHost(): JSX.Element {
         return (
           <div
             key={t.id}
-            className="pointer-events-auto animate-slide-up rounded-lg border border-edge bg-panel/95 p-3 shadow-pop backdrop-blur-xl"
+            className="pointer-events-auto animate-slide-up rounded-lg border border-edge bg-panel p-3 shadow-pop"
           >
             <div className="flex items-start gap-2.5">
               <span className={cn('mt-0.5 shrink-0', cfg.cls)}>{cfg.icon}</span>

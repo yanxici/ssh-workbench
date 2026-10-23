@@ -216,7 +216,7 @@ export function SessionFileTree({
       >
         <Folder size={11} className="shrink-0 text-accent/70" />
         {/* rtl + bdi：路径过长时省略号出现在左侧，保留末级目录可见 */}
-        <span className="selectable min-w-0 flex-1 truncate text-left font-mono text-[10px]" dir="rtl">
+        <span className="selectable min-w-0 flex-1 truncate text-left font-mono text-3xs" dir="rtl">
           <bdi>{currentDir ?? '—'}</bdi>
         </span>
       </div>
@@ -551,7 +551,7 @@ function TreeRow({
         <span className="min-w-0 flex-1 truncate">{file.name}</span>
 
         {!isDir && (
-          <span className="shrink-0 font-mono text-[10px] text-ink-3/70">
+          <span className="shrink-0 font-mono text-3xs text-ink-3/70">
             {formatBytes(file.size)}
           </span>
         )}

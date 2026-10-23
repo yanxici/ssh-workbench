@@ -211,7 +211,7 @@ export function ZmodemOverlay(): JSX.Element | null {
 
   return (
     <div className="pointer-events-none absolute bottom-3 right-3 z-50 w-[300px]">
-      <div className="pointer-events-auto rounded-lg border border-edge bg-panel/95 p-3 shadow-lg backdrop-blur">
+      <div className="pointer-events-auto rounded-lg border border-edge bg-panel p-3 shadow-lg">
         <div className="mb-2 flex items-center gap-2 text-xs">
           {icon}
           <span className="font-medium text-ink-1">{label}</span>
@@ -219,7 +219,7 @@ export function ZmodemOverlay(): JSX.Element | null {
         </div>
 
         {progress.fileName && (
-          <div className="mb-2 truncate text-[11px] text-ink-2" title={progress.fileName}>
+          <div className="mb-2 truncate text-2xs text-ink-2" title={progress.fileName}>
             {progress.fileName}
           </div>
         )}
@@ -231,13 +231,13 @@ export function ZmodemOverlay(): JSX.Element | null {
           />
         </div>
 
-        <div className="mt-1.5 flex items-center justify-between text-[10px] text-ink-3">
+        <div className="mt-1.5 flex items-center justify-between text-3xs text-ink-3">
           <span>{formatBytes(progress.bytesDone)}</span>
           <span>{total > 0 ? formatBytes(total) : '未知大小'}</span>
         </div>
 
         {progress.message && progress.phase !== 'error' && (
-          <div className="mt-1 truncate text-[10px] text-ink-3" title={progress.message}>
+          <div className="mt-1 truncate text-3xs text-ink-3" title={progress.message}>
             {progress.message}
           </div>
         )}
@@ -266,7 +266,7 @@ export function ZmodemOverlay(): JSX.Element | null {
         )}
 
         {progress.phase === 'detected' && receiving && (
-          <div className="mt-1 flex items-center gap-1 text-[10px] text-ink-3">
+          <div className="mt-1 flex items-center gap-1 text-3xs text-ink-3">
             <FolderOpen size={11} />
             正在等待保存文件夹与远端起始帧…
           </div>

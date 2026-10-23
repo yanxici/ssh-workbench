@@ -148,7 +148,7 @@ function ScanView(): JSX.Element {
         {scanning && total > 0 && (
           <div className="mt-2 flex items-center gap-2">
             <div className="h-1.5 min-w-0 flex-1 overflow-hidden rounded-full bg-raised">
-              <div className="h-full bg-accent transition-all duration-200" style={{ width: `${pct}%` }} />
+              <div className="h-full bg-accent transition-[width] duration-150" style={{ width: `${pct}%` }} />
             </div>
             <span className="shrink-0 font-mono text-2xs text-ink-3">{pct}%</span>
           </div>
@@ -166,7 +166,7 @@ function ScanView(): JSX.Element {
           <div className="flex items-center gap-2 border-b border-edge-soft px-3 py-1.5">
             <span className="text-2xs font-semibold text-ink-2">发现 {hosts.length} 台设备</span>
             <span className="flex-1" />
-            <span className="text-[10px] text-ink-3">点击「新建连接」可直接把 IP 填进连接编辑器</span>
+            <span className="text-3xs text-ink-3">点击「新建连接」可直接把 IP 填进连接编辑器</span>
           </div>
           {hosts.map((h) => (
             <div
@@ -175,7 +175,7 @@ function ScanView(): JSX.Element {
             >
               <Wifi size={12} className="shrink-0 text-success" />
               <span className="w-[120px] shrink-0 font-mono text-xs text-ink">{h.ip}</span>
-              <span className="w-[110px] shrink-0 font-mono text-[10px] text-ink-3">
+              <span className="w-[110px] shrink-0 font-mono text-3xs text-ink-3">
                 {h.mac ? `${h.mac}${guessVendor(h.mac) ? `（${guessVendor(h.mac)}）` : ''}` : '—'}
               </span>
               <span className="w-[150px] shrink-0 truncate text-2xs text-ink-3" title={h.hostname}>
@@ -186,7 +186,7 @@ function ScanView(): JSX.Element {
                   <span
                     key={p}
                     className={cn(
-                      'rounded px-1 py-px font-mono text-[10px]',
+                      'rounded px-1 py-px font-mono text-3xs',
                       p === 22 ? 'bg-accent/15 text-accent' : 'bg-raised text-ink-3'
                     )}
                   >
@@ -195,7 +195,7 @@ function ScanView(): JSX.Element {
                 ))}
               </span>
               {h.latencyMs !== undefined && (
-                <span className="shrink-0 font-mono text-[10px] text-ink-3">{h.latencyMs}ms</span>
+                <span className="shrink-0 font-mono text-3xs text-ink-3">{h.latencyMs}ms</span>
               )}
               <span className="flex-1" />
               <button
@@ -270,11 +270,11 @@ function MdnsView(): JSX.Element {
               key={`${s.type}-${s.name}-${idx}`}
               className="flex items-center gap-2.5 border-b border-edge-soft/60 px-3 py-1.5 last:border-b-0 hover:bg-hover/40"
             >
-              <span className="shrink-0 rounded bg-accent/10 px-1.5 py-px font-mono text-[10px] text-accent">
+              <span className="shrink-0 rounded bg-accent/10 px-1.5 py-px font-mono text-3xs text-accent">
                 {s.type.replace(/^_|\._?/g, ' ').trim() || s.type}
               </span>
               <span className="min-w-0 flex-1 truncate text-xs text-ink-2">{s.name}</span>
-              <span className="shrink-0 font-mono text-[10px] text-ink-3">
+              <span className="shrink-0 font-mono text-3xs text-ink-3">
                 {s.address ?? s.host ?? '—'}
                 {s.port ? `:${s.port}` : ''}
               </span>

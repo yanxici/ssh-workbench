@@ -33,15 +33,23 @@ export interface SessionUi {
   createdAt: number
 }
 
-export type SidebarView = 'connections' | 'history' | 'logs' | 'tunnels'
+/**
+ * 侧栏视图的旧类型别名。
+ * 布局状态已迁到 `stores/layoutStore.ts`（那里叫 ActivityView），
+ * 这里保留别名是为了不让历史引用一次性全红；新代码请直接用 ActivityView。
+ */
+export type SidebarView = 'connections' | 'files' | 'history' | 'logs' | 'tunnels'
 
 interface SessionState {
   sessions: SessionUi[]
   activeId: string | null
-  panelVisible: boolean
-  /** 终端左侧的文件树面板 */
-  fileTreeVisible: boolean
-  sidebarView: SidebarView
+  /**
+   * 延迟单独存放，不塞进 sessions。
+   * 原因：App 层订阅的是 `s.sessions`，一旦为了更新延迟而重建整个数组，
+   * 每 5 秒（探测周期）× 每个会话都会触发一次全量重渲染，终端数量一多就卡。
+   * 拆出来后只有真正读延迟的 StatusBar 会重渲染。
+   */
+  latencyById: Record<string, number>
 
   open: (conn: { id: string; name: string; host: string; username: string }) => string
   /** 断开 / 失败的会话原地重连（同一标签、保留终端内容） */
@@ -57,17 +65,14 @@ interface SessionState {
   setSize: (id: string, cols: number, rows: number) => void
   reorder: (from: number, to: number) => void
   cycle: (delta: 1 | -1) => void
-  togglePanel: () => void
-  toggleFileTree: () => void
-  setSidebarView: (view: SidebarView) => void
+  /** 取某会话的延迟（ms）；未探测到返回 undefined */
+  latencyOf: (id: string) => number | undefined
 }
 
 export const useSessionStore = create<SessionState>()((set, get) => ({
   sessions: [],
   activeId: null,
-  panelVisible: true,
-  fileTreeVisible: false,
-  sidebarView: 'connections',
+  latencyById: {},
 
   open: (conn) => {
     const id = uid()
@@ -83,8 +88,11 @@ export const useSessionStore = create<SessionState>()((set, get) => ({
       rows: 24,
       createdAt: Date.now()
     }
-    // 连接即打开左侧文件树（与 XTerminal 一致的使用习惯）
-    set((s) => ({ sessions: [...s.sessions, session], activeId: id, fileTreeVisible: true }))
+    // 会话打开不再抢占左侧栏视图。
+    // 旧行为是「连接成功就自动展开文件树」，那是在文件树独占左栏的年代；
+    // 现在文件只是活动栏的一个视图，自动切过去会把用户正在看的连接列表顶掉，
+    // 而用户此刻最想看的恰恰是「我点的那台机器连上了没有」。
+    set((s) => ({ sessions: [...s.sessions, session], activeId: id }))
 
     // 后台建立连接；终端挂载后会把真实尺寸通过 resize 同步过去
     void window.api.session
@@ -209,10 +217,18 @@ export const useSessionStore = create<SessionState>()((set, get) => ({
       sessions: s.sessions.map((x) => (x.id === id ? { ...x, status, error } : x))
     })),
 
+  /**
+   * 延迟更新只碰 latencyById，不再重建 sessions 数组。
+   * 旧实现每次探测都 map 一遍 sessions，App 层的 sessions 订阅随之重渲染，
+   * 连带所有 TerminalView 一起重跑（终端一多，每 5 秒就卡一下）。
+   */
   updateLatency: (id, ms) =>
-    set((s) => ({
-      sessions: s.sessions.map((x) => (x.id === id ? { ...x, latencyMs: ms } : x))
-    })),
+    set((s) => {
+      if (s.latencyById[id] === ms) return {}
+      return { latencyById: { ...s.latencyById, [id]: ms } }
+    }),
+
+  latencyOf: (id) => get().latencyById[id],
 
   setSize: (id, cols, rows) =>
     set((s) => ({
@@ -236,11 +252,7 @@ export const useSessionStore = create<SessionState>()((set, get) => ({
     const idx = sessions.findIndex((s) => s.id === activeId)
     const next = sessions[(idx + delta + sessions.length) % sessions.length]
     if (next) set({ activeId: next.id })
-  },
-
-  togglePanel: () => set((s) => ({ panelVisible: !s.panelVisible })),
-  toggleFileTree: () => set((s) => ({ fileTreeVisible: !s.fileTreeVisible })),
-  setSidebarView: (sidebarView) => set({ sidebarView })
+  }
 }))
 
 /** 取当前活动会话（非 hook，供事件处理使用） */

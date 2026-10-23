@@ -279,7 +279,7 @@ export function TerminalView({
 
       {/* 搜索条 */}
       {searchOpen && (
-        <div className="absolute right-3 top-2 z-10 flex animate-pop-in items-center gap-1 rounded-lg border border-edge bg-panel/95 px-2 py-1 shadow-pop backdrop-blur-xl">
+        <div className="absolute right-3 top-2 z-10 flex animate-pop-in items-center gap-1 rounded-lg border border-edge bg-panel px-2 py-1 shadow-pop">
           <Search size={12} className="text-ink-3" />
           <input
             autoFocus
@@ -316,7 +316,7 @@ export function TerminalView({
 
       {/* 连接中 / 错误 / 已断开 覆盖层 */}
       {showOverlay && (
-        <div className="absolute inset-0 z-20 flex items-center justify-center bg-app/78 backdrop-blur-[1px]">
+        <div className="absolute inset-0 z-20 flex items-center justify-center bg-app/88">
           {session.status === 'connecting' && (
             <div className="flex items-center gap-2.5 text-xs text-ink-2">
               <Loader2 size={15} className="animate-spin text-accent" />

@@ -51,32 +51,32 @@ export function SessionLogsPanel(): JSX.Element {
   return (
     <div className="flex h-full flex-col">
       {/* 头部 */}
-      <div className="flex shrink-0 items-center gap-1 border-b border-edge-soft p-2">
+      <div className="panel-head">
         <ScrollText size={13} className="shrink-0 text-ink-3" />
-        <span className="text-xs font-semibold text-ink">会话日志</span>
-        <span className="text-2xs text-ink-3">{logs.length}</span>
+        <span className="panel-title">会话日志</span>
+        <span className="panel-count">{logs.length}</span>
         <span className="flex-1" />
         <button
-          className="btn-icon"
+          className="btn-icon h-6 w-6"
           title="打开日志目录"
           onClick={() => void call(window.api.logs.openDir(), { silent: true })}
         >
           <FolderOpen size={13} />
         </button>
-        <button className="btn-icon" title="刷新" onClick={() => void reload()}>
+        <button className="btn-icon h-6 w-6" title="刷新" onClick={() => void reload()}>
           <RefreshCw size={13} className={cn(loading && 'animate-spin')} />
         </button>
       </div>
 
       {/* 搜索 */}
-      <div className="shrink-0 p-2 pb-1.5">
-        <div className="relative">
+      <div className="panel-toolbar">
+        <div className="relative flex-1">
           <Search
             size={12}
             className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-ink-3"
           />
           <input
-            className="input pl-7"
+            className="input h-7 pl-7 text-xs"
             placeholder="搜索会话名 / 日期…"
             value={keyword}
             onChange={(e) => setKeyword(e.target.value)}
@@ -85,7 +85,7 @@ export function SessionLogsPanel(): JSX.Element {
       </div>
 
       {/* 列表 */}
-      <div className="scroll-thin min-h-0 flex-1 overflow-y-auto p-1.5">
+      <div className="panel-body">
         {filtered.length === 0 && (
           <EmptyState
             icon={<ScrollText size={24} />}
@@ -112,7 +112,7 @@ export function SessionLogsPanel(): JSX.Element {
                   {formatBytes(log.size)}
                 </span>
               </div>
-              <div className="mt-0.5 flex items-center gap-1.5 pl-3 text-[10px] text-ink-3">
+              <div className="mt-0.5 flex items-center gap-1.5 pl-3 text-3xs text-ink-3">
                 <span>{time || formatTime(log.mtime)}</span>
                 <span className="flex-1" />
                 <button

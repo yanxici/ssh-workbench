@@ -129,7 +129,7 @@ function SessionPicker(): JSX.Element {
         })}
       </div>
 
-      <div className="shrink-0 border-t border-edge-soft px-2.5 py-1.5 text-[10px] leading-relaxed text-ink-3">
+      <div className="shrink-0 border-t border-edge-soft px-2.5 py-1.5 text-3xs leading-relaxed text-ink-3">
         命令将在每台设备上独立执行，互不影响；输出按设备分别收集。
       </div>
     </div>
@@ -358,11 +358,11 @@ function BatchResultCard({ sessionId }: { sessionId: string }): JSX.Element {
       >
         <BatchStatusIcon status={status} />
         <span className="text-xs font-medium text-ink">{title}</span>
-        <span className="font-mono text-[10px] text-ink-3">
+        <span className="font-mono text-3xs text-ink-3">
           {result ? `${result.username}@${result.host}` : (session?.host ?? '')}
         </span>
         <span className="flex-1" />
-        <span className="font-mono text-[10px] text-ink-3">
+        <span className="font-mono text-3xs text-ink-3">
           {statusText(status)}
           {result ? ` · ${result.durationMs}ms · exit ${result.exitCode ?? '-'}` : ''}
         </span>
@@ -379,7 +379,7 @@ function BatchResultCard({ sessionId }: { sessionId: string }): JSX.Element {
       </div>
       {expanded && (
         <div className="border-t border-edge-soft">
-          <pre className="scroll-thin max-h-[320px] overflow-auto whitespace-pre-wrap break-words px-3 py-2 font-mono text-[11px] leading-relaxed text-ink-2">
+          <pre className="scroll-thin max-h-[320px] overflow-auto whitespace-pre-wrap break-words px-3 py-2 font-mono text-2xs leading-relaxed text-ink-2">
             {result
               ? result.stdout.trim() === ''
                 ? result.stderr.trim() === ''
@@ -389,7 +389,7 @@ function BatchResultCard({ sessionId }: { sessionId: string }): JSX.Element {
               : ''}
           </pre>
           {result && result.stderr.trim() !== '' && (
-            <pre className="scroll-thin max-h-[140px] overflow-auto whitespace-pre-wrap break-words border-t border-danger/20 bg-danger/5 px-3 py-1.5 font-mono text-[10px] leading-relaxed text-danger/90">
+            <pre className="scroll-thin max-h-[140px] overflow-auto whitespace-pre-wrap break-words border-t border-danger/20 bg-danger/5 px-3 py-1.5 font-mono text-3xs leading-relaxed text-danger/90">
               {result.stderr}
             </pre>
           )}
@@ -415,11 +415,11 @@ function BatchColumn({ sessionId }: { sessionId: string }): JSX.Element {
       <div className="flex shrink-0 items-center gap-2 border-b border-edge-soft px-2.5 py-1.5">
         <BatchStatusIcon status={status} />
         <span className="min-w-0 flex-1 truncate text-xs text-ink">{title}</span>
-        <span className="shrink-0 font-mono text-[10px] text-ink-3">
+        <span className="shrink-0 font-mono text-3xs text-ink-3">
           {result ? `exit ${result.exitCode ?? '-'}` : statusText(status)}
         </span>
       </div>
-      <pre className="scroll-thin max-h-[420px] min-h-[120px] flex-1 overflow-auto whitespace-pre-wrap break-words px-2.5 py-2 font-mono text-[10.5px] leading-relaxed text-ink-2">
+      <pre className="scroll-thin max-h-[420px] min-h-[120px] flex-1 overflow-auto whitespace-pre-wrap break-words px-2.5 py-2 font-mono text-3xs leading-relaxed text-ink-2">
         {result
           ? result.stdout.trim() === ''
             ? result.stderr.trim() || '（无输出）'

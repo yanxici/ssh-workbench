@@ -39,6 +39,8 @@ export const IPC = {
   CMD_DELETE_GROUP: 'cmd:deleteGroup',
   CMD_IMPORT: 'cmd:import',
   CMD_EXPORT: 'cmd:export',
+  /** 记录一次执行：useCount+1 并刷新 lastUsedAt（命令中心「最近/最常用」的数据来源） */
+  CMD_TOUCH: 'cmd:touch',
   HIST_LIST: 'hist:list',
   HIST_ADD: 'hist:add',
   HIST_CLEAR: 'hist:clear',

@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import type { Command, CommandInput } from '@shared/types'
 import { call } from '@/lib/ipc'
 import { sortGroupNames } from '@/lib/groupOrder'
+import { searchCommands } from '@/lib/commandSearch'
 import { useToastStore } from './toastStore'
 import { useSettingsStore } from './settingsStore'
 
@@ -13,6 +14,11 @@ function savedGroups(): string[] {
 /** 分组自定义顺序（设置中持久化） */
 function savedOrder(): string[] {
   return useSettingsStore.getState().settings.commandGroupOrder ?? []
+}
+
+/** 收藏（置顶）的命令 id，持久化在设置里 */
+function savedPinned(): string[] {
+  return useSettingsStore.getState().settings.pinnedCommandIds ?? []
 }
 
 /** 保存分组顺序：先本地生效（拖拽无延迟），再落盘 */
@@ -44,6 +50,8 @@ interface CommandState {
   /** 保存分组显示顺序（完整的分组名数组） */
   setGroupOrder: (order: string[]) => Promise<void>
   bumpUseCount: (id: string) => void
+  /** 收藏 / 取消收藏（持久化在 settings.pinnedCommandIds） */
+  togglePin: (id: string) => Promise<void>
 }
 
 export const useCommandStore = create<CommandState>()((set, get) => ({
@@ -180,7 +188,19 @@ export const useCommandStore = create<CommandState>()((set, get) => ({
       commands: s.commands.map((c) =>
         c.id === id ? { ...c, useCount: c.useCount + 1, lastUsedAt: Date.now() } : c
       )
-    }))
+    })),
+
+  /**
+   * 收藏：写进 settings.pinnedCommandIds。
+   * 设置走主进程串行读改写，所以先本地乐观更新再落盘（与分组顺序同一套路），
+   * 否则点击后要等一次 IPC 往返才会亮起星标。
+   */
+  togglePin: async (id) => {
+    const cur = savedPinned()
+    const next = cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id]
+    useSettingsStore.setState((s) => ({ settings: { ...s.settings, pinnedCommandIds: next } }))
+    await useSettingsStore.getState().update({ pinnedCommandIds: next })
+  }
 }))
 
 export interface CommandGroup {
@@ -192,6 +212,10 @@ export interface CommandGroup {
  * 过滤 + 分组（组内保持 sortOrder）。
  * extraGroups 为手动新建的分组，无关键字时空分组也显示；
  * groupOrder 为自定义分组顺序，未列出的分组排在后面按名称排列。
+ *
+ * 有关键字时走 fuzzy 排序：命中度高的排前面，而不是「包含就留下、顺序照旧」。
+ * 旧实现只做 toLowerCase().includes，搜 `gst` 找不到 `git status`，
+ * 且过滤后仍按 sortOrder 排，最相关的结果可能沉在最后一条。
  */
 export function groupCommands(
   commands: Command[],
@@ -199,30 +223,45 @@ export function groupCommands(
   extraGroups: string[] = [],
   groupOrder: string[] = []
 ): CommandGroup[] {
-  const kw = keyword.trim().toLowerCase()
-  const filtered = kw
-    ? commands.filter(
-        (c) =>
-          c.name.toLowerCase().includes(kw) ||
-          c.command.toLowerCase().includes(kw) ||
-          (c.description ?? '').toLowerCase().includes(kw) ||
-          c.group.toLowerCase().includes(kw)
-      )
-    : commands
+  const kw = keyword.trim()
+  if (!kw) {
+    const map = new Map<string, Command[]>()
+    for (const c of commands) {
+      const key = c.group || '默认'
+      const list = map.get(key)
+      if (list) list.push(c)
+      else map.set(key, [c])
+    }
+    for (const g of extraGroups) if (g && !map.has(g)) map.set(g, [])
+    return sortGroupNames([...map.keys()], groupOrder).map((group) => ({
+      group,
+      items: [...(map.get(group) ?? [])].sort((a, b) => a.sortOrder - b.sortOrder)
+    }))
+  }
+
+  // 有搜索词：先按相关度排出前 N 条，再按分组归拢；组内顺序 = 相关度顺序
+  const ranked = searchCommands({
+    commands,
+    query: kw,
+    scope: { kind: 'all' },
+    sort: 'smart',
+    pinnedIds: savedPinned()
+  }).filter((r) => r.hit)
 
   const map = new Map<string, Command[]>()
-  for (const c of filtered) {
-    const key = c.group || '默认'
+  for (const r of ranked) {
+    const key = r.command.group || '默认'
     const list = map.get(key)
-    if (list) list.push(c)
-    else map.set(key, [c])
+    if (list) list.push(r.command)
+    else map.set(key, [r.command])
   }
-  if (!kw) {
-    for (const g of extraGroups) if (g && !map.has(g)) map.set(g, [])
+  // 搜索态下组也按「组内最高分」排序：命中密集的分组排在前面
+  const groupScore = new Map<string, number>()
+  for (const r of ranked) {
+    const key = r.command.group || '默认'
+    groupScore.set(key, Math.max(groupScore.get(key) ?? 0, r.score))
   }
-
-  return sortGroupNames([...map.keys()], groupOrder).map((group) => ({
-    group,
-    items: [...(map.get(group) ?? [])].sort((a, b) => a.sortOrder - b.sortOrder)
-  }))
+  return [...map.keys()]
+    .sort((a, b) => (groupScore.get(b) ?? 0) - (groupScore.get(a) ?? 0))
+    .map((group) => ({ group, items: map.get(group) ?? [] }))
 }

@@ -11,8 +11,9 @@ import {
   Sun,
   Trash2
 } from 'lucide-react'
-import type { ColorThemeId, ShortcutAction, ThemeMode } from '@shared/types'
+import type { ColorThemeId, LayoutSizes, ShortcutAction, ThemeMode } from '@shared/types'
 import { SHORTCUT_ACTIONS, resolveShortcuts } from '@/lib/shortcuts'
+import { KEYS, PANE_LABEL, PANE_SPECS, clampPane } from '@/lib/layout'
 import { COLOR_THEMES } from '@/theme/colorThemes'
 import { useIsDark, useSettingsStore } from '@/stores/settingsStore'
 import { useToastStore } from '@/stores/toastStore'
@@ -216,7 +217,7 @@ function ColorThemeGallery({
                 {t.name}
               </span>
               {active && (
-                <span className="ml-auto shrink-0 text-[10px] text-accent" aria-hidden>
+                <span className="ml-auto shrink-0 text-3xs text-accent" aria-hidden>
                   ✓
                 </span>
               )}
@@ -290,7 +291,7 @@ function ShortcutRows(): JSX.Element {
           >
             <div className="min-w-0">
               <div className="text-xs text-ink-2">{action.label}</div>
-              {isDefault && <div className="text-[10px] text-ink-3/70">使用默认值</div>}
+              {isDefault && <div className="text-3xs text-ink-3/70">使用默认值</div>}
             </div>
             <div className="flex shrink-0 items-center gap-1.5">
               {!isDefault && (
@@ -318,7 +319,7 @@ function ShortcutRows(): JSX.Element {
           </div>
         )
       })}
-      <div className="pt-1 text-[10px] leading-relaxed text-ink-3/70">
+      <div className="pt-1 text-3xs leading-relaxed text-ink-3/70">
         提示：终端内「搜索 / 复制 / 粘贴」的组合键（Ctrl+F / Ctrl+Shift+C / Ctrl+Shift+V）在此配置后，
         在终端聚焦时同样生效；避免与系统/浏览器快捷键冲突。
       </div>
@@ -360,12 +361,22 @@ export function SettingsPanel({
     void update({ terminal: { ...settings.terminal, ...patch } })
   }
 
+  /** 当前栏宽（缺项按默认值补齐），设置面板里可精确定值 */
+  const layoutSizes: Required<LayoutSizes> = {
+    sidebar: clampPane('sidebar', settings.layout?.sidebar),
+    commandRail: clampPane('commandRail', settings.layout?.commandRail)
+  }
+
+  const setPane = (key: (typeof KEYS)[number], value: number): void => {
+    void update({ layout: { ...layoutSizes, [key]: clampPane(key, value) } })
+  }
+
   return (
     <Modal open={open} title="设置" onClose={onClose} width="max-w-xl" footer={
       <button className="btn" onClick={onClose}>完成</button>
     }>
       <Section id="appearance" title="外观" defaultOpen>
-        <Row label="主题" hint="暗色为默认，跟随系统会实时响应系统深浅色">
+        <Row label="主题" hint="浅色为默认，跟随系统会实时响应系统深浅色">
           <Segmented
             value={settings.theme}
             options={THEME_OPTIONS}
@@ -379,7 +390,7 @@ export function SettingsPanel({
             <span className="text-2xs text-ink-3">· 界面与终端配色联动</span>
           </div>
           <ColorThemeGallery
-            value={settings.colorTheme ?? 'workbench'}
+            value={settings.colorTheme ?? 'vscode'}
             dark={useIsDark()}
             onChange={(v) => void update({ colorTheme: v })}
           />
@@ -463,16 +474,60 @@ export function SettingsPanel({
             onChange={(v) => void update({ strictHostKey: v })}
           />
         </Row>
-        <Row label="常用命令面板位置" hint="右侧栏 / 底部横条（分组横向排列）">
-          <Segmented
-            value={settings.commandPanelPosition === 'bottom' ? 'bottom' : 'right'}
-            options={[
-              { value: 'right' as const, label: '右侧栏' },
-              { value: 'bottom' as const, label: '底部' }
-            ]}
-            onChange={(v) => void update({ commandPanelPosition: v })}
-          />
-        </Row>
+        {/* 原来这里有个「常用命令面板位置：右侧栏 / 底部横条」的开关。
+            新外壳把命令面板收进侧栏，位置由活动栏决定，那个开关点了没有
+            任何效果 —— 一个点了没反应的开关比没有这个开关更糟，所以删掉。 */}
+      </Section>
+
+      <Section
+        id="layout"
+        title="侧栏宽度"
+        hint="拖动侧栏右侧的分隔条即可调整；双击分隔条恢复默认"
+      >
+        <div className="space-y-1.5">
+          {KEYS.map((key) => {
+            const spec = PANE_SPECS[key]
+            const value = layoutSizes[key]
+            return (
+              <div key={key} className="flex items-center gap-2">
+                <span className="w-24 shrink-0 text-xs text-ink-2">{PANE_LABEL[key]}</span>
+                <input
+                  className="input h-6 w-16 text-center font-mono text-2xs"
+                  type="number"
+                  min={spec.min}
+                  max={spec.max}
+                  step={2}
+                  value={value}
+                  onChange={(e) => setPane(key, Number(e.target.value) || spec.default)}
+                />
+                <span className="text-2xs text-ink-3">px</span>
+                <span className="flex-1" />
+                {/* 被拖窄到极限时给出提示，避免误以为卡住 */}
+                <span className="shrink-0 text-2xs text-ink-3/70">
+                  {spec.min}–{spec.max}
+                </span>
+                <button
+                  className="btn-icon h-6 w-6 shrink-0"
+                  title={`${PANE_LABEL[key]}恢复默认 ${spec.default}px`}
+                  disabled={value === spec.default}
+                  onClick={() => setPane(key, spec.default)}
+                >
+                  <RotateCcw size={11} />
+                </button>
+              </div>
+            )
+          })}
+        </div>
+        <button
+          className="btn h-7 w-full justify-center text-2xs"
+          onClick={() => {
+            for (const key of KEYS) setPane(key, PANE_SPECS[key].default)
+            useToastStore.getState().push({ kind: 'success', title: '栏宽已全部恢复默认' })
+          }}
+        >
+          <RotateCcw size={11} />
+          全部恢复默认
+        </button>
       </Section>
 
       <Section id="shortcuts" title="快捷键" hint="点击键位进入录制">
@@ -506,7 +561,7 @@ export function SettingsPanel({
                   <div className="font-mono text-2xs text-ink-2">
                     {h.host}:{h.port}
                   </div>
-                  <div className="selectable truncate font-mono text-[10px] text-ink-3">
+                  <div className="selectable truncate font-mono text-3xs text-ink-3">
                     {h.fingerprint}
                   </div>
                 </div>

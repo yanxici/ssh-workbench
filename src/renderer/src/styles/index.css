@@ -3,44 +3,90 @@
 @tailwind utilities;
 
 /* ================================================================== *
- *  主题变量 —— 暗色为默认（:root），亮色通过 html.light 覆盖。
- *  所有颜色以「R G B」三通道书写，配合 tailwind 的 <alpha-value>。
+ *  主题变量 —— 兜底值。
+ *  实际值由 settingsStore 从 theme/colorThemes.ts 写入 html 的内联样式
+ *  （优先级更高），这里只保证「样式表加载完成 → 主题写入前」这一瞬间
+ *  不闪白/不闪黑，同时作为 SSR / 无 JS 场景的降级。
+ *
+ *  默认外观 = VS Code 浅色（用户规范）。
+ *  颜色全部以「R G B」三通道书写，配合 tailwind 的 <alpha-value>。
  * ================================================================== */
 
 :root {
-  --c-app: 13 17 23; /* #0D1117 */
-  --c-panel: 22 27 34; /* #161B22 */
-  --c-raised: 28 33 40;
-  --c-hover: 33 39 48;
-  --c-edge: 48 54 61; /* #30363D */
-  --c-edge-soft: 33 38 45;
-  --c-ink: 230 237 243;
-  --c-ink-2: 154 164 178;
-  --c-ink-3: 110 118 129;
-  --c-accent: 88 166 255; /* #58A6FF */
-  --c-success: 63 185 80; /* #3FB950 */
-  --c-warning: 210 153 34; /* #D29922 */
-  --c-danger: 248 81 73; /* #F85149 */
+  --c-app: 255 255 255; /* #ffffff 主背景 */
+  --c-panel: 248 249 250; /* #f8f9fa 侧栏 / 状态栏 */
+  --c-raised: 250 250 250; /* #fafafa */
+  --c-hover: 243 244 246; /* #f3f4f6 */
+  --c-edge: 229 231 235; /* #e5e7eb 统一 1px 分割线 */
+  --c-edge-soft: 238 240 243;
+  --c-ink: 17 24 39; /* #111827 标题 */
+  --c-ink-2: 55 65 81; /* #374151 正文 */
+  --c-ink-3: 107 114 128; /* #6b7280 次要 */
+  --c-brand: 39 201 63; /* #27c93f */
+  --c-on-brand: 255 255 255;
+  --c-select: 224 242 254; /* #e0f2fe */
+  --c-accent: 37 99 235;
+  --c-success: 16 185 129;
+  --c-warning: 234 179 8;
+  --c-danger: 220 38 38;
 
-  color-scheme: dark;
-}
-
-.light {
-  --c-app: 240 242 245;
-  --c-panel: 255 255 255;
-  --c-raised: 255 255 255;
-  --c-hover: 243 245 247;
-  --c-edge: 208 215 222;
-  --c-edge-soft: 226 232 240;
-  --c-ink: 31 35 40;
-  --c-ink-2: 87 96 106;
-  --c-ink-3: 130 138 148;
-  --c-accent: 9 105 218;
-  --c-success: 26 127 55;
-  --c-warning: 154 103 0;
-  --c-danger: 207 34 46;
+  /* 浮层投影：浅色主题下 45% 黑会糊成一团脏灰，压到 16% 才像「纸片浮起」。
+     暗色主题反过来需要更深的投影才有层次，所以投影也走变量。 */
+  --shadow-pop: 0 8px 24px -8px rgb(15 23 42 / 0.16), 0 2px 6px -2px rgb(15 23 42 / 0.1);
+  --shadow-pop-lg: 0 16px 48px -12px rgb(15 23 42 / 0.2), 0 4px 10px -4px rgb(15 23 42 / 0.12);
 
   color-scheme: light;
+}
+
+/* 亮色：显式带 .light 时等同默认 */
+.light {
+  --c-app: 255 255 255;
+  --c-panel: 248 249 250;
+  --c-raised: 250 250 250;
+  --c-hover: 243 244 246;
+  --c-edge: 229 231 235;
+  --c-edge-soft: 238 240 243;
+  --c-ink: 17 24 39;
+  --c-ink-2: 55 65 81;
+  --c-ink-3: 107 114 128;
+  --c-brand: 39 201 63;
+  --c-on-brand: 255 255 255;
+  --c-select: 224 242 254;
+  --c-accent: 37 99 235;
+  --c-success: 16 185 129;
+  --c-warning: 234 179 8;
+  --c-danger: 220 38 38;
+
+  --shadow-pop: 0 8px 24px -8px rgb(15 23 42 / 0.16), 0 2px 6px -2px rgb(15 23 42 / 0.1);
+  --shadow-pop-lg: 0 16px 48px -12px rgb(15 23 42 / 0.2), 0 4px 10px -4px rgb(15 23 42 / 0.12);
+
+  color-scheme: light;
+}
+
+/* 暗色兜底：settingsStore 会同时给 html 挂 .dark，
+   这样「暗色」在样式表层面也是自洽的，不必依赖内联变量先落地。 */
+.dark {
+  --c-app: 24 24 27;
+  --c-panel: 31 31 35;
+  --c-raised: 39 39 42;
+  --c-hover: 45 45 50;
+  --c-edge: 56 56 62;
+  --c-edge-soft: 43 43 47;
+  --c-ink: 244 244 245;
+  --c-ink-2: 212 212 216;
+  --c-ink-3: 161 161 170;
+  --c-brand: 39 201 63;
+  --c-on-brand: 10 10 10;
+  --c-select: 30 58 74;
+  --c-accent: 96 165 250;
+  --c-success: 16 185 129;
+  --c-warning: 234 179 8;
+  --c-danger: 248 113 113;
+
+  --shadow-pop: 0 10px 38px -10px rgb(0 0 0 / 0.55), 0 10px 20px -15px rgb(0 0 0 / 0.4);
+  --shadow-pop-lg: 0 24px 64px -16px rgb(0 0 0 / 0.7), 0 8px 24px -12px rgb(0 0 0 / 0.5);
+
+  color-scheme: dark;
 }
 
 /* ================================================================== *
@@ -72,6 +118,23 @@
   ::selection {
     background: rgb(var(--c-accent) / 0.35);
   }
+
+  /* 键盘焦点环。
+   * 原来全局没有任何 focus-visible 样式，纯键盘操作时完全看不到焦点在哪 ——
+   * 侧栏 6 个面板都是自定义按钮，Tab 过去只能靠猜。
+   * 这里只给「键盘」焦点加环（:focus-visible），鼠标点击不会出现难看的框。
+   * 用 outline 而非 box-shadow：不占布局、不触发重绘、也不违反「禁改 box-shadow」的约束。 */
+  :focus-visible {
+    outline: 2px solid rgb(var(--c-accent) / 0.55);
+    outline-offset: -1px;
+  }
+
+  /* 文本类控件用更贴合边框的环，避免和输入框自身的 focus ring 叠成双层 */
+  input:focus-visible,
+  textarea:focus-visible,
+  select:focus-visible {
+    outline: none;
+  }
 }
 
 /* ================================================================== *
@@ -82,7 +145,7 @@
   /* ---------- 按钮 ---------- */
   .btn {
     @apply inline-flex h-7 shrink-0 items-center justify-center gap-1.5 rounded-md border border-edge
-      bg-raised px-2.5 text-xs font-medium text-ink-2 transition-colors duration-100
+      bg-raised px-2.5 text-xs font-medium text-ink-2 transition-colors duration-150
       hover:bg-hover hover:text-ink
       disabled:pointer-events-none disabled:opacity-45;
   }
@@ -101,25 +164,21 @@
 
   .btn-icon {
     @apply inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-ink-3
-      transition-colors duration-100 hover:bg-hover hover:text-ink
+      transition-colors duration-150 hover:bg-hover hover:text-ink
       disabled:pointer-events-none disabled:opacity-45;
   }
 
   /* ---------- 表单 ---------- */
   .input {
     @apply h-7 w-full rounded-md border border-edge bg-app px-2 text-xs text-ink outline-none
-      transition-colors duration-100 placeholder:text-ink-3
+      transition-colors duration-150 placeholder:text-ink-3
       focus:border-accent/70 focus:ring-2 focus:ring-accent/15;
   }
 
   .textarea {
     @apply w-full resize-none rounded-md border border-edge bg-app px-2 py-1.5 text-xs text-ink
-      outline-none transition-colors duration-100 placeholder:text-ink-3
+      outline-none transition-colors duration-150 placeholder:text-ink-3
       focus:border-accent/70 focus:ring-2 focus:ring-accent/15;
-  }
-
-  .kbd {
-    @apply inline-block rounded border border-edge-soft bg-raised px-1 py-px font-mono text-[10px] text-ink-2;
   }
 
   .field-label {
@@ -129,12 +188,12 @@
   /* ---------- 右键菜单 ---------- */
   .menu {
     @apply fixed z-50 min-w-[168px] animate-pop-in overflow-hidden rounded-lg border border-edge
-      bg-panel/95 p-1 shadow-pop backdrop-blur-xl;
+      bg-panel p-1 shadow-pop;
   }
 
   .menu-item {
     @apply flex w-full cursor-default items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs
-      text-ink-2 transition-colors duration-75 hover:bg-hover hover:text-ink;
+      text-ink-2 transition-colors duration-150 hover:bg-hover hover:text-ink;
   }
 
   .menu-item-danger {
@@ -146,9 +205,11 @@
   }
 
   /* ---------- 弹窗 ---------- */
+  /* 不用 backdrop-blur：Windows 上关掉浮层后合成器会残留缩放帧，整窗文字发虚，
+     而且 2px 模糊本身几乎看不出来。改用稍深的纯色遮罩，同时对 GPU 更友好。 */
   .modal-overlay {
-    @apply fixed inset-0 z-40 flex animate-fade-in items-start justify-center bg-black/50
-      p-4 pt-[12vh] backdrop-blur-[2px];
+    @apply fixed inset-0 z-40 flex animate-fade-in items-start justify-center bg-black/55
+      p-4 pt-[12vh];
   }
 
   .modal {
@@ -161,7 +222,7 @@
   }
 
   .modal-title {
-    @apply text-[13px] font-semibold text-ink;
+    @apply text-sm font-semibold text-ink;
   }
 
   .modal-body {
@@ -173,13 +234,97 @@
   }
 
   /* ---------- 其他 ---------- */
+  /* 键帽：inline-flex 保证与文字基线对齐，also used by CommandCenter 的 Hint */
   .kbd {
-    @apply rounded border border-edge bg-raised px-1.5 py-0.5 font-mono text-[10px] leading-none text-ink-2;
+    @apply inline-flex items-center justify-center rounded border border-edge bg-raised px-1.5
+      py-0.5 font-mono text-3xs leading-none text-ink-2;
   }
 
   .badge {
     @apply inline-flex items-center gap-1 rounded-full border border-edge bg-raised px-2 py-0.5
       text-2xs text-ink-2;
+  }
+
+  /* ---------- 外壳三段：标题栏 / 活动栏 / 状态栏 ---------- */
+
+  /* 标题栏：品牌绿底（44px）。规范要求绿色只出现在这一层，
+     所以连文字色一起定死，页面里就不必到处写 text-white。 */
+  .titlebar {
+    @apply flex h-11 shrink-0 items-center bg-brand text-on-brand;
+  }
+
+  /* 标题栏里的图标按钮：半透明白字，悬停改透明度而不是背景色 ——
+     绿底上叠半透明底色会显脏。 */
+  .titlebar-btn {
+    @apply inline-flex h-7 w-7 shrink-0 items-center justify-center rounded text-on-brand/80
+      transition-colors duration-150 hover:bg-on-brand/15 hover:text-on-brand
+      disabled:pointer-events-none disabled:opacity-40;
+  }
+
+  /* 活动栏条目：图标竖排，宽 48px。激活项靠 2px 品牌绿指示线 + 微亮底 */
+  .activity-item {
+    @apply relative flex h-11 w-full items-center justify-center text-ink-3
+      transition-colors duration-150 hover:text-ink;
+  }
+
+  .activity-item-active {
+    @apply bg-hover text-ink;
+  }
+
+  /* 状态栏：浅灰底 + 极细上边框（28px） */
+  .statusbar {
+    @apply flex h-7 shrink-0 items-center gap-3 border-t border-edge bg-panel px-3 text-2xs
+      text-ink-3;
+  }
+
+  /* 分段控件：选中只改底色，不做位移/缩放 */
+  .seg-item {
+    @apply flex items-center gap-1 rounded px-1.5 py-0.5 text-2xs text-ink-3
+      transition-colors duration-150 hover:bg-hover hover:text-ink-2;
+  }
+
+  .seg-item-active {
+    @apply bg-hover text-ink;
+  }
+
+  /* ---------- 侧栏面板骨架 ---------- *
+   * 6 个侧栏面板（连接/文件/命令/历史/日志/隧道）原来各写各的头部：
+   * 有的是 p-2，有的 px-1.5 py-1，标题有的 13px 有的 12px，图标按钮有的
+   * h-7 有的 h-6。并排放时高度差 2~4px，切换面板会看到内容整体上下跳动。
+   * 这几条类把「头部 32px / 工具栏 32px / 行高一致」定死，改面板时直接复用。
+   */
+  .panel-head {
+    @apply flex h-8 shrink-0 items-center gap-1.5 border-b border-edge px-2.5;
+  }
+
+  .panel-title {
+    @apply truncate text-xs font-semibold tracking-[-0.01em] text-ink;
+  }
+
+  .panel-count {
+    @apply shrink-0 rounded bg-raised px-1 font-mono text-3xs leading-4 text-ink-3;
+  }
+
+  .panel-toolbar {
+    @apply flex shrink-0 items-center gap-1 border-b border-edge px-2 py-1.5;
+  }
+
+  .panel-body {
+    @apply scroll-thin min-h-0 flex-1 overflow-y-auto p-1;
+  }
+
+  /* 列表行：统一圆角、左右内距与 hover 色 */
+  .row {
+    @apply relative flex w-full cursor-default items-center gap-2 rounded-md px-2 py-1.5
+      text-left transition-colors duration-150;
+  }
+
+  .row-hover {
+    @apply hover:bg-hover;
+  }
+
+  .row-active {
+    @apply bg-select;
   }
 }
 

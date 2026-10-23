@@ -48,7 +48,9 @@ interface SessionRecord {
   decoder: StringDecoder
   pending: Buffer[]
   flushTimer?: NodeJS.Timeout
-  probeTimer?: NodeJS.Timeout
+  /** 最近一次探测的时刻 / 是否正在进行，供全局轮转探针调度 */
+  probedAt?: number
+  probing?: boolean
   closedByUser: boolean
   /** 同一 SSH 连接上的终端（shell）共享的引用计数：归零才真正断开连接 */
   shared: { refs: number }
@@ -60,7 +62,14 @@ interface SessionRecord {
   offClient?: () => void
 }
 
-const PROBE_INTERVAL_MS = 5000
+/**
+ * 延迟探测：全局一个节拍器，每 1 秒探一个会话并轮转。
+ * 旧实现是每个会话各挂一个 5s 定时器，N 个会话就是每 5 秒 N 次 exec，
+ * 连接一多直接把链路和主进程压满。
+ */
+const PROBE_TICK_MS = 1000
+/** 同一会话的最小探测间隔：会话少时给出 5s 级别的新鲜度，会话多时自然被拉长 */
+const PROBE_MIN_GAP_MS = 5000
 const FLUSH_INTERVAL_MS = 8
 /** 等待会话就绪的默认上限（连接握手未完成的挂起请求） */
 const READY_TIMEOUT_MS = 30_000
@@ -245,7 +254,8 @@ class SessionManager {
       await this.attachShell(record)
 
       await touchConnection(connectionId)
-      if (settings.latencyProbe) this.startProbe(record)
+      // 延迟探测：起全局节拍器即可，单会话不再各自挂定时器
+      if (settings.latencyProbe) this.ensureProbeTicker()
 
       // 会话日志录制（asciinema cast 格式，可在「会话日志」面板回放）
       if (settings.autoLog) {
@@ -514,9 +524,14 @@ class SessionManager {
     if (record.cleaned) return
     record.cleaned = true
     if (record.flushTimer) clearTimeout(record.flushTimer)
-    if (record.probeTimer) clearInterval(record.probeTimer)
     record.flushTimer = undefined
-    record.probeTimer = undefined
+    record.probedAt = undefined
+    record.probing = false
+    // 没有可探测的会话时把节拍器停掉，避免空转
+    // （cleanup 早于 sessions.delete 执行，所以要按「未关闭」计数）
+    let live = 0
+    for (const r of this.sessions.values()) if (!r.closed) live++
+    if (live === 0) this.stopProbeTicker()
 
     try {
       record.shell?.end()
@@ -568,41 +583,87 @@ class SessionManager {
    *  延迟探测
    * ------------------------------------------------------------------ */
 
-  private startProbe(record: SessionRecord): void {
-    if (record.probeTimer) return
-    record.probeTimer = setInterval(() => {
-      if (record.status !== 'connected') return
-      const t0 = Date.now()
-      try {
-        record.client.exec('echo', (err, stream) => {
-          if (err || !stream) return
-          let done = false
-          const complete = (): void => {
-            if (done) return
-            done = true
-            clearTimeout(guard)
-            const ms = Date.now() - t0
-            record.latencyMs = ms
-            this.handlers?.onLatency(record.id, ms)
-          }
-          // 部分设备 exec 不返回 close：3s 后主动收尾，只丢弃本次结果
-          const guard = setTimeout(() => {
-            done = true
-            try {
-              stream.close()
-            } catch {
-              /* ignore */
-            }
-          }, 3000)
+  /**
+   * 全局轮转探针。
+   *
+   * 旧实现是「每个会话一个 setInterval」，连接一多就变成每 5 秒 × N 条
+   * `exec('echo')` 同时压到各条链路上，CPU 与网络往返都翻倍，是卡顿主因之一。
+   * 现在改成单一节拍器：每秒只探一个会话，按会话列表轮转。
+   * 会话越多，单个会话的刷新间隔越长，但总负载恒定。
+   */
+  private probeTimer: NodeJS.Timeout | null = null
+  private probeCursor = 0
 
-          stream.on('data', () => {})
-          stream.stderr.on('data', () => {})
-          stream.on('close', complete)
-        })
-      } catch {
-        // 连接瞬断时忽略本次探测
-      }
-    }, PROBE_INTERVAL_MS)
+  private ensureProbeTicker(): void {
+    if (this.probeTimer) return
+    this.probeTimer = setInterval(() => this.probeTick(), PROBE_TICK_MS)
+  }
+
+  private stopProbeTicker(): void {
+    if (!this.probeTimer) return
+    clearInterval(this.probeTimer)
+    this.probeTimer = null
+    this.probeCursor = 0
+  }
+
+  private probeTick(): void {
+    // 只剩需要探测的会话才走节拍，避免空转
+    const live = [...this.sessions.values()]
+    if (live.length === 0) {
+      this.stopProbeTicker()
+      return
+    }
+    this.probeCursor = (this.probeCursor + 1) % live.length
+    const record = live[this.probeCursor]
+    if (!record || record.closed || record.status !== 'connected') return
+    if (Date.now() - (record.probedAt ?? 0) < PROBE_MIN_GAP_MS) return
+    this.probeOne(record)
+  }
+
+  private probeOne(record: SessionRecord): void {
+    // busy 标记避免一次没回来又发下一次（慢设备上会出现请求堆积）
+    if (record.probing) return
+    record.probing = true
+    record.probedAt = Date.now()
+    const t0 = record.probedAt
+    const finish = (): void => {
+      record.probing = false
+    }
+    try {
+      record.client.exec('echo', (err, stream) => {
+        if (err || !stream) {
+          finish()
+          return
+        }
+        let done = false
+        const complete = (): void => {
+          if (done) return
+          done = true
+          clearTimeout(guard)
+          const ms = Date.now() - t0
+          record.latencyMs = ms
+          this.handlers?.onLatency(record.id, ms)
+          finish()
+        }
+        // 部分设备 exec 不返回 close：3s 后主动收尾，只丢弃本次结果
+        const guard = setTimeout(() => {
+          done = true
+          try {
+            stream.close()
+          } catch {
+            /* ignore */
+          }
+          finish()
+        }, 3000)
+
+        stream.on('data', () => {})
+        stream.stderr.on('data', () => {})
+        stream.on('close', complete)
+      })
+    } catch {
+      // 连接瞬断时忽略本次探测
+      finish()
+    }
   }
 
   private emitStatus(record: SessionRecord, status: ConnStatus, error?: string): void {

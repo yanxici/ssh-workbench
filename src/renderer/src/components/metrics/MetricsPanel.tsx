@@ -117,7 +117,7 @@ function MonitorTargets(): JSX.Element {
               />
               <div className="min-w-0 flex-1">
                 <div className="truncate text-xs text-ink-2">{s.title}</div>
-                <div className="truncate font-mono text-[9px] text-ink-3">
+                <div className="truncate font-mono text-3xs text-ink-3">
                   {s.username}@{s.host}
                 </div>
               </div>
@@ -141,7 +141,7 @@ function MonitorTargets(): JSX.Element {
         })}
       </div>
 
-      <div className="shrink-0 border-t border-edge-soft px-2.5 py-1.5 text-[10px] leading-relaxed text-ink-3">
+      <div className="shrink-0 border-t border-edge-soft px-2.5 py-1.5 text-3xs leading-relaxed text-ink-3">
         一帧只执行一条轻量采样命令（读 /proc + df），对设备负担很小；连续 3 次失败会自动停止。
       </div>
     </div>
@@ -178,11 +178,11 @@ function SessionCard({ series }: { series?: SessionSeries }): JSX.Element | null
       <div className="flex items-center gap-2 border-b border-edge-soft px-3 py-2">
         <Wifi size={13} className={cn('shrink-0', sessionGone ? 'text-ink-3' : 'text-success')} />
         <span className="text-xs font-semibold text-ink">{title}</span>
-        <span className="font-mono text-[10px] text-ink-3">
+        <span className="font-mono text-3xs text-ink-3">
           {session ? `${session.username}@${session.host}` : ''}
         </span>
         <span className="flex-1" />
-        <span className="font-mono text-[10px] text-ink-3">
+        <span className="font-mono text-3xs text-ink-3">
           {samples.length > 0 ? `已采样 ${samples.length} 帧` : '采样中…'}
         </span>
         <button
@@ -200,7 +200,7 @@ function SessionCard({ series }: { series?: SessionSeries }): JSX.Element | null
           label="CPU 使用率"
           value={last?.cpuPercent !== undefined ? `${last.cpuPercent.toFixed(1)}%` : '--'}
           accent={last?.cpuPercent !== undefined && last.cpuPercent > 85 ? 'danger' : 'accent'}
-          series={[{ values: cpu, color: '#58A6FF' }]}
+          series={[{ values: cpu, token: 'accent' }]}
           max={100}
           hint={last?.load1 !== undefined ? `负载 ${last.load1}` : undefined}
         />
@@ -208,7 +208,7 @@ function SessionCard({ series }: { series?: SessionSeries }): JSX.Element | null
           label="内存"
           value={last?.memPercent !== undefined ? `${last.memPercent.toFixed(1)}%` : '--'}
           accent={last?.memPercent !== undefined && last.memPercent > 90 ? 'danger' : 'success'}
-          series={[{ values: mem, color: '#3FB950' }]}
+          series={[{ values: mem, token: 'success' }]}
           max={100}
           hint={
             last?.memUsedMb !== undefined && last.memTotalMb !== undefined
@@ -220,7 +220,7 @@ function SessionCard({ series }: { series?: SessionSeries }): JSX.Element | null
           label="根分区磁盘"
           value={last?.diskPercent !== undefined ? `${last.diskPercent.toFixed(1)}%` : '--'}
           accent={last?.diskPercent !== undefined && last.diskPercent > 90 ? 'danger' : 'warning'}
-          series={[{ values: disk, color: '#D29922' }]}
+          series={[{ values: disk, token: 'warning' }]}
           max={100}
           hint={
             last?.diskUsedGb !== undefined && last.diskTotalGb !== undefined
@@ -232,7 +232,7 @@ function SessionCard({ series }: { series?: SessionSeries }): JSX.Element | null
           label="温度"
           value={last?.tempC !== undefined ? `${last.tempC.toFixed(1)}℃` : '--'}
           accent={last?.tempC !== undefined && last.tempC > 75 ? 'danger' : 'warning'}
-          series={[{ values: temp, color: '#F0883E' }]}
+          series={[{ values: temp, token: 'warning' }]}
           hint={undefined}
         />
         <MetricTile
@@ -244,8 +244,8 @@ function SessionCard({ series }: { series?: SessionSeries }): JSX.Element | null
           }
           accent="accent"
           series={[
-            { values: rx, color: '#58A6FF' },
-            { values: tx, color: '#3FB950' }
+            { values: rx, token: 'accent' },
+            { values: tx, token: 'success' }
           ]}
           hint="蓝=下行 · 绿=上行"
         />
@@ -278,6 +278,36 @@ const ACCENT_TEXT: Record<string, string> = {
   danger: 'text-danger'
 }
 
+/**
+ * 曲线配色 token。
+ *
+ * 原来这里直接写死了 GitHub 暗色板那套十六进制值（亮蓝 / 亮绿 / 暗黄 / 橙），
+ * 在浅色主题和 6 套配色下都和周围对不上 —— 换成 token，实际颜色在渲染时从
+ * CSS 变量读，主题切换自动跟随，也不用再维护第二份色板。
+ */
+type SeriesToken = 'accent' | 'success' | 'warning' | 'danger'
+
+/** token → 可用的 CSS 颜色（--c-* 是三通道数值，必须用 rgb() 包起来） */
+const SERIES_VAR: Record<SeriesToken, string> = {
+  accent: 'rgb(var(--c-accent))',
+  success: 'rgb(var(--c-success))',
+  warning: 'rgb(var(--c-warning))',
+  danger: 'rgb(var(--c-danger))'
+}
+
+/**
+ * 曲线填充用的半透明色。
+ *
+ * SVG 的 `fill` 属性不支持 `color-mix()` 在所有旧内核上都生效，但支持
+ * `rgb(r g b / a)`；这里用 CSS 变量 + 固定透明度拼出来，避免再写死一份颜色。
+ */
+const SERIES_FILL: Record<SeriesToken, string> = {
+  accent: 'rgb(var(--c-accent) / 0.12)',
+  success: 'rgb(var(--c-success) / 0.12)',
+  warning: 'rgb(var(--c-warning) / 0.12)',
+  danger: 'rgb(var(--c-danger) / 0.12)'
+}
+
 function MetricTile({
   label,
   value,
@@ -289,22 +319,22 @@ function MetricTile({
   label: string
   value: string
   accent: keyof typeof ACCENT_TEXT
-  series: Array<{ values: number[]; color: string }>
+  series: Array<{ values: number[]; token: SeriesToken }>
   max?: number
   hint?: string
 }): JSX.Element {
   return (
     <div className="rounded-md border border-edge-soft bg-app/40 px-2.5 py-2">
       <div className="flex items-baseline gap-2">
-        <span className="text-[10px] tracking-wide text-ink-3">{label}</span>
+        <span className="text-3xs tracking-wide text-ink-3">{label}</span>
       </div>
-      <div className={cn('mt-0.5 font-mono text-[15px] leading-tight', ACCENT_TEXT[accent])}>
+      <div className={cn('mt-0.5 font-mono text-base leading-tight', ACCENT_TEXT[accent])}>
         {value}
       </div>
       {series.length > 0 && series.some((s) => s.values.length >= 2) && (
         <Sparkline series={series} max={max} />
       )}
-      {hint && <div className="mt-1 truncate font-mono text-[9px] text-ink-3">{hint}</div>}
+      {hint && <div className="mt-1 truncate font-mono text-3xs text-ink-3">{hint}</div>}
     </div>
   )
 }
@@ -312,13 +342,15 @@ function MetricTile({
 /**
  * 迷你趋势图：所有序列按统一点数归一化到同一 x 轴；
  * 未指定 max 时自适应（趋势更清晰），指定时用于百分比类固定量程。
+ *
+ * 颜色由 token 决定（见 SERIES_VAR），不接收裸色值 —— 否则主题一换就花。
  */
 function Sparkline({
   series,
   max,
   height = 34
 }: {
-  series: Array<{ values: number[]; color: string }>
+  series: Array<{ values: number[]; token: SeriesToken }>
   max?: number
   height?: number
 }): JSX.Element {
@@ -354,11 +386,11 @@ function Sparkline({
         const area = `0,${H} ${points} ${W},${H}`
         return (
           <g key={idx}>
-            <polygon points={area} fill={s.color} opacity={0.1} />
+            <polygon points={area} fill={SERIES_FILL[s.token]} />
             <polyline
               points={points}
               fill="none"
-              stroke={s.color}
+              stroke={SERIES_VAR[s.token]}
               strokeWidth={1.5}
               vectorEffect="non-scaling-stroke"
               strokeLinejoin="round"

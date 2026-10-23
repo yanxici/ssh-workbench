@@ -22,6 +22,12 @@ export interface ThemeVars {
   ink: string
   'ink-2': string
   'ink-3': string
+  /** 品牌绿：只用于标题栏底色、活动栏激活指示线、终端成功信息 */
+  brand: string
+  /** 品牌绿上的文字色（标题栏里的字） */
+  'on-brand': string
+  /** 文件树选中行底色 */
+  select: string
   accent: string
   success: string
   warning: string
@@ -46,6 +52,109 @@ export interface ColorThemeDef {
  *  Workbench（原有配色，GitHub 风格）—— 默认主题
  * ------------------------------------------------------------------ */
 
+/* ------------------------------------------------------------------ *
+ *  VS Code 浅色（新版默认外观）
+ *
+ *  用户给定的视觉规范全部落在这套变量里：
+ *    主背景 #ffffff / 侧栏状态栏 #f8f9fa · #fafafa / hover #f3f4f6
+ *    边框 #e5e7eb / 正文 #374151 / 标题 #111827
+ *    品牌绿 #27c93f（只给标题栏底色、活动栏指示线、终端成功信息）
+ *    文件树选中 #e0f2fe
+ *  暗色分支是同一套语义的暗化版本，保证切到暗色时不出现「亮底白字」这类断裂。
+ * ------------------------------------------------------------------ */
+
+const VSCODE: ColorThemeDef = {
+  id: 'vscode',
+  name: 'VS Code 浅色',
+  swatch: ['#ffffff', '#27c93f', '#e0f2fe'],
+  light: {
+    vars: {
+      app: '255 255 255', // #ffffff 主背景
+      panel: '248 249 250', // #f8f9fa 侧栏 / 状态栏
+      raised: '250 250 250', // #fafafa 浮起面（输入框、卡片）
+      hover: '243 244 246', // #f3f4f6 悬停
+      edge: '229 231 235', // #e5e7eb 统一分割线
+      'edge-soft': '238 240 243', // 更弱的分割线（分组之间）
+      ink: '17 24 39', // #111827 标题 / 强调
+      'ink-2': '55 65 81', // #374151 正文
+      'ink-3': '107 114 128', // #6b7280 次要文字
+      brand: '39 201 63', // #27c93f
+      'on-brand': '255 255 255',
+      select: '224 242 254', // #e0f2fe 选中行
+      accent: '37 99 235', // #2563eb 交互强调（蓝，不与品牌绿混用）
+      success: '16 185 129', // #10b981
+      warning: '234 179 8', // #eab308
+      danger: '220 38 38' // #dc2626
+    },
+    terminal: {
+      background: '#FFFFFF',
+      foreground: '#374151',
+      cursor: '#27C93F',
+      cursorAccent: '#FFFFFF',
+      selectionBackground: 'rgba(39, 201, 63, 0.20)',
+      black: '#111827',
+      red: '#dc2626',
+      green: '#10b981',
+      yellow: '#eab308',
+      blue: '#3b82f6',
+      magenta: '#8b5cf6',
+      cyan: '#06b6d4',
+      white: '#9ca3af',
+      brightBlack: '#6b7280',
+      brightRed: '#ef4444',
+      brightGreen: '#27c93f',
+      brightYellow: '#facc15',
+      brightBlue: '#60a5fa',
+      brightMagenta: '#a78bfa',
+      brightCyan: '#22d3ee',
+      brightWhite: '#111827'
+    }
+  },
+  dark: {
+    vars: {
+      app: '24 24 27',
+      panel: '31 31 35',
+      raised: '39 39 42',
+      hover: '45 45 50',
+      edge: '56 56 62',
+      'edge-soft': '43 43 47',
+      ink: '244 244 245',
+      'ink-2': '212 212 216',
+      'ink-3': '161 161 170',
+      brand: '39 201 63',
+      'on-brand': '10 10 10',
+      select: '30 58 74',
+      accent: '96 165 250',
+      success: '16 185 129',
+      warning: '234 179 8',
+      danger: '248 113 113'
+    },
+    terminal: {
+      background: '#1E1E20',
+      foreground: '#D4D4D8',
+      cursor: '#27C93F',
+      cursorAccent: '#1E1E20',
+      selectionBackground: 'rgba(39, 201, 63, 0.28)',
+      black: '#27272A',
+      red: '#F87171',
+      green: '#10B981',
+      yellow: '#EAB308',
+      blue: '#60A5FA',
+      magenta: '#8B5CF6',
+      cyan: '#22D3EE',
+      white: '#D4D4D8',
+      brightBlack: '#71717A',
+      brightRed: '#FCA5A5',
+      brightGreen: '#27C93F',
+      brightYellow: '#FACC15',
+      brightBlue: '#93C5FD',
+      brightMagenta: '#C4B5FD',
+      brightCyan: '#67E8F9',
+      brightWhite: '#FAFAFA'
+    }
+  }
+}
+
 const WORKBENCH: ColorThemeDef = {
   id: 'workbench',
   name: 'Workbench',
@@ -64,7 +173,10 @@ const WORKBENCH: ColorThemeDef = {
       accent: '88 166 255',
       success: '63 185 80',
       warning: '210 153 34',
-      danger: '248 81 73'
+      danger: '248 81 73',
+      brand: '39 201 63',
+      'on-brand': '255 255 255',
+      select: '30 58 74'
     },
     terminal: {
       background: '#0D1117',
@@ -104,7 +216,10 @@ const WORKBENCH: ColorThemeDef = {
       accent: '9 105 218',
       success: '26 127 55',
       warning: '154 103 0',
-      danger: '207 34 46'
+      danger: '207 34 46',
+      brand: '39 201 63',
+      'on-brand': '255 255 255',
+      select: '224 242 254'
     },
     terminal: {
       background: '#FFFFFF',
@@ -154,7 +269,10 @@ const DRACULA: ColorThemeDef = {
       accent: '189 147 249',
       success: '80 250 123',
       warning: '241 250 140',
-      danger: '255 85 85'
+      danger: '255 85 85',
+      brand: '39 201 63',
+      'on-brand': '255 255 255',
+      select: '30 58 74'
     },
     terminal: {
       background: '#1E1F29',
@@ -194,7 +312,10 @@ const DRACULA: ColorThemeDef = {
       accent: '124 77 199',
       success: '20 140 62',
       warning: '156 116 0',
-      danger: '200 40 50'
+      danger: '200 40 50',
+      brand: '39 201 63',
+      'on-brand': '255 255 255',
+      select: '224 242 254'
     },
     terminal: {
       background: '#FFFFFF',
@@ -244,7 +365,10 @@ const NORD: ColorThemeDef = {
       accent: '136 192 208',
       success: '163 190 140',
       warning: '235 203 139',
-      danger: '191 97 106'
+      danger: '191 97 106',
+      brand: '39 201 63',
+      'on-brand': '255 255 255',
+      select: '30 58 74'
     },
     terminal: {
       background: '#242933',
@@ -284,7 +408,10 @@ const NORD: ColorThemeDef = {
       accent: '94 129 172',
       success: '106 138 84',
       warning: '163 128 42',
-      danger: '168 73 82'
+      danger: '168 73 82',
+      brand: '39 201 63',
+      'on-brand': '255 255 255',
+      select: '224 242 254'
     },
     terminal: {
       background: '#FFFFFF',
@@ -334,7 +461,10 @@ const SOLARIZED: ColorThemeDef = {
       accent: '38 139 210',
       success: '133 153 0',
       warning: '181 137 0',
-      danger: '220 50 47'
+      danger: '220 50 47',
+      brand: '39 201 63',
+      'on-brand': '255 255 255',
+      select: '30 58 74'
     },
     terminal: {
       // 原版 Solarized 前景 #839496 在 #002B36 上仅 4.75:1，长时间看命令输出偏灰。
@@ -376,7 +506,10 @@ const SOLARIZED: ColorThemeDef = {
       accent: '38 139 210',
       success: '101 123 0',
       warning: '150 113 0',
-      danger: '203 43 40'
+      danger: '203 43 40',
+      brand: '39 201 63',
+      'on-brand': '255 255 255',
+      select: '224 242 254'
     },
     terminal: {
       // 亮色侧同样抬高前景对比度（原版 #657B83 仅 4.13:1 → 这里用近黑的 base03 侧深色）
@@ -427,7 +560,10 @@ const ONEDARK: ColorThemeDef = {
       accent: '97 175 239',
       success: '152 195 121',
       warning: '229 192 123',
-      danger: '224 108 117'
+      danger: '224 108 117',
+      brand: '39 201 63',
+      'on-brand': '255 255 255',
+      select: '30 58 74'
     },
     terminal: {
       background: '#21252B',
@@ -467,7 +603,10 @@ const ONEDARK: ColorThemeDef = {
       accent: '64 120 190',
       success: '80 130 55',
       warning: '160 120 30',
-      danger: '190 70 80'
+      danger: '190 70 80',
+      brand: '39 201 63',
+      'on-brand': '255 255 255',
+      select: '224 242 254'
     },
     terminal: {
       background: '#FFFFFF',
@@ -517,7 +656,10 @@ const GRUVBOX: ColorThemeDef = {
       accent: '250 189 47',
       success: '184 187 38',
       warning: '254 128 25',
-      danger: '251 73 52'
+      danger: '251 73 52',
+      brand: '39 201 63',
+      'on-brand': '255 255 255',
+      select: '30 58 74'
     },
     terminal: {
       background: '#1D2021',
@@ -557,7 +699,10 @@ const GRUVBOX: ColorThemeDef = {
       accent: '175 125 0',
       success: '121 125 15',
       warning: '175 88 0',
-      danger: '175 48 34'
+      danger: '175 48 34',
+      brand: '39 201 63',
+      'on-brand': '255 255 255',
+      select: '224 242 254'
     },
     terminal: {
       background: '#FBF1C7',
@@ -586,6 +731,7 @@ const GRUVBOX: ColorThemeDef = {
 }
 
 export const COLOR_THEMES: ColorThemeDef[] = [
+  VSCODE,
   WORKBENCH,
   DRACULA,
   NORD,
@@ -596,9 +742,9 @@ export const COLOR_THEMES: ColorThemeDef[] = [
 
 const BY_ID = new Map<string, ColorThemeDef>(COLOR_THEMES.map((t) => [t.id, t]))
 
-/** 取主题定义；未知 id 回落到 Workbench，保证老配置也能正常启动 */
+/** 取主题定义；未知 id 回落到 VS Code 浅色（当前默认外观） */
 export function getColorTheme(id: string | undefined): ColorThemeDef {
-  return (id && BY_ID.get(id)) || WORKBENCH
+  return (id && BY_ID.get(id)) || VSCODE
 }
 
 /** 取某主题在指定明暗下的变体 */

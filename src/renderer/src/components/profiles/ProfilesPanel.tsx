@@ -18,6 +18,7 @@ import { ConfirmDialog, EmptyState, Field } from '@/components/ui'
 import { useProfileStore } from '@/stores/profileStore'
 import { useConnectionStore } from '@/stores/connectionStore'
 import { useSessionStore } from '@/stores/sessionStore'
+import { useLayoutStore } from '@/stores/layoutStore'
 import { useCommandStore } from '@/stores/commandStore'
 import { useDiagStore } from '@/stores/diagStore'
 import { useToastStore } from '@/stores/toastStore'
@@ -119,12 +120,12 @@ export function ProfilesPanel(): JSX.Element | null {
                     {p.customerName}
                   </span>
                   {p.connectionIds.length > 0 && (
-                    <span className="shrink-0 font-mono text-[9px] text-ink-3">
+                    <span className="shrink-0 font-mono text-3xs text-ink-3">
                       {p.connectionIds.length} 连接
                     </span>
                   )}
                 </span>
-                <span className="mt-0.5 truncate text-[10px] text-ink-3">
+                <span className="mt-0.5 truncate text-3xs text-ink-3">
                   {[p.deviceModel, p.project].filter(Boolean).join(' · ') || p.sn || '—'}
                 </span>
               </button>
@@ -284,7 +285,9 @@ function ProfileDetail({
   const filterCommands = (): void => {
     if (!form.commandGroup.trim()) return
     useCommandStore.getState().setKeyword(form.commandGroup.trim())
-    useSessionStore.setState({ panelVisible: true })
+    // 命令栏常驻在窗口右侧，不再是活动栏里的一个视图：这里只要确保它展开，
+    // 关键字已经写进 commandStore，CommandPanel 会自己筛。
+    useLayoutStore.getState().setCommandRailVisible(true)
     useProfileStore.setState({ panelOpen: false })
     useToastStore.getState().push({
       kind: 'info',
@@ -296,7 +299,7 @@ function ProfileDetail({
     <div className="scroll-thin h-full overflow-y-auto p-4">
       {/* 操作条 */}
       <div className="mb-3 flex items-center gap-2">
-        <span className="text-[13px] font-semibold text-ink">
+        <span className="text-sm font-semibold text-ink">
           {isNew ? '新建档案' : form.customerName || '未命名客户'}
         </span>
         {!isNew && (
@@ -446,10 +449,17 @@ function ProfileDetail({
                   >
                     <span
                       className="h-1.5 w-1.5 shrink-0 rounded-full"
-                      style={{ background: c.color || 'var(--c-accent, #58A6FF)' }}
+                      /*
+                       * 这里原来写的是 `var(--c-accent, <GitHub 暗色板的亮蓝>)` —— 两个错：
+                       * 1) `--c-accent` 存的是三通道数值（如「37 99 235」），不用 rgb()
+                       *    包起来作为 background 是无效值，圆点会直接透明；
+                       * 2) 回退色是暗色板专用，在浅色主题上过于刺眼。
+                       * 正确写法是 rgb(var(--c-accent))，回退交给 index.css 的 :root。
+                       */
+                      style={{ background: c.color || 'rgb(var(--c-accent))' }}
                     />
                     <span className="min-w-0 flex-1 truncate">{c.name}</span>
-                    <span className="shrink-0 font-mono text-[9px] text-ink-3">{c.host}</span>
+                    <span className="shrink-0 font-mono text-3xs text-ink-3">{c.host}</span>
                   </button>
                 )
               })}
@@ -505,7 +515,7 @@ function ProfileDetail({
                         </span>
                         <span
                           className={cn(
-                            'shrink-0 rounded px-1 py-px text-[9px]',
+                            'shrink-0 rounded px-1 py-px text-3xs',
                             r.problemCount > 0
                               ? 'bg-danger/10 text-danger'
                               : 'bg-success/10 text-success'
@@ -513,7 +523,7 @@ function ProfileDetail({
                         >
                           {r.okCount}/{r.sectionCount}
                         </span>
-                        <span className="shrink-0 text-[9px] text-ink-3">
+                        <span className="shrink-0 text-3xs text-ink-3">
                           {formatTime(r.startedAt)}
                         </span>
                         <ExternalLink size={10} className="shrink-0 text-ink-3" />

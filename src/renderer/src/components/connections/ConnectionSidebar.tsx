@@ -34,6 +34,12 @@ import {
 /**
  * 左侧连接列表：分组折叠、搜索、双击打开、右键菜单、从剪贴板识别 ssh 命令。
  */
+
+/** 每个分组默认先渲染多少条（滚动到「还有 N 条」按钮时再追加） */
+const PAGE_SIZE = 60
+/** 超过这个数的分组默认折叠，避免一次铺出几千行 */
+const LARGE_GROUP = 200
+
 export function ConnectionSidebar({
   onEdit
 }: {
@@ -57,6 +63,25 @@ export function ConnectionSidebar({
   const [transfer, setTransfer] = useState<'export' | 'import' | null>(null)
 
   const groups = useMemo(() => groupConnections(connections, keyword), [connections, keyword])
+
+  /**
+   * 连接 id → 会话索引。
+   * 原实现把 `sessions.find(...)` 写在每个列表项里，复杂度 O(连接数 × 会话数)：
+   * 连接上千条时，每渲染一轮要跑几万次比较。
+   */
+  const sessionByConn = useMemo(() => {
+    const map = new Map<string, (typeof sessions)[number]>()
+    for (const s of sessions) if (!map.has(s.connectionId)) map.set(s.connectionId, s)
+    return map
+  }, [sessions])
+
+  /**
+   * 每个分组当前渲染多少条。
+   * 连接库可能有几千条（实测 2917 条同组），一次性铺出来会让侧栏卡死，
+   * 因此分页渲染：默认一屏 60 条，滚到底部自动追加。
+   * 同时默认折叠「超长分组」，用户主动点击才展开。
+   */
+  const [shown, setShown] = useState<Record<string, number>>({})
 
   const openConnection = (c: Connection): void => {
     open({ id: c.id, name: c.name, host: c.host, username: c.username })
@@ -124,9 +149,41 @@ export function ConnectionSidebar({
 
   return (
     <div className="flex h-full flex-col">
-      {/* 搜索与操作：搜索框独占一行，操作按钮另起一行，避免窄栏里被挤压 */}
-      <div className="shrink-0 space-y-1.5 border-b border-edge-soft px-2 py-1.5">
-        <div className="relative">
+      {/* 头部：标题 + 总数 + 全局操作（图标化，省一行高度） */}
+      <div className="panel-head">
+        <Plug size={13} className="shrink-0 text-ink-3" />
+        <span className="panel-title">连接</span>
+        <span className="panel-count">{connections.length}</span>
+        <span className="flex-1" />
+        <button
+          className="btn-icon h-6 w-6"
+          title="导出 / 导入连接（发给同事直接可用）"
+          aria-label="导入导出"
+          onClick={(e) => transferMenu.openMenu(e, 'transfer')}
+        >
+          <ArrowDownUp size={13} />
+        </button>
+        <button
+          className="btn-icon h-6 w-6"
+          title="从剪贴板识别 ssh 命令并新建连接"
+          aria-label="剪贴板导入"
+          onClick={() => void importFromClipboard()}
+        >
+          <ClipboardPaste size={13} />
+        </button>
+        <button
+          className="btn-icon h-6 w-6"
+          title="新建连接 (Ctrl+N)"
+          aria-label="新建连接"
+          onClick={() => onEdit(null)}
+        >
+          <Plus size={14} />
+        </button>
+      </div>
+
+      {/* 搜索：独占一行，宽度足够看清长主机名 */}
+      <div className="panel-toolbar">
+        <div className="relative flex-1">
           <Search size={12} className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-ink-3" />
           <input
             className="input h-7 py-0 pl-7 pr-6 text-xs"
@@ -144,36 +201,13 @@ export function ConnectionSidebar({
             </button>
           )}
         </div>
-        <div className="flex items-center gap-1">
-          <button
-            className="btn-icon h-6 flex-1 gap-1 px-1.5 text-2xs"
-            title="导出 / 导入连接（发给同事直接可用）"
-            onClick={(e) => transferMenu.openMenu(e, 'transfer')}
-          >
-            <ArrowDownUp size={13} />
-            <span>导入导出</span>
-          </button>
-          <button
-            className="btn-icon h-6 flex-1 gap-1 px-1.5 text-2xs"
-            title="从剪贴板识别 ssh 命令并新建连接"
-            onClick={() => void importFromClipboard()}
-          >
-            <ClipboardPaste size={13} />
-            <span>剪贴板</span>
-          </button>
-          <button
-            className="btn-icon h-6 flex-1 gap-1 px-1.5 text-2xs"
-            title="新建连接 (Ctrl+N)"
-            onClick={() => onEdit(null)}
-          >
-            <Plus size={14} />
-            <span>新建</span>
-          </button>
-        </div>
       </div>
 
       {/* 列表 */}
-      <div className="scroll-thin min-h-0 flex-1 overflow-y-auto p-1.5">
+      <div
+        data-testid="connection-sidebar"
+        className="panel-body"
+      >
         {groups.length === 0 && (
           <EmptyState
             icon={<SquareTerminal size={26} />}
@@ -186,93 +220,161 @@ export function ConnectionSidebar({
           />
         )}
 
-        {groups.map(({ group, items }) => (
-          <div key={group} className="mb-0.5">
-            <button
-              className="flex w-full cursor-default items-center gap-1 rounded-md px-1.5 py-1 text-2xs font-medium text-ink-3 transition-colors hover:text-ink-2"
-              onClick={() => toggleGroup(group)}
-            >
-              {collapsed[group] ? <ChevronRight size={11} /> : <ChevronDown size={11} />}
-              <span className="truncate">{group}</span>
-              <span className="text-ink-3/60">{items.length}</span>
-            </button>
+        {groups.map(({ group, items }) => {
+          const searching = keyword.trim().length > 0
+          // 用户手动折叠过就听用户的；没动过时，超长分组默认收起
+          const isCollapsed =
+            collapsed[group] !== undefined
+              ? collapsed[group]
+              : items.length > LARGE_GROUP && !searching
+          const limit = shown[group] ?? PAGE_SIZE
+          const visible = searching ? items : items.slice(0, limit)
+          const rest = items.length - visible.length
 
-            {!collapsed[group] &&
-              items.map((c) => {
-                const live = sessions.find((s) => s.connectionId === c.id)
-                return (
-                  <div
-                    key={c.id}
-                    className={cn(
-                      'group relative cursor-default rounded-md py-1.5 pl-2 pr-1 transition-colors duration-75',
-                      selectedId === c.id ? 'bg-hover' : 'hover:bg-hover/60'
-                    )}
-                    onClick={() => setSelectedId(c.id)}
-                    onDoubleClick={() => openConnection(c)}
-                    onContextMenu={(e) => openMenu(e, c)}
-                  >
-                    <div className="flex items-center gap-2">
-                      {/* 色标 */}
-                      <span
-                        className="h-4 w-[3px] shrink-0 rounded-full"
-                        style={{ background: c.color ?? 'rgb(var(--c-edge))' }}
-                      />
+          return (
+            <div key={group} className="mb-1">
+              {/* 分组头做成 sticky：几千条连接往下滚时，永远知道自己在哪个组 */}
+              <button
+                className="sticky top-0 z-10 flex w-full cursor-default items-center gap-1 rounded-md bg-panel px-1.5 py-1 text-2xs font-semibold text-ink-3 transition-colors hover:text-ink-2"
+                onClick={() => toggleGroup(group, isCollapsed)}
+              >
+                {isCollapsed ? <ChevronRight size={11} /> : <ChevronDown size={11} />}
+                <span className="truncate">{group}</span>
+                <span className="font-mono font-normal text-ink-3/60">{items.length}</span>
+              </button>
 
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-center gap-1.5">
-                          <span className="truncate text-xs text-ink">{c.name}</span>
-                          {live && (
+              {!isCollapsed &&
+                visible.map((c) => {
+                  const live = sessionByConn.get(c.id)
+                  const active = selectedId === c.id
+                  /*
+                   * 「最近使用」只对七天内用过的连接显示。
+                   * 原来每行都印一个相对时间（`3 天前` / `2 个月前`），
+                   * 2929 行里 2900 行都是几个月前的同一个灰字 —— 它不再是信息，
+                   * 而是一层均匀的噪点，把真正需要区分的名字/主机压了下去。
+                   */
+                  const recent =
+                    c.lastUsedAt !== undefined && Date.now() - c.lastUsedAt < 7 * 24 * 3600 * 1000
+                  return (
+                    <div
+                      key={c.id}
+                      data-conn-id={c.id}
+                      tabIndex={0}
+                      role="button"
+                      className={cn(
+                        'group relative cursor-default rounded-md py-1.5 pl-2 pr-1 transition-colors duration-150',
+                        'focus-visible:bg-hover focus-visible:outline-none',
+                        active ? 'bg-select' : 'hover:bg-hover'
+                      )}
+                      onClick={() => setSelectedId(c.id)}
+                      onDoubleClick={() => openConnection(c)}
+                      onKeyDown={(e) => {
+                        // 选中态存在的意义就是「键盘能接着操作」，否则单选没有落点
+                        if (e.key === 'Enter') openConnection(c)
+                      }}
+                      onContextMenu={(e) => openMenu(e, c)}
+                    >
+                      <div className="flex items-center gap-2">
+                        {/*
+                         * 色标只在用户真的设过颜色时出现。
+                         * 之前没设颜色也画一条 --c-edge 的灰竖线「保持左缘对齐」，
+                         * 结果几千行浅灰短横在左缘排成一道虚线，比不画还乱。
+                         * 对齐改由下面的固定宽度占位保证 —— 占位不留背景色。
+                         */}
+                        <span className="flex h-4 w-[3px] shrink-0 items-center justify-center">
+                          {c.color && (
                             <span
-                              className={cn(
-                                'h-1.5 w-1.5 shrink-0 rounded-full',
-                                live.status === 'connected' && 'bg-success',
-                                live.status === 'connecting' && 'bg-warning animate-pulse-soft',
-                                live.status === 'error' && 'bg-danger',
-                                live.status === 'disconnected' && 'bg-ink-3'
-                              )}
+                              className="h-4 w-full rounded-full"
+                              style={{ background: c.color }}
                             />
                           )}
-                          <span className="shrink-0 text-2xs text-ink-3/70">
-                            {formatRelativeTime(c.lastUsedAt)}
-                          </span>
-                        </div>
-                      </div>
+                        </span>
 
-                      <button
-                        className="btn-icon h-6 w-6 shrink-0 opacity-0 transition-opacity group-hover:opacity-100"
-                        title="打开连接"
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          openConnection(c)
-                        }}
-                      >
-                        <Plug size={13} />
-                      </button>
-                    </div>
-                    {/* 主机信息单独一行，占满宽度，不再与时间戳互相挤压 */}
-                    <div className="mt-0.5 truncate pl-[11px] font-mono text-2xs text-ink-3" title={`${c.username}@${c.host}:${c.port}`}>
-                      {c.username}@{c.host}:{c.port}
-                    </div>
-                    {c.tags.length > 0 && (
-                      <div className="mt-1 flex flex-wrap gap-1 pl-[11px]">
-                        {c.tags.slice(0, 3).map((t) => (
-                          <span
-                            key={t}
-                            className="max-w-[76px] truncate rounded border border-edge-soft bg-raised px-1 py-px text-[10px] leading-tight text-ink-3"
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-1.5">
+                            <span className="truncate text-xs text-ink">{c.name}</span>
+                            {live && (
+                              <span
+                                className={cn(
+                                  'h-1.5 w-1.5 shrink-0 rounded-full',
+                                  live.status === 'connected' && 'bg-success',
+                                  live.status === 'connecting' && 'bg-warning animate-pulse-soft',
+                                  live.status === 'error' && 'bg-danger',
+                                  live.status === 'disconnected' && 'bg-ink-3'
+                                )}
+                              />
+                            )}
+                            <span className="flex-1" />
+                            {recent && (
+                              <span className="shrink-0 text-3xs tabular-nums text-ink-3/60">
+                                {formatRelativeTime(c.lastUsedAt)}
+                              </span>
+                            )}
+                          </div>
+
+                          {/* 主机信息：等宽字体，单行省略，悬停看完整地址 */}
+                          <div
+                            className="mt-0.5 truncate pl-[11px] font-mono text-2xs text-ink-3"
+                            title={`${c.username}@${c.host}:${c.port}`}
                           >
-                            {t}
-                          </span>
-                        ))}
-                        {c.tags.length > 3 && (
-                          <span className="text-[10px] text-ink-3/70">+{c.tags.length - 3}</span>
-                        )}
+                            {c.username}@{c.host}:{c.port}
+                          </div>
+
+                          {c.tags.length > 0 && (
+                            <div className="mt-1 flex gap-1 pl-[11px]">
+                              {c.tags.slice(0, 2).map((t) => (
+                                <span
+                                  key={t}
+                                  className="max-w-[76px] truncate rounded border border-edge-soft px-1 text-3xs leading-4 text-ink-3"
+                                >
+                                  {t}
+                                </span>
+                              ))}
+                              {c.tags.length > 2 && (
+                                <span className="text-3xs leading-4 text-ink-3/70">
+                                  +{c.tags.length - 2}
+                                </span>
+                              )}
+                            </div>
+                          )}
+                        </div>
+
+                        {/*
+                         * 打开按钮用绝对定位悬浮在行右缘，而不是当作 flex 子项。
+                         * 作为子项时它即使 opacity-0 也照样占 24px，长设备名
+                         * （`RTU-消毒仓-3号-2024改`）会被无谓地截短 24px。
+                         */}
+                        <button
+                          className="btn-icon absolute right-1 top-1/2 h-6 w-6 -translate-y-1/2 opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-visible:opacity-100"
+                          title="打开连接"
+                          tabIndex={-1}
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            openConnection(c)
+                          }}
+                        >
+                          <Plug size={13} />
+                        </button>
                       </div>
-                    )}
-                  </div>
-                )
-              })}
-          </div>
-        ))}
+                    </div>
+                  )
+                })}
+
+              {/* 分页尾巴：一次只铺 60 条，剩下的一次点一下补一屏 */}
+              {!isCollapsed && rest > 0 && (
+                <button
+                  className="mb-1 mt-0.5 flex w-full items-center justify-center gap-1 rounded-md border border-dashed border-edge-soft py-1 text-2xs text-ink-3 transition-colors hover:border-edge hover:bg-hover hover:text-ink-2"
+                  onClick={() =>
+                    setShown((s) => ({ ...s, [group]: (s[group] ?? PAGE_SIZE) + PAGE_SIZE * 2 }))
+                  }
+                >
+                  <ChevronDown size={11} />
+                  还有 {rest} 条，继续展开
+                </button>
+              )}
+            </div>
+          )
+        })}
       </div>
 
       {menu && <ContextMenu x={menu.x} y={menu.y} items={menuItems(menu.target)} onClose={closeMenu} />}

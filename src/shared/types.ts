@@ -191,7 +191,14 @@ export type ThemeMode = 'dark' | 'light' | 'system'
  *   colorTheme 在这套明暗之上换一整套配色
  * 每个配色主题都同时提供 dark 与 light 两套变量，因此任意组合都成立。
  */
-export type ColorThemeId = 'workbench' | 'dracula' | 'nord' | 'solarized' | 'onedark' | 'gruvbox'
+export type ColorThemeId =
+  | 'vscode'
+  | 'workbench'
+  | 'dracula'
+  | 'nord'
+  | 'solarized'
+  | 'onedark'
+  | 'gruvbox'
 
 export interface TerminalPrefs {
   fontFamily: string
@@ -204,7 +211,7 @@ export interface TerminalPrefs {
 
 export interface AppSettings {
   theme: ThemeMode
-  /** 配色主题（缺省为 workbench，即原有 GitHub 风格配色） */
+  /** 配色主题（缺省为 vscode，即浅色 VS Code 规范配色） */
   colorTheme?: ColorThemeId
   terminal: TerminalPrefs
   /** 常用命令面板位置 */
@@ -223,6 +230,35 @@ export interface AppSettings {
   commandGroups?: string[]
   /** 常用命令分组的显示顺序（分组名数组）；未列出的分组排在后面按名称排序 */
   commandGroupOrder?: string[]
+  /** 三栏尺寸（拖拽分隔条后写入）；缺省用渲染层内置默认值，老配置无需迁移 */
+  layout?: LayoutSizes
+  /** 命令中心里收藏（置顶）的命令 id */
+  pinnedCommandIds?: string[]
+  /** 命令中心默认排序方式 */
+  commandSort?: 'smart' | 'name' | 'recent' | 'frequent'
+  /**
+   * 外观外壳版本号。
+   *
+   * 每次外壳整体换代就 +1，用于把老配置一次性迁到新默认值 ——
+   * 老配置里存的主题/配色/字体恰好等于旧默认值，单看值分不清是
+   * 「用户主动选的」还是「装的时候写进去的」，只能靠版本号判定。
+   */
+  uiShellVersion?: number
+}
+
+/**
+ * 侧栏尺寸。每个值都是「用户显式拖动过」才会写入，
+ * 缺省时渲染层用内置默认值。
+ *
+ * 只有 sidebar 一个键 —— 新外壳把连接/文件/命令/历史/日志/隧道收进同一个
+ * 侧栏由活动栏切换，横向只剩这一个自由度。老配置里的 fileTree /
+ * commandPanel / commandPanelHeight 会留在文件里（无害），但不再读取。
+ */
+export interface LayoutSizes {
+  /** 右侧命令栏宽度（常用命令常驻在右侧，一行三个按钮） */
+  commandRail?: number
+  /** 左侧面板栏宽度 */
+  sidebar?: number
 }
 
 /** 可自定义的快捷键动作 */
@@ -230,11 +266,13 @@ export type ShortcutAction =
   | 'newConnection'
   | 'settings'
   | 'togglePanel'
+  | 'toggleCommandRail'
   | 'nextTab'
   | 'closeTab'
   | 'terminalSearch'
   | 'terminalCopy'
   | 'terminalPaste'
+  | 'commandCenter'
 
 export type ShortcutMap = Partial<Record<ShortcutAction, string>>
 

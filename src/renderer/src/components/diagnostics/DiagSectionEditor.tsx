@@ -140,7 +140,7 @@ export function DiagSectionEditor({
 
         <Field label="采集命令（在设备侧执行，支持 ; || 组合与重定向）">
           <textarea
-            className="textarea selectable min-h-[72px] font-mono text-[11px] leading-relaxed"
+            className="textarea selectable min-h-[72px] font-mono text-2xs leading-relaxed"
             value={form.command}
             onChange={(e) => set('command', e.target.value)}
             placeholder="例如：ls -l /dev/tty* 2>/dev/null; cat /proc/tty/drivers 2>/dev/null"

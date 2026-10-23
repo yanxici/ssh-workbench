@@ -13,7 +13,13 @@ interface ConnectionState {
   save: (input: ConnectionInput) => Promise<Connection | null>
   remove: (id: string) => Promise<boolean>
   setKeyword: (kw: string) => void
-  toggleGroup: (group: string) => void
+  /**
+   * 折叠/展开一个分组。
+   * currentlyCollapsed 必须传「界面当前的视觉状态」——超长分组是默认折叠但
+   * collapsed[group] 仍是 undefined，若只按 !collapsed[group] 取反，
+   * 第一次点击会把它设成「折叠」，看起来像点了没反应。
+   */
+  toggleGroup: (group: string, currentlyCollapsed?: boolean) => void
 }
 
 export const useConnectionStore = create<ConnectionState>()((set) => ({
@@ -50,8 +56,17 @@ export const useConnectionStore = create<ConnectionState>()((set) => ({
 
   setKeyword: (keyword) => set({ keyword }),
 
-  toggleGroup: (group) =>
-    set((s) => ({ collapsed: { ...s.collapsed, [group]: !s.collapsed[group] } }))
+  toggleGroup: (group, currentlyCollapsed) =>
+    set((s) => ({
+      collapsed: {
+        ...s.collapsed,
+        // 有显式状态就按它取反（这是默认折叠分组第一次点击的正确行为）
+        [group]:
+          currentlyCollapsed !== undefined
+            ? !currentlyCollapsed
+            : !s.collapsed[group]
+      }
+    }))
 }))
 
 export interface ConnectionGroup {

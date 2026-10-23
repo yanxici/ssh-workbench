@@ -212,7 +212,7 @@ export function LogPlayerDialog({
           {/* 只读进度条 */}
           <div className="mx-2 h-1 min-w-0 flex-1 overflow-hidden rounded-full bg-raised">
             <div
-              className="h-full rounded-full bg-accent transition-all duration-150"
+              className="h-full rounded-full bg-accent transition-[width] duration-150"
               style={{ width: `${Math.round(progress * 100)}%` }}
             />
           </div>

@@ -87,7 +87,7 @@ export function BundleDialog({
               已导出 {result.entries} 个文件（{formatBytes(result.size)}）
             </div>
           </div>
-          <div className="selectable break-all rounded-md border border-edge bg-app px-2.5 py-2 font-mono text-[11px] text-ink-3">
+          <div className="selectable break-all rounded-md border border-edge bg-app px-2.5 py-2 font-mono text-2xs text-ink-3">
             {result.path}
           </div>
           <div className="text-2xs leading-relaxed text-ink-3">
@@ -178,7 +178,7 @@ function BundleRow({
     >
       <div className="min-w-0 flex-1">
         <div className="text-xs text-ink-2">{label}</div>
-        <div className="mt-0.5 text-[10px] text-ink-3">{detail}</div>
+        <div className="mt-0.5 text-3xs text-ink-3">{detail}</div>
       </div>
       <Toggle checked={checked} onChange={onChange} disabled={disabled} />
     </div>

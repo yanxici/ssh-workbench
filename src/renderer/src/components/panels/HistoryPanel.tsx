@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Eraser, Play, Search, Star } from 'lucide-react'
+import { Eraser, History, Play, Search, Star } from 'lucide-react'
 import type { CommandHistoryEntry } from '@shared/types'
 import { useCommandStore } from '@/stores/commandStore'
 import { useConnectionStore } from '@/stores/connectionStore'
@@ -72,43 +72,50 @@ export function HistoryPanel(): JSX.Element {
 
   return (
     <div className="flex h-full flex-col">
-      <div className="shrink-0 space-y-1.5 border-b border-edge-soft p-2">
-        <div className="relative">
+      {/* 头部：和连接/命令/日志面板对齐成同一高度，切面板时内容不跳 */}
+      <div className="panel-head">
+        <History size={13} className="shrink-0 text-ink-3" />
+        <span className="panel-title">命令历史</span>
+        <span className="panel-count">{entries.length}</span>
+        <span className="flex-1" />
+        <button
+          className="btn-icon h-6 w-6"
+          title="清空历史"
+          onClick={() => setConfirmClear(true)}
+        >
+          <Eraser size={13} />
+        </button>
+      </div>
+
+      <div className="panel-toolbar">
+        <div className="relative flex-1">
           <Search
             size={12}
             className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-ink-3"
           />
           <input
-            className="input pl-7"
+            className="input h-7 pl-7 text-xs"
             placeholder="搜索历史命令…"
             value={keyword}
             onChange={(e) => setKeyword(e.target.value)}
           />
         </div>
-        <div className="flex items-center gap-1.5">
-          <select
-            className="input h-6 flex-1 text-2xs"
-            value={connectionId}
-            onChange={(e) => setConnectionId(e.target.value)}
-          >
-            <option value="">全部连接</option>
-            {connections.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.name}
-              </option>
-            ))}
-          </select>
-          <button
-            className="btn-icon h-6 w-6 shrink-0"
-            title="清空历史"
-            onClick={() => setConfirmClear(true)}
-          >
-            <Eraser size={13} />
-          </button>
-        </div>
+        <select
+          className="input h-7 w-[104px] shrink-0 text-2xs"
+          value={connectionId}
+          onChange={(e) => setConnectionId(e.target.value)}
+          title="按连接过滤"
+        >
+          <option value="">全部连接</option>
+          {connections.map((c) => (
+            <option key={c.id} value={c.id}>
+              {c.name}
+            </option>
+          ))}
+        </select>
       </div>
 
-      <div className="scroll-thin min-h-0 flex-1 overflow-y-auto p-1.5">
+      <div className="panel-body">
         {entries.length === 0 && (
           <EmptyState
             icon={<Play size={24} />}
@@ -125,7 +132,7 @@ export function HistoryPanel(): JSX.Element {
             <div className="selectable truncate font-mono text-2xs text-ink-2" title={e.command}>
               {e.command}
             </div>
-            <div className="mt-1 flex items-center gap-1.5 text-[10px] text-ink-3">
+            <div className="mt-1 flex items-center gap-1.5 text-3xs text-ink-3">
               <span>{formatRelativeTime(e.executedAt)}</span>
               <span className="text-ink-3/50">·</span>
               <span className="truncate">{e.connectionName}</span>

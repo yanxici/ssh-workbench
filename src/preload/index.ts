@@ -167,7 +167,9 @@ export const api = {
       invoke(IPC.CMD_DELETE_GROUP, group),
     import: (mode: 'merge' | 'replace'): Promise<IpcResult<ImportCommandsResult>> =>
       invoke(IPC.CMD_IMPORT, mode),
-    export: (): Promise<IpcResult<ExportCommandsResult>> => invoke(IPC.CMD_EXPORT)
+    export: (): Promise<IpcResult<ExportCommandsResult>> => invoke(IPC.CMD_EXPORT),
+    /** 执行成功后打点：useCount+1 / lastUsedAt，驱动「最近 / 最常用」 */
+    touch: (id: string): Promise<IpcResult<Command | null>> => invoke(IPC.CMD_TOUCH, id)
   },
 
   history: {

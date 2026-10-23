@@ -178,7 +178,7 @@ export function TransferProgressDock(): JSX.Element | null {
         collapsed ? 'w-[250px]' : 'w-[380px] max-w-[calc(100vw-24px)]'
       )}
     >
-      <div className="overflow-hidden rounded-lg border border-edge bg-panel/95 shadow-pop backdrop-blur">
+      <div className="overflow-hidden rounded-lg border border-edge bg-panel shadow-pop">
         {/* 标题栏：点击折叠 / 展开 */}
         <div className="flex items-center gap-2 px-2.5 py-1.5">
           <button
@@ -241,7 +241,7 @@ export function TransferProgressDock(): JSX.Element | null {
           <div className="h-1.5 bg-raised">
             <div
               className={cn(
-                'h-full rounded-r-full transition-[width] duration-200',
+                'h-full rounded-r-full transition-[width] duration-150',
                 pausedCount === active.length ? 'bg-ink-3' : 'bg-accent'
               )}
               style={{ width: `${Math.max(overall, 1)}%` }}
@@ -380,7 +380,7 @@ function TransferRow({
       <div className="mt-1 h-1 overflow-hidden rounded-full bg-raised">
         <div
           className={cn(
-            'h-full rounded-full transition-[width] duration-200',
+            'h-full rounded-full transition-[width] duration-150',
             barColor,
             task.status === 'pending' && 'animate-pulse-soft'
           )}
@@ -390,7 +390,7 @@ function TransferRow({
         />
       </div>
 
-      <div className="mt-0.5 flex items-center gap-2 font-mono text-[10px] leading-3 text-ink-3">
+      <div className="mt-0.5 flex items-center gap-2 font-mono text-3xs leading-3 text-ink-3">
         <span className="min-w-0 flex-1 truncate">
           {failed ? task.error ?? '传输失败' : amount.left}
         </span>

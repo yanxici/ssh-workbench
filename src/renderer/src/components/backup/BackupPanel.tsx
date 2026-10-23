@@ -101,7 +101,7 @@ function BackupRow({ backup, selected }: { backup: BackupMeta; selected: boolean
         <div className={cn('truncate text-xs', selected ? 'text-ink' : 'text-ink-2')}>
           {backup.name}
         </div>
-        <div className="mt-0.5 flex items-center gap-1.5 text-[10px] text-ink-3">
+        <div className="mt-0.5 flex items-center gap-1.5 text-3xs text-ink-3">
           <span className="truncate">{backup.host}</span>
           <span>·</span>
           <span>{formatTime(backup.createdAt)}</span>
@@ -219,7 +219,7 @@ function BackupDetailView(): JSX.Element {
 
         <div className="mt-1.5 flex flex-wrap gap-1">
           {detail.paths.map((p) => (
-            <span key={p} className="rounded bg-raised px-1.5 py-px font-mono text-[10px] text-ink-3">
+            <span key={p} className="rounded bg-raised px-1.5 py-px font-mono text-3xs text-ink-3">
               {p}
             </span>
           ))}
@@ -246,10 +246,10 @@ function BackupDetailView(): JSX.Element {
               }}
             >
               <FileText size={12} className="shrink-0 text-ink-3" />
-              <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-ink-2">
+              <span className="min-w-0 flex-1 truncate font-mono text-2xs text-ink-2">
                 {f.path}
               </span>
-              <span className="shrink-0 font-mono text-[10px] text-ink-3">
+              <span className="shrink-0 font-mono text-3xs text-ink-3">
                 {f.size > 0 ? formatBytes(f.size) : ''}
               </span>
               <DiffStatusChip entry={f.error} diff={d} />
@@ -273,9 +273,9 @@ function BackupDetailView(): JSX.Element {
       {diffPath && (
         <div className="flex h-[42%] min-h-[200px] shrink-0 flex-col border-t border-edge">
           <div className="flex shrink-0 items-center gap-2 border-b border-edge-soft bg-panel px-3 py-1">
-            <span className="font-mono text-[11px] text-ink-2">{diffPath}</span>
+            <span className="font-mono text-2xs text-ink-2">{diffPath}</span>
             {diff && (
-              <span className="text-[10px] text-ink-3">
+              <span className="text-3xs text-ink-3">
                 {diff.status === 'same' && '无差异'}
                 {diff.status === 'changed' && (
                   <>
@@ -289,7 +289,7 @@ function BackupDetailView(): JSX.Element {
             )}
             {diffing && <RefreshCw size={11} className="animate-spin text-accent" />}
             <span className="flex-1" />
-            <span className="text-[10px] text-ink-3">绿=设备新增 · 红=设备删除（相对备份）</span>
+            <span className="text-3xs text-ink-3">绿=设备新增 · 红=设备删除（相对备份）</span>
             <button
               className="btn h-6 px-2 text-2xs"
               disabled={!compareSessionId}
@@ -302,7 +302,7 @@ function BackupDetailView(): JSX.Element {
               <X size={11} />
             </button>
           </div>
-          <div className="scroll-thin min-h-0 flex-1 overflow-auto bg-app px-2 py-1.5 font-mono text-[11px] leading-[1.5]">
+          <div className="scroll-thin min-h-0 flex-1 overflow-auto bg-app px-2 py-1.5 font-mono text-2xs leading-[1.5]">
             {!diff && <div className="text-ink-3">对比中…</div>}
             {diff?.status === 'same' && (
               <div className="py-3 text-center text-ink-3">设备当前内容与备份完全一致 ✓</div>
@@ -380,10 +380,10 @@ function DiffStatusChip({
   diff?: BackupDiffResult
 }): JSX.Element {
   if (entry) {
-    return <span className="shrink-0 rounded bg-warning/10 px-1 py-px text-[9px] text-warning" title={entry}>读取失败</span>
+    return <span className="shrink-0 rounded bg-warning/10 px-1 py-px text-3xs text-warning" title={entry}>读取失败</span>
   }
   if (!diff) {
-    return <span className="shrink-0 rounded bg-raised px-1 py-px text-[9px] text-ink-3">未对比</span>
+    return <span className="shrink-0 rounded bg-raised px-1 py-px text-3xs text-ink-3">未对比</span>
   }
   const map = {
     same: ['bg-success/10 text-success', '一致'],
@@ -392,7 +392,7 @@ function DiffStatusChip({
     error: ['bg-danger/10 text-danger', '读取失败']
   } as const
   const [cls, label] = map[diff.status]
-  return <span className={cn('shrink-0 rounded px-1 py-px text-[9px]', cls)}>{label}</span>
+  return <span className={cn('shrink-0 rounded px-1 py-px text-3xs', cls)}>{label}</span>
 }
 
 /* ------------------------------------------------------------------ *
@@ -473,7 +473,7 @@ function CreateBackupModal(): JSX.Element {
           hint="目录会递归采集（深度 ≤ 4 层、单文件 ≤ 512 KB、总量 ≤ 8 MB）"
         >
           <textarea
-            className="textarea selectable min-h-[88px] font-mono text-[11px] leading-relaxed"
+            className="textarea selectable min-h-[88px] font-mono text-2xs leading-relaxed"
             value={paths}
             onChange={(e) => setPaths(e.target.value)}
             placeholder={'/etc/config\n/etc/network/interfaces'}

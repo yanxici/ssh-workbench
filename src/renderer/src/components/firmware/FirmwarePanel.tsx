@@ -78,7 +78,7 @@ function StepCard({
       <div className="flex items-center gap-2 border-b border-edge-soft px-3 py-2">
         <span
           className={cn(
-            'flex h-5 w-5 shrink-0 items-center justify-center rounded-full border text-[10px]',
+            'flex h-5 w-5 shrink-0 items-center justify-center rounded-full border text-3xs',
             status === 'done'
               ? 'border-success/50 bg-success/10 text-success'
               : status === 'doing'
@@ -129,7 +129,7 @@ function TargetBar(): JSX.Element {
         <span className="text-2xs text-warning">没有在线会话，请先在左侧连接设备</span>
       )}
       <span className="flex-1" />
-      <span className="text-[10px] leading-relaxed text-ink-3">
+      <span className="text-3xs leading-relaxed text-ink-3">
         提示：升级前建议先用「一键诊断」留一份体检报告
       </span>
     </div>
@@ -218,7 +218,7 @@ function StepUpload(): JSX.Element {
       {task && (task.status === 'running' || task.status === 'pending') && (
         <div className="mt-2 flex items-center gap-2">
           <div className="h-1.5 min-w-0 flex-1 overflow-hidden rounded-full bg-raised">
-            <div className="h-full bg-accent transition-all duration-200" style={{ width: `${pct}%` }} />
+            <div className="h-full bg-accent transition-[width] duration-150" style={{ width: `${pct}%` }} />
           </div>
           <span className="shrink-0 font-mono text-2xs text-ink-3">
             {pct}%{task.speedBps ? ` · ${formatBytes(task.speedBps)}/s` : ''}
@@ -261,7 +261,7 @@ function StepVerify(): JSX.Element {
       </div>
 
       {verify && (
-        <div className="mt-2 space-y-1 font-mono text-[10px] leading-relaxed">
+        <div className="mt-2 space-y-1 font-mono text-3xs leading-relaxed">
           <div className="text-ink-3">
             本机（{verify.algo}）：<span className="text-ink-2">{verify.localHash}</span>
           </div>
@@ -298,7 +298,7 @@ function StepUpgrade(): JSX.Element {
       status={result ? (result.status === 'done' && result.exitCode === 0 ? 'done' : 'warn') : upgrading ? 'doing' : 'todo'}
     >
       <textarea
-        className="textarea selectable min-h-[56px] font-mono text-[11px] leading-relaxed"
+        className="textarea selectable min-h-[56px] font-mono text-2xs leading-relaxed"
         placeholder="例如：sysupgrade -n {{file}} / fwupdate {{file}} / swupdate -i {{file}}"
         value={command}
         onChange={(e) => useFirmwareStore.getState().setUpgradeCommand(e.target.value)}
@@ -369,7 +369,7 @@ function StepUpgrade(): JSX.Element {
       </div>
 
       {(log || upgrading) && (
-        <pre className="scroll-thin mt-2 max-h-[280px] overflow-auto whitespace-pre-wrap break-words rounded-md border border-edge bg-app px-2.5 py-2 font-mono text-[10.5px] leading-relaxed text-ink-2">
+        <pre className="scroll-thin mt-2 max-h-[280px] overflow-auto whitespace-pre-wrap break-words rounded-md border border-edge bg-app px-2.5 py-2 font-mono text-3xs leading-relaxed text-ink-2">
           {log || '等待输出…'}
         </pre>
       )}
@@ -390,7 +390,7 @@ function StepUpgrade(): JSX.Element {
           {result.status === 'cancelled' && '已取消'}
           {result.status === 'error' && `执行失败：${result.error ?? '未知原因'}`}
           {result.error && result.status === 'done' && result.exitCode !== 0 && (
-            <div className="mt-0.5 font-mono text-[10px] text-ink-3">{result.error}</div>
+            <div className="mt-0.5 font-mono text-3xs text-ink-3">{result.error}</div>
           )}
         </div>
       )}
@@ -504,7 +504,7 @@ function StepReboot(): JSX.Element {
       )}
 
       {bootLog && (
-        <pre className="scroll-thin mt-2 max-h-[300px] overflow-auto whitespace-pre-wrap break-words rounded-md border border-edge bg-app px-2.5 py-2 font-mono text-[10.5px] leading-relaxed text-ink-2">
+        <pre className="scroll-thin mt-2 max-h-[300px] overflow-auto whitespace-pre-wrap break-words rounded-md border border-edge bg-app px-2.5 py-2 font-mono text-3xs leading-relaxed text-ink-2">
           {bootLog}
         </pre>
       )}

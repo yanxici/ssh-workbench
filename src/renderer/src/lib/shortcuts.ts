@@ -6,9 +6,13 @@ import type { ShortcutAction, ShortcutMap } from '@shared/types'
  */
 
 export const SHORTCUT_ACTIONS: Array<{ id: ShortcutAction; label: string; default: string }> = [
+  { id: 'commandCenter', label: '打开命令中心', default: 'Ctrl+K' },
   { id: 'newConnection', label: '新建连接', default: 'Ctrl+N' },
   { id: 'settings', label: '打开设置', default: 'Ctrl+,' },
-  { id: 'togglePanel', label: '折叠/展开命令面板', default: 'Ctrl+B' },
+  { id: 'togglePanel', label: '折叠/展开侧边栏', default: 'Ctrl+B' },
+  // 命令栏在窗口右侧，和侧边栏是两个独立的开合目标，
+  // 快捷键也要分开 —— 共用一个键会让人分不清「收起的是哪一块」。
+  { id: 'toggleCommandRail', label: '折叠/展开命令栏', default: 'Ctrl+Alt+B' },
   { id: 'nextTab', label: '下一个标签', default: 'Ctrl+Tab' },
   { id: 'closeTab', label: '关闭当前标签', default: 'Ctrl+Shift+W' },
   { id: 'terminalSearch', label: '终端内搜索', default: 'Ctrl+F' },

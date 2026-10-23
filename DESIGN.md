@@ -65,12 +65,16 @@ ssh-workbench/
 │        ├─ styles/index.css      # 主题变量（暗/亮）+ 组件类（btn/input/menu/modal）
 │        ├─ theme/terminalThemes.ts
 │        ├─ lib/                  # utils / ipc 解包助手 / 图标白名单
-│        ├─ stores/               # zustand：settings/connection/session/command/execution/toast
+│        │  ├─ fuzzy.ts           #   零依赖模糊匹配（子串 + 子序列，带命中区间）
+│        │  ├─ commandSearch.ts   #   命令检索：字段加权 / 中英同义 / 使用热度 / 范围索引
+│        │  ├─ layout.ts          #   栏宽规格表（上下限 / 拖拽换算 / 夹取）
+│        │  └─ shortcuts.ts       #   快捷键动作表与默认键位
+│        ├─ stores/               # zustand：settings/connection/session/command/execution/toast/ui
 │        └─ components/
-│           ├─ layout/            #   TabBar / StatusBar
+│           ├─ layout/            #   TabBar / StatusBar / PaneResizer
 │           ├─ connections/       #   ConnectionSidebar / ConnectionEditor
 │           ├─ terminal/          #   TerminalView（xterm 集成）
-│           ├─ commands/          #   CommandPanel / CommandEditor
+│           ├─ commands/          #   CommandPanel / CommandCenter / CommandEditor / Highlight
 │           ├─ panels/            #   HistoryPanel
 │           ├─ settings/          #   SettingsPanel
 │           ├─ execution/         #   VariablePromptDialog / DangerConfirmDialog
@@ -116,6 +120,132 @@ xterm.write  ◀──webContents.send── EVT_SESSION_DATA ◀── shell da
 - 面板支持分组折叠、关键字搜索、组内拖拽排序（不动其他组）、右键（执行/编辑/复制/删除）；
 - 历史可一键收藏为常用命令（入「收藏」分组），useCount 随执行自动累计。
 
+### 5.1 命令检索模型（P3-c 增补）
+
+- 三层纯函数：`fuzzy.ts`（子串/子序列打分 + 命中下标）、`commandSearch.ts`（范围过滤 + 排序 + 同义词）、`layout.ts`（栏宽规格）；
+- **按钮墙优先**：搜索词为空时，`CommandPanel` 与 `CommandCenter` 都按分组铺「堆叠按钮墙」，不再铺长列表 —— 命令多到几十条以后，找一条命令本来就该是「用眼睛扫」，而不是先想关键字再搜；一旦输入关键字才退回按相关度排序的列表；
+- **按钮墙列数自适应**：`CommandPanel` 用 `grid-template-columns: repeat(auto-fill, minmax(112px, 1fr))`（横排 132px），列数由侧栏实际宽度决定 —— 侧栏现在可拖到 220~520，写死 `grid-cols-2` 在 520 时会剩一大片空白、在 220 时把命令名挤成省略号。冒烟 `wallColsProbe` 卡住这条：280px → 2 列、520px → 4 列；`CommandCenter` 浮层宽度固定，仍用 `WALL_COLS = 3`，**键盘 ↑↓ 的步长必须等于列数**，否则光标会跳到相邻列而非相邻行；墙上 `←/→` 单格移动；
+- 卡片只显示「图标 + 名称 + 命令行」，热度/相对时间/危险标记都收进 `title`，目标是可扫读；右上角一个槽位，平时显示角标（Pin / 警示 / 变量），悬停交叉淡入换成收藏与编辑按钮 —— 两者不能同时占据同一坐标，否则按钮会盖在警示三角上；
+- **卡片底色用 `bg-app`（白）+ `border-edge` 实边框**，不用 `bg-raised`：侧栏底色是 `#f8f9fa`，`#fafafa` 只差 1.5%，126 个按钮会糊成一片看不出边界；
+- **分组标题竖排时 `sticky top-0`**：一屏放不下 10 个分组，滚两屏后看不出自己在哪个分组里；横排是每分组一列，列头天然常在，不吸顶；
+- 性能：卡片里的索引必须走 `Map`（`flatIndexById` / `resultIndexById`），不能每块都 `findIndex` —— 否则鼠标一动 `setCursor` 就触发 O(n²) 重算。
+
+命令管理器两个入口：
+
+命令一多，原来的「长列表 + 分组折叠 + `toLowerCase().includes` 过滤」就不够用了：搜 `gst` 找不到 `git status`，搜 `disk` 找不到「磁盘占用」（名字是中文、命令是英文）。因此把检索拆成三层独立纯函数，可单测、不依赖 React。
+
+**① 模糊匹配 `src/renderer/src/lib/fuzzy.ts`**
+
+`fuzzyMatch(text, query): { score, indices, direct } | null`
+
+- 子串命中走高分档（1000 基分：开头 +220、词首 +130、长度稀释扣分），`direct = true`；
+- 否则走子序列（每个字符词首 +18 / 连续 +10 / 越靠前越高，跨度越长扣分），`direct = false`；
+- **子序列带地板值 `SUBSEQUENCE_FLOOR = 118`，低于就返回 null** —— 长 shell 命令里随手能凑出 `d…i…s…k`，不设地板敲 `disk` 会冒出「GPIO 状态」（其命令文本含 `debugfs…kernel`）；
+- 返回 `indices` 供 UI 高亮。
+
+**② 中英同义扩展 `commandSearch.ts` 的 `SYNONYMS` / `synonymsOf()`**
+
+命令名是中文（「磁盘占用」）、命令文本是英文（`df -h`），只按字面匹配必然对不上。维护 22 组 `{ zh: [...], en: [...] }` 对照表，`synonymsOf(query)` 返回同义的「另一半」词：
+
+- 只收有辨识度的词；`dev` / `ip` / `config` / `image` / `unit` 这类通用词一律不收，否则搜「串口」会把所有含 `/dev/` 的命令全捞进来；
+- 单字符不扩展（噪声太大）；
+- **别名兜底时只认子串命中（`demandDirect`），且得分 ×0.8** —— 别名都是 2~3 字母短词，放开子序列会给「错误关键字汇总」「查看 IP 地址」「重启网络服务」这类误命中开门；
+- 命中别名时在 `RankedCommand.via` 里记录来源，UI 显示「≈磁盘」小徽标，用户能看懂为什么这条被列出来。
+
+**③ 排序与范围 `searchCommands` / `buildScopes`**
+
+- 字段权重：名称 ×3、命令 ×2、分组 ×1、描述 ×0.6，取最高分那一路；
+- 使用热度 `usageScore = log2(1 + useCount) × 26 + 40 × exp(-天数 / 7)`（次数取对数 + 一周半衰），叠加 ×0.5；
+- 收藏是硬加权（+1000），保证置顶；
+- 范围索引 `buildScopes`：全部 / 最近使用（30 天窗）/ 最常用 / 已收藏 四个虚拟范围，后面接真实分组（支持 `k8s/pod` 这类层级，带深度缩进与计数）。
+
+**热度数据链路**：`Command.useCount / lastUsedAt` 两个字段本来就在模型里但从未写入。现由 `executionStore.send()` 在命令写进终端后调 `window.api.command.touch(id)`，主进程 `touchCommand()` 读改写累加 —— 于是「最近 / 最常用」不再是摆设。
+
+**两个入口共享同一套检索**：
+- `CommandPanel`（右栏，常驻）：搜索框常驻 + 全部/收藏/最近 chip + 排序轮转；无搜索词时按分组铺按钮墙，单击执行、`Ctrl+单击` 编辑、右键更多；
+- `CommandCenter`（`Ctrl+K` 全屏浮层）：左范围索引 + 顶部搜索 + 三档排序 + 键盘全操作（↑↓←→ 选择 / ↵ 执行 / Ctrl+↵ 编辑 / Tab 切范围 / Ctrl+D 收藏）；无搜索词时同样是按钮墙，底部提示条会显示「按钮墙」。
+
+### 5.2 栏宽可调（UI 精緻度）
+- 现在有**两个**可拖区域：`src/renderer/src/lib/layout.ts` 的 `PaneKey = 'sidebar' | 'commandRail'`；
+  - `PANE_SPECS.sidebar = { default: 280, min: 220, max: 520, axis: 'x', sign: 1 }` —— 默认从旧的 250 提到 280，因为 250 时 `root@192.168.100.120` 会被截断成 `root@192.168.100.…`，一行认不出是哪台设备；
+  - `PANE_SPECS.commandRail = { default: 380, min: 340, max: 600, axis: 'x', sign: -1 }` —— 下限 340 是「固定三列放得下」算出来的（每列要放图标 20 + 间隔 6 + 内边距 16，再留 4~5 个中文字），上限 600 是「再宽不如收起，把宽度还给终端」；
+- **`sign` 决定拖动方向语义**：左侧栏 `sign=1`（向右拖变宽），右侧命令栏 `sign=-1`（向左拖变宽）。这是这套代码最容易写反的地方，`verify-layout.cjs` 对两栏各测一遍「拖出去到底是变宽还是变窄」；
+- 连接 / 文件 / 历史 / 日志 / 隧道五个面板共用左侧栏（由 `useLayoutStore.activityView` 切换），常用命令**不在侧栏**（见 §5.6）；老配置里的 `fileTree / commandPanel / commandPanelHeight` 被 `resolveLayout` 直接忽略，`LayoutSizes` 已收缩为 `{ sidebar?, commandRail? }`；
+- `PaneResizer` 组件：拖拽改宽、双击复位、方向键微调、悬停/拖拽/已自定义时高亮；热区用负 margin 做到净占位 0，不占布局宽度；对应栏收起时不渲染 —— 否则 6px 热区留在窗口边缘，拖动会「拖出」看不见的宽度；
+- **拖拽期间只改局部 state，松手才落盘** —— settings 走主进程串行读改写，每帧写会变成打字机手感；
+- **落盘必须整份 `layout` 写入** —— `mergeSettings` 对 `layout` 是浅合并，只写单个键会把另一栏尺寸冲掉；
+- **提交值时不能用 props 的旧值**：`pointerup` 常与最后一次 `pointermove` 落在同一任务里，React 尚未重渲染，若 `endDrag` 用 `valueRef.current` 提交，会把刚拖出的宽度原样冲回去（实测 `beforeDrag:280 → afterDrag:280`）。必须维护独立的 `liveRef`，`moveDrag` 内同步更新，`endDrag` 用 `liveRef.current` 提交；
+- 设置面板「侧栏宽度」可输入数值、复位默认；hint 指向「拖动分隔条，双击复位」。
+- 两个分隔条的 `aria-label` 分别是「调整侧边栏」和「调整命令栏」，冒烟一律用 `[role="separator"][aria-label="…"]` 精确定位 —— 裸 `[role="separator"]` 靠 DOM 顺序猜，改布局就会抓错目标。
+
+### 5.3 大列表性能（「客户端好卡」专项）
+
+实测数据（用户真实库）：`connections.json` 1.0 MB / **2929 条连接**，其中 XCMD 组 **2917 条**；`commands.json` 126 条 / 10 组。
+
+根因与处置（按贡献排序）：
+
+| 根因 | 处置 |
+|---|---|
+| 侧栏把 2929 条全量 `map`，超长分组默认展开 → 万级 DOM | `PAGE_SIZE = 60` 分页 + `LARGE_GROUP = 200` 超长组默认折叠 + 尾部「还有 N 条，继续展开」 |
+| 每行 `sessions.find(...)` → O(n²) | `sessionByConn` 用 `Map` 预建索引 |
+| 每会话一个 5s `setInterval` 发 `echo` 探活 → N 会话 × 每 5s | 改为**全局单定时器轮转**：`PROBE_TICK_MS = 1000` 每秒推进一个会话，`PROBE_MIN_GAP_MS = 5000` 保底间隔；无活会话自动停表 |
+| `updateLatency` 重建整个 `sessions` 数组 → 每 5s 触发全 App + 所有终端重渲染 | 延迟数据拆到独立的 `latencyById: Record<string, number>`，并加相等短路 |
+
+实测效果（`.perf-data` 拷真实库跑 `--smoke`）：全树 **3087 节点**（侧栏 180）、命令中心 `Ctrl+K` 打开 **113ms**、展开 XCMD 后只渲染 **72 行**（12 + 分页 60）而非 2917 行。
+
+> 回答「是不是我连接太多」：是，但 2929 条本身不是问题，问题在渲染策略。数据层 1 MB 读一次毫无压力。
+
+**折叠状态与默认折叠的坑**：超长组是「默认折叠」但 `collapsed[group]` 仍是 `undefined`，`toggleGroup` 若只按 `!collapsed[group]` 取反，第一次点击会把它设成折叠 —— 看起来像点了没反应。因此 `toggleGroup(group, currentlyCollapsed?)` 要传界面当前视觉状态。
+
+### 5.4 视觉精緻度硬约束
+
+- **全局禁 `backdrop-filter`**：Windows 上浮层关闭后合成器会残留缩放帧，导致整窗文字发虚（`sharpProbe.blurLayers` 为空可自证）。浮层遮罩改用纯色 `bg-black/55` / `bg-app/88`，`.menu`、Toast、传输浮窗、终端提示条全部去掉 `backdrop-blur`；
+- **过渡统一 `≤ 150ms`，禁 `transition-all`**：一律写成具体属性（`transition-[width]`、`transition-[left]`、`transition-colors`），避免隐式动画无关属性；
+- **动画只改 `opacity` / `transform` / `backgroundColor`**，不改 `box-shadow`（`pulse-soft` 改 opacity、`flash-ok` 改 backgroundColor，均合规）。
+
+### 5.5 外观外壳与面板骨架（UI 重构落地）
+
+**外壳五段**（`src/renderer/src/components/layout/`）：`TitleBar` 44px 绿底 `#27c93f`（品牌字色 `on-brand`）、`ActivityBar` 48px（激活项用绝对定位 `inset-y-1.5 left-0 w-0.5 bg-brand` 指示线，不用边框，避免影响布局宽度）、`SideNav` 280px（由 `activityView` 决定内容，`sidebarVisible` 为假直接返回 null）、`MainWorkspace`（`bg-app` 纯色，所有会话保持挂载仅切 `display`）、`StatusBar` 28px（含 Git 分支，用 `exec.run(sessionId, 'git rev-parse --abbrev-ref HEAD 2>/dev/null')` 取，`HEAD` 游离态不显示）。
+
+**品牌绿使用边界**：仅 `--c-brand` 三处 —— TitleBar 背景、ActivityBar 激活指示线、命令中心左范围索引的选中指示线。其余「选中」一律用 `--c-select`（`#e0f2fe`），「强调」用 `--c-accent`（`#2563eb`）。绿色一旦扩散到按钮底色就会失去「品牌」含义。
+
+**面板骨架类**（`styles/index.css` `@layer components`，六个侧栏面板共用，切换时不跳动）：
+
+| 类 | 定义 | 用途 |
+|---|---|---|
+| `.panel-head` | `flex h-8 shrink-0 items-center gap-1.5 border-b border-edge px-2.5` | 定死 32px 头，`border-edge` 而非 `border-edge-soft` |
+| `.panel-title` | `truncate text-xs font-semibold tracking-[-0.01em] text-ink` | 面板标题 |
+| `.panel-count` | `shrink-0 rounded bg-raised px-1 font-mono text-3xs leading-4 text-ink-3` | 条数角标 |
+| `.panel-toolbar` | `flex shrink-0 items-center gap-1 border-b border-edge px-2 py-1.5` | 搜索/过滤行 |
+| `.panel-body` | `scroll-thin min-h-0 flex-1 overflow-y-auto p-1` | 内容区 |
+| `.row` / `.row-hover` / `.row-active` | `transition-colors duration-150` / `hover:bg-hover` / `bg-select` | 行 |
+
+**信息密度取舍**：`CommandPanel` 头部原来塞 6 个图标按钮，280px 里挤成一排 → 只留「搜索 / 新建 / 更多⋯」，导入导出新建分组收进 `moreMenu`。筛选 chip 改分段控件（外壳 `bg-raised p-0.5`，选中块 `bg-app + shadow-[0_1px_2px_rgb(0_0_0/0.06)]`），不再用 `bg-accent/15 text-accent`（蓝底 chip 和浅色外壳打架）。
+
+**字号阶梯（硬约束）**：`tailwind.config.js` 只留五档 —— `text-3xs` 10/14、`text-2xs` 11/16、`text-xs` 12/16、`text-sm` 13/20、`text-base` 15/22。重构前散着 9 / 10 / 10.5 / 11 / 11.5 / 12.5 / 13 / 15 八种像素值，同一屏里相邻文字只差 0.5px，单看每处都合理、并排就显脏。全部 `text-[Npx]` 已清零（`grep -rn 'text-\[[0-9.]*px\]' src/renderer/src` 应为空），新增代码不许再写任意值。
+
+**键盘焦点**：全局加 `:focus-visible { outline: 2px solid rgb(var(--c-accent)/0.55); outline-offset: -1px }`，`input/textarea/select` 除外（它们已有自己的 focus ring，叠起来是双层框）。用 `outline` 不用 `box-shadow`：不占布局、不触发重绘、也符合「禁改 box-shadow」的约束。纯键盘操作时侧栏 6 个面板全是自定义按钮，没有焦点环等于摸黑。
+
+**面板常驻（keep-alive）**：`SideNav` 对 6 个视图做「首次访问才挂载、之后常驻、靠 `display` 切换」。卸载式切换会丢内部状态 —— 连接列表滚到「37 號」切去文件再切回来又回顶部，命令面板折叠的分组/搜索词、文件树展开的目录同样全没，用户抱怨的「不方便」有一半来自「回来了却不是刚才那样」。首批不挂载是性能考虑：连接 2929 条 + 命令 126 条 + 6 个面板全挂会白多上千 DOM 节点。`display:none` 而不是 `visible/invisible`，隐藏面板不参与布局、不触发滚动重算。冒烟用 `keepAliveProbe` 卡住这条：`panes` 集合只增不减、`visible` 恒为当前视图。
+
+**状态栏分隔符**：原来用 `<span className="text-edge">|</span>` 拿文字竖线假装分割线，字符中线偏上、宽度随字号变，相邻项一多就出现高低不齐的锯齿。改成 `Sep()` 组件 = `h-[9px] w-px bg-edge`，垂直居中交给 flex。数字列统一 `tabular-nums`（延迟、进度百分比、会话数、cols×rows），否则数字变化时宽度抖。
+
+### 5.6 右侧常驻命令栏 + 固定三列（m03213 需求）
+
+**为什么从侧栏视图改成右侧常驻栏**：原实现把「常用命令」当成活动栏的第 6 个视图，切过去就把左侧的连接列表挤走。执行命令时最常做的动作恰恰是「瞄一眼现在是哪台主机，再点命令」，为此要来回切两次视图。常驻之后两者同屏，命令栏的折叠状态与宽度都是独立记忆（`useLayoutStore.commandRailVisible` + `settings.layout.commandRail`）。
+
+**结构**：`src/renderer/src/components/layout/CommandRail.tsx` = `<section aria-label="常用命令栏" style={{ width }} className="flex min-w-0 shrink-0 flex-col overflow-hidden border-l border-edge bg-panel">` 内包 `<CommandPanel onEdit={onEdit} onCollapse={toggleCommandRail} />`；栏体的开合由活动栏底部独立按钮（`aria-label="常用命令栏"`，`data-activity="command-rail"`）与快捷键 `Ctrl+Alt+B` 控制。
+
+**三列固定（硬约束）**：`CommandPanel` 的 `WALL_COLS = 3`，网格写成 `style={{ gridTemplateColumns: 'repeat(3, minmax(0, 1fr))' }}`，**不是** `auto-fill / minmax`。
+
+- 理由：找命令靠的是**稳定的空间记忆**（「磁盘那个在第三行右边」）。列数随宽度变，这套记忆和口头交接（「第三行右边那个」）就同时失效；宁可卡片自己变宽变窄，也不让列数变。这条也解释了命令栏 340 的下限；
+- 连带约束：键盘 `↑/↓` 的步长必须是 `±WALL_COLS`，`←/→` 是 `±1`。原来只有 `↑↓` 且步长 1，视觉上明明横排三个按钮，按一下 `↓` 却只挪到右边那个 —— 手感是错的；
+- 冒烟用 `wallColsProbe` 卡住：拖动命令栏宽度（380 → 560）与双击复位（→ 380）三个状态下 `cols` 必须**恒为 3**，同时 `main` 宽度随之变化；`railToggleProbe` 再验收起后 `railPresent:false / mainWidth 增加`、展开后恢复。
+
+**收起后不能失联**：命令栏头部自己有一个「收起」按钮，但它收起之后自己也跟着没了。所以活动栏底部必须留一个常驻开关（`Play` 图标 + 激活指示线），否则用户收起一次就再也打不开 —— 这是常驻型面板的通用陷阱。
+
+**卡片视觉**：常态 `border-edge bg-app hover:bg-hover`，选中 `border-accent/50 bg-select`。不用 `bg-raised`（#fafafa）压 `bg-panel`（#f8f9fa）—— 两层只差 1.5%，126 个按钮会糊成一片没有边界；白底 + 实边框才读得出「这是一堆可以按的东西」。右上角单槽互斥：平时显示角标（收藏 / 需确认 / 有变量），悬停交叉淡入操作（收藏 / 编辑），只改 `opacity`，不产生位移。
+
 ## 6. 安全设计
 
 | 项 | 实现 |
@@ -141,6 +271,8 @@ xterm.write  ◀──webContents.send── EVT_SESSION_DATA ◀── shell da
 | **P3-a** | **固件升级助手**（选择→上传→SHA256 双端校验→流式升级→重启等待上线→启动日志）、**设备发现**（网段 TCP 扫描 + ARP 厂商 + 反向 DNS + mDNS 服务发现）、**配置备份对比**（备份/行级 diff/还原，自动 .bak） | ✅ 完成 |
 | **P3-b** | **报告 zip 打包**（报告+日志+历史+配置备份一键打包，零依赖自实现 zip，Python 跨校验）、**连接代理接线**（SOCKS5 / HTTP CONNECT，密码走凭据保险箱） | ✅ 完成 |
 | **P3-c** | 插件系统（JS 脚本扩展命令/诊断/报告模板）、**快捷键自定义**（已完成）、**命令面板底部/浮动位置**（底部已完成，floating 待办） | 🟡 部分完成 |
+| **P3-d** | **命令检索重构**（模糊匹配 + 中英同义 + 使用热度 + 范围索引）、**Ctrl+K 命令中心**、**栏宽可拖拽**（四栏 + 双击复位 + 设置面板数值化）、视觉精緻度收尾 | ✅ 完成 |
+| **P3-e** | **命令管理器按钮墙**（无搜索词时按分组堆叠按钮，扫读替代搜索）、**大列表性能专项**（2929 条连接不再卡顿）、**视觉硬约束**（禁 backdrop-filter / 过渡 ≤150ms） | ✅ 完成 |
 
 > P3-a 附注：新增通用能力 `window.api.exec.run(sessionId, cmd, timeout)`（任意面板可执行一次性命令）；连接编辑器状态上收到 `uiStore`，支持任意面板带预设呼出（设备发现 →「新建连接」即用此能力）。
 | **已确认不做** | 安全与审计（除已实现的主机指纹/凭据加密/危险命令确认外不再扩展）、工单集成、VNC/RDP 入口、网络诊断工具 | ⏭️ 用户明确不需要 |
@@ -151,6 +283,24 @@ xterm.write  ◀──webContents.send── EVT_SESSION_DATA ◀── shell da
 | 缺陷 | 根因 | 修复 |
 |---|---|---|
 | 连接瞬间文件树报「无法获取远端目录：会话可能未连接或已断开」 | 竞态：会话记录在创建瞬间（握手未完成）即进入会话表，其中 client 是未连接的占位对象；文件树此时挂载 SFTP 会在该对象上直接失败，且失败后无重试 | 主进程：新增 `sessionManager.waitUntilReady()`（连接中挂起、就绪放行、失败/断开/超时拒绝），`sftpManager.getSftp()` 先等待就绪再挂载（并发挂载去重）；渲染层：文件树仅在会话 connected 后请求，失败提供「重试」按钮 |
+| 冒烟截图上整窗文字发虚、PNG 体积骤降 40% | 浮层的 `backdrop-blur` 关闭后，Windows 合成器残留缩放帧；`capturePage()` 抓到的是模糊帧。探针确认 `blurLayers: []`（DOM 里已无模糊层），说明残留发生在合成器而非样式 | 去掉 `.modal-overlay` 与命令中心的 `backdrop-blur-[2px]`，改用更深的纯色遮罩（`bg-black/55`）；截图前加 `webContents.invalidate()` + 双拍兜底 |
+| 命令中心首次打开时列表顶部少一行 | `scrollIntoView` 在 pop-in 动画（约 120ms）期间按被压缩的高度计算滚动位置 | `firstPaint` ref 标记首帧，跳过第一次自动滚动 |
+| 分隔条快速拖拽丢事件 | `moveDrag` 读闭包里的 `dragging` state，pointerdown 与 pointermove 落在同一 tick 时 state 尚未重渲染，读到 false 就丢弃移动 | 改用 `dragRef`（ref 同步赋值）；`setPointerCapture` 全包 try/catch（合成 PointerEvent 无真实指针时会抛） |
+| 拖一侧栏宽，其它栏尺寸被冲掉 | `mergeSettings` 对 `layout` 只做浅合并，`persist({ [pane]: next })` 把整份对象替换成单键 | `persist` 始终写整份 `{...sizesRef.current, [pane]: next}` |
+| 方向键微调方向反了 | `nudgePane` 用 `current - direction * step * sign`，与「分隔条往哪边挪」的语义相反 | 改为 `current + direction * step * sign`，并给 `sign` 补注释说明增长方向 |
+| 2929 条连接时整窗卡顿 | 侧栏全量渲染 2917 条 + 每行 O(n) `sessions.find` + 每会话独立 5s 探活定时器 + 延迟更新重建整个 sessions 数组 | 分页 60 / 超长组默认折叠、`sessionByConn` Map、全局轮转探针、`latencyById` 拆出（详见 §5.3） |
+| 展开超长分组「点了没反应」 | 超长组默认折叠但 `collapsed[group]` 为 `undefined`，`!undefined = true` 使第一次点击反把它设为折叠 | `toggleGroup(group, currentlyCollapsed)` 传入界面当前视觉状态 |
+| 命令中心按钮墙上 ↓ 键跳到相邻列 | 网格是 3 列，但键盘步长仍按 1（单列时代的写法） | 步长改为 `WALL_COLS`，并新增 `←/→` 单格移动 |
+| 侧栏分隔条拖完立刻弹回原宽度（`beforeDrag:280 → afterDrag:280`） | `pointerup` 与最后一次 `pointermove` 常落在同一任务里，React 未重渲染，`endDrag` 读 `valueRef.current` 拿到的仍是拖拽前旧值并原样提交 | 新增独立 `liveRef`，`beginDrag` 初始化、`moveDrag` 内同步写、`endDrag` 用 `liveRef.current` 提交 |
+| 侧栏 2929 行里每行都印「N 天前」 | 相对时间对绝大多数老连接是同一个灰字，不再是信息而是均匀噪点 | 只在 7 天内用过的连接显示；色标也改为「设过颜色才画」（原来画灰竖线保持对齐，几千行短线排成一道虚线） |
+| 长设备名的「打开」按钮把名字截短 24px | 按钮作为 flex 子项，`opacity-0` 仍占位 | 改 `absolute right-1` 悬浮，`group-hover` / `group-focus-visible` 才显形 |
+| 打包后任务栏图标是一块白方块（Win11 浅色任务栏上几乎看不见） | 三重原因叠加：①仓库里没有 `build/icon.png`，electron-builder 打日志 `default Electron icon is used`；②`BrowserWindow` 未设 `icon` —— Windows 上「窗口图标」与「exe 资源图标」是两套东西，无边框窗口不设时退回 Electron 默认图标（近乎全白）；③`files` 白名单只有 `out/**` + `package.json`，即使补了 `resources/icon.png` 也进不了包 | ①新增 `scripts/make-icon.cjs`（纯 Node 手写 PNG 编码器，无依赖）生成 `build/icon.png` 1024px + `resources/icon.png` 256px，绿色圆角块 + 白色 `>_`；②`createWindow()` 加 `icon: pickIconPath()`，逐个探测 `process.resourcesPath/icon.png` → 仓库 `resources/icon.png` → `app.getAppPath()/resources/icon.png`；③`files` 加 `resources/**`、`asarUnpack` 保留、新增 `extraResources` 把图标拷到 asar 之外（原生层加载图标最稳）；④冒烟加 `iconProbe` 断言路径能解析且字节数 > 0 —— **图标加载失败在 Electron 里是静默的**，不报错只回退白图标，必须有断言兜住 |
+| 上一行修完，任务栏**仍然**发白 | 只给了单张 png，electron-builder 转出的 ico 里只有一条 `256×256/32` 记录（解析 PE `.rsrc` 的 RT_GROUP_ICON 确认）；任务栏要 24/32px 时让 GDI 缩 256 的图，白边把绿色糊掉。Alt+Tab 大预览反而正常，所以「看预览是绿的」不能作为已修好的证据 | `make-icon.cjs` 改为自己封装多尺寸 ico：7 档 `ICO_SIZES = [256,128,64,48,32,24,16]`，每档独立渲染 + 按尺寸调整线宽与字形缩放；小尺寸写 BMP 条目、128/256 写 PNG 条目；`electron-builder.yml` 指定 `win.icon: build/icon.ico`；`iconProbe` 增加 `icoSizes` / `smallSizesOk`（必须同时含 16/24/32） |
+| 用截图统计法判断「任务栏图标是白的」，结论在两次运行间自相矛盾（同一图标测出 `white=14.6%` 与 `white=82.2%`） | 统计区域取的是**整个按钮矩形（66×72）**，浅色任务栏背景下背景本身接近白，`white%` 主要由背景和悬停态决定，图标只占其中 32×32 | 新增 `scripts/probe-tb-icon.ps1`，只裁按钮正中 32×32 图标区（`$ox = $X + ($W-32)/2`）。实测 SSH 按钮 `green=90.4% white=6.7%` —— 图标一直是对的。**做像素级判据前先确认裁剪区域只含被测对象**，否则测的是背景 |
+| 标题绿栏里的会话标签「不满格」，上下各露一条绿边 | `TabBar` 根容器是块级 `div`，`height` 默认 `auto`（只有内容高 ≈28px），而 `header.titlebar` 是 44px —— 容器没满高，标签被拉伸到容器高度也没用，绿栏被切成三条横向色带 | 根容器加 `h-full` + `data-tab-strip`（供探针定位）；新增 `tabStripProbe` 断言 `stripH === barH === 44 && stripGapTop === 0`。**只量标签高度查不出这个问题**（标签已被拉满容器），必须量容器本身 |
+| 压测脚本让整个冒烟只能靠超时收场 | 第一版写成页面内 `setInterval` 自循环，某次 `toggleCommandCenter()` 抛错后 `step++` 走不到，定时器永远跑下去 | 改为「页面只放采样器 + 主进程逐步 `await` 驱动 + 每步 try/catch」，任何一步失败只记 `errors++`，流程继续 |
+| 压测报告出现 `avgFrameMs: 0`（看起来完美，实际没测） | 采样器靠 `requestAnimationFrame`，窗口被别的实例遮挡时 Chromium 把 rAF 降到 0Hz，一帧都收不到 | 采样前 `win.show()` + `win.focus()`；并加 `stressProbe.valid = frames >= 30` 硬判据 —— 不能只看 `avgFrameMs`，没采到帧时它是 0 |
+| 打包版压测 `actions: 45 / errors: 45`（等于没跑） | 压测用 `window.__lazy_test.stores` 驱动，而 `ZM_TEST` 只在验证构建里注入，生产构建没有这个钩子 | 改用真实输入：`pressKey('K', ['control'])` 敲 Ctrl+K、`document.querySelector('[data-activity=...]').click()` 点活动栏，走的就是用户的路 |
 
 ## 8. 运行与打包
 
@@ -159,9 +309,49 @@ cd ssh-workbench
 npm install          # 本机无 VS Build Tools，使用 --omit=optional 跳过 ssh2 可选原生加速（不影响功能）
 npm run dev          # 开发模式（热更新）
 npm run typecheck    # 主进程 + 渲染层类型检查
-npm run smoke        # 冒烟自检：构建 + 启动 + 自动截图 smoke-shot.png + 退出
-npm run build:win    # 打包 Windows 安装包（dist/）
+npm run smoke        # 冒烟自检（注意：本机 ELECTRON_RUN_AS_NODE=1 会让它崩，见下表）
+npm run build        # electron-vite build → out/（不是 npx vite build，后者找不到 index.html）
+npm run build:win    # 打包 Windows 安装包（默认 output dist-final）
 ```
+
+本机实际使用的打包命令（产物目录可换，避免覆盖正在运行的版本）：
+
+```bash
+./node_modules/.bin/electron-builder --win nsis portable --config electron-builder.yml \
+  -c.directories.output=dist-build
+# 再 cp 三个产物 + latest.yml 到目标目录；不要 rm -rf 正在运行的 win-unpacked
+```
+
+冒烟命令（必须 `env -u ELECTRON_RUN_AS_NODE`，且 `--user-data-dir` 不可省 —— 主进程有 `requestSingleInstanceLock()`）：
+
+```bash
+env -u ELECTRON_RUN_AS_NODE ./node_modules/electron/dist/electron.exe . --smoke \
+  --user-data-dir="D:/ssh-workbench/.smoke-t"
+# 结果与截图都写在 user-data-dir 内：.smoke-t/smoke-result.json + smoke-shot-*.png
+```
+
+## 图标
+
+`scripts/make-icon.cjs`（纯 Node，零依赖，自带 PNG 编码器 + ICO 封装器）生成：
+
+| 产物 | 尺寸 | 用途 |
+|---|---|---|
+| `build/icon.ico` | 7 档：256/128(png) + 64/48/32/24/16(bmp) | electron-builder 的 `win.icon`，直接作为 exe 内嵌图标 |
+| `build/icon.png` | 1024 | 备用 / 文档用 |
+| `resources/icon.ico` | 同上 7 档 | 运行时窗口图标，被 `files` + `extraResources` 一起带进包 |
+| `resources/icon.png` | 256 | 图标兜底（`pickIconPath()` 在 ico 全部缺失时用） |
+
+**必须自己出多尺寸 ico，不能让 electron-builder 从单张 png 转**：它转出来的 ico 里只有一条 256×256 PNG 记录，Windows 任务栏要 24/32px 时只能让 GDI 现场缩 256 的图，白边把绿色糊掉 —— 表现为「图标本身是绿的，但任务栏上是一块白」。大预览（Alt+Tab）反而是对的，所以光看预览查不出来。
+
+脚本里每个尺寸都独立 `render(n)`（不从 1024 缩），并且：
+
+- `strokeFor(size)` 线宽随尺寸放大（≥64 → 0.088、≥48 → 0.095、≥32 → 0.108、≥24 → 0.13、16 → 0.16），否则 16px 上 0.088 只有 1.4px，描边会断成虚线；
+- `glyphScaleFor(size)` 小图把字形往里收（16/24 → 0.9、24 → 0.96）；
+- 16/24/32/48/64 用 **BMP 条目**（自底向上 BGRA + 1bpp AND 掩码），128/256 用 **PNG 条目**。老 shell 扩展读不了 PNG 条目，会直接退回默认图标。
+
+改图标只需改脚本里的 `CHEVRON` / `UNDERSCORE` / `STROKE` / `gradColor`，然后 `npm run icon` 重跑。
+**不要指望图标坏了会有报错** —— Electron 加载图标失败是静默的，只会在任务栏回退成默认白方块；靠冒烟的 `iconProbe` 兜住，其中 `smallSizesOk`（ico 里必须同时有 16/24/32）就是上面这个根因的回归断言，只断言「路径能解析 + 字节数 > 0」查不出白方块。
+
 
 数据目录：`%APPDATA%/ssh-workbench/data/`（设置面板内可直接查看路径）。
 
@@ -178,7 +368,76 @@ npm run build:win    # 打包 Windows 安装包（dist/）
 ## 9. 已知限制与技术债（P0）
 
 - 代理（SOCKS5/HTTP，数据模型已预留 `proxy` 字段）未接线，当前支持直连 + ProxyJump 链；
-- 命令面板位置仅「右侧」（设置项已留位）；
-- 快捷键当前为固定组合（Ctrl+N 新建连接 / Ctrl+, 设置 / Ctrl+B 折叠面板 / Ctrl+Tab 切换标签 / Ctrl+Shift+W 关标签 / Ctrl+Shift+C/V 复制粘贴 / Ctrl+F 终端搜索），自定义功能在 P3；
+- 命令栏固定常驻右侧并固定三列（`WALL_COLS = 3`），不再提供「底部横条 / 浮动」形态 —— `commandPanelPosition` 字段仅为老配置兼容保留，渲染层已无消费者；
+- 快捷键已可自定义（含 Ctrl+K 命令中心），默认组合：Ctrl+N 新建连接 / Ctrl+K 命令中心 / Ctrl+, 设置 / Ctrl+B 折叠面板 / Ctrl+Tab 切换标签 / Ctrl+Shift+W 关标签 / Ctrl+Shift+C/V 复制粘贴 / Ctrl+F 终端搜索；
 - 会话日志持久化在 P1（当前仅内存回滚缓冲）；
-- 大量输出（如 `cat` 大文件）时合帧窗口可考虑自适应放大（当前固定 8ms）。
+- 大量输出（如 `cat` 大文件）时合帧窗口可考虑自适应放大（当前固定 8ms）；
+- 中英同义表 `SYNONYMS` 是手工维护的 22 组，新增命令分组时不会自动扩展 —— 需要新词时改表并跑 `scripts/verify-synonyms.cjs`。
+
+## 10. 开发自检
+
+纯函数逻辑用 esbuild 打包成单文件后由 node 直接断言，不引入测试框架：
+
+```bash
+node scripts/verify-command-search.cjs   # 模糊匹配 / 字段加权 / 排序 / 范围索引（49 项）
+node scripts/verify-synonyms.cjs         # 中英同义扩展 + 别名检索回归（28 项）
+node scripts/verify-layout.cjs           # 双栏宽度夹取 / 拖拽换算 / 方向 / 升级兼容（77 项）
+node scripts/verify-group-order.cjs      # 分组顺序与拖拽落点（18 项）
+```
+
+界面与交互用真实 Electron 跑一条脚本化回归（`npm run smoke` 在本机受 `ELECTRON_RUN_AS_NODE` 干扰，用下面的直接调用）：
+
+```bash
+env -u ELECTRON_RUN_AS_NODE ./node_modules/electron/dist/electron.exe . \
+  --smoke --user-data-dir="D:/ssh-workbench/.smoke-data"
+```
+
+`--user-data-dir` 不可省：主进程有 `requestSingleInstanceLock()`，复用默认目录会因已有实例而直接退出。冒烟会依次截取 初始 / 命令中心 / 输入 `disk` 后 / Esc 关闭 / 设置面板 / 栏宽分组 / 面板筛选 / 拖拽后 / 复位后 / 侧栏加宽 等图到 user-data-dir 内（**不是仓库根**），同时把分隔条拖拽前后的实际像素宽度写进 `smoke-result.json`（当前基线：280 → 370 → 280）。
+
+除截图外还做 **DOM 级断言**（截图看不出「是不是列表」，而这正是用户抱怨的点）：
+
+| 字段 | 断言内容 | 当前基线 |
+|---|---|---|
+| `shellProbe` | 外壳五段尺寸、品牌绿与主题实际落地值 | `titlebar.h: 44`、`activitybar.w: 48`、`sidebar.w: 280`、`statusbar.h: 28`、`main.w: 572`、`titlebarBg: rgb(39, 201, 63)`、`brandBgCount: 3`、`themeClass: 'light'`、`appBg: '255 255 255'`、`sidebarBg: 'rgb(248, 249, 250)'` |
+| `visualProbe` | 视觉硬约束的运行时证据（不靠人眼看截图） | `blurCount: 0`、`longTransitionCount: 0`、`transitionAllCount: 0`、`animatedCount: 1`（仅 `slide-up`） |
+| `switchProbe` | 切到「命令历史」后侧栏仍在、主区宽度正确、面板头 32px | `asidePresent: true`、`asideWidth: 280`、`pane: 'history'`、`headH: 32`、`railPresent: true`、`railWidth: 380`、`cols: 3` |
+| `collapseProbe` | 再点同一项 = 收起侧栏，主区撑满 | `asidePresent: false`、`mainWidth: 852`、`railWidth: 380` |
+| `filesProbe` | 文件面板 Tab / 引导态 / 面板头高 / 节点数 | `tabs: 2`、`hasHead: true`、`headH: 32`、`hasGuide: true`、`hasConnectCta: true`、`nodeCount: 22`（只统计 `[data-pane="files"]` 内，keep-alive 后侧栏还挂着另外两个面板） |
+| `wallProbe` | 无搜索词时命令中心是分组网格而非列表 | `gridCount: 10`、`cols: 3`、`cardCount: 126`、`groupCount: 10` |
+| `listProbe` | 输入关键字后退回列表 | `gridCount: 0`、`rowCount: 3` |
+| `panelWallProbe` | 右侧命令栏常驻、按钮墙三列 | `found: true`、`railPresent: true`、`railWidth: 380`、`gridCount: 10`、`cols: 3`、`cardCount: 126` |
+| `wallColsProbe` | 拖宽命令栏 / 复位时**列数恒为 3**（可变列数会让「第三行右边那个」的空间记忆失效） | `railDefault: {railWidth: 380, mainWidth: 572, cols: 3}`、`railWide: {railWidth: 560, mainWidth: 392, cols: 3}`、`railReset: {railWidth: 380, mainWidth: 572, cols: 3}` |
+| `railToggleProbe` | 活动栏底部开关收起 / 展开命令栏 | `railCollapsed: {railPresent: false, mainWidth: 952}`、`railExpanded: {railPresent: true, railWidth: 380, cols: 3, cardCount: 126}` |
+| `resizerProbe` | 分隔条真实拖拽 → 提交 → 双击复位 | `beforeDrag: 280` → `afterDrag: 370` → `afterReset: 280` |
+| `iconProbe` | 窗口图标路径能解析、文件非空，**且 ico 里含 16/24/32 小尺寸** | 开发：`{iconBytes: 43888, icoSizes: [256,128,64,48,32,24,16], smallSizesOk: true, packaged: false}`；打包：同上但 `fromResources: true`、`packaged: true` |
+| `tabStripProbe` | 标签栏容器必须满高（`h-full`），否则绿栏上下各留一条绿边，标题栏被切成三条色带 | `barH: 44`、`stripH: 44`、`stripGapTop: 0`、`tabCount: 3`、`tabH: 44`、`tabGapTop: 0` |
+| `stressProbe` | 压测：45 个动作（Ctrl+K 开关 ×30、活动栏切视图 ×15）期间的帧间隔 | `frames: 124~141`、`avgFrameMs: 19.2~21.9`、`maxFrameMs: 78~111`、`longFrames: 4~10`、`over100: 0~2`、`actions: 45`、`errors: 0`、`valid: true` |
+| `perfProbe` | DOM 规模不随连接数爆掉 | `totalNodes: 395`、`sidebarNodes: 192`、`sidebarRows: 12` |
+| `expandProbe` | 展开 2917 条的 XCMD 组后仍受分页约束 | `rowsAfterExpand: 72`（12 默认组 + 60 分页） |
+| `commandCenterOpenMs` | Ctrl+K 到浮层可见的轮询实测耗时 | `13 ~ 200 ms`（首次含冷加载） |
+| `keepAliveProbe` | 切走过的面板仍挂载但隐藏（保留滚动/折叠/搜索状态） | `panes: ['connections','files','history']`、`visible: ['connections']`、`hiddenCount: 2` |
+| `sharpProbe` | 无残留模糊层 | `blurLayers: []` |
+
+`visualProbe` 的口径要注意：`transition-property` 的计算值默认就是 `all`，只看它会误判所有元素 —— 必须同时满足 `transitionDuration !== '0s'` 才算一条真实违规。
+
+`stressProbe` 的判据同理要看三个值一起：`valid`（采到 ≥30 帧，防 rAF 被降到 0Hz 时 `avgFrameMs: 0` 的假绿）、`errors`（必须 0，否则动作根本没发生）、`maxFrameMs` / `longFrames`（抓尖峰，不看平均值 —— 平均会被空闲帧拉平）。当前基线 45 个动作 / 124~141 帧 / 平均 19~22ms / 最长 78~111ms / >50ms 的帧 4~10 个。
+
+冒烟内有两处顺序依赖：
+
+1. **侧栏视图**：切换 ActivityBar 会改侧栏内容，所以顺序固定为「文件（filesProbe）→ 命令历史（switchProbe）→ 命令历史（collapseProbe）→ 连接」。
+   注意活动栏按钮的 `aria-label` 是 **「命令历史」**，写成 `clickActivity('历史')` 会匹配不到（返回 `found: false`），后续 `collapseProbe` 全为 `false`。
+2. **命令栏宽度**：`wallColsProbe` 的拖宽会挤窄主区，必须在 `switchProbe` / `collapseProbe` 之后跑，否则那两个断言里的 `mainWidth` 基准会漂。收起/展开（`railToggleProbe`）同理放在最后。
+
+两栏默认值会吃掉窗口宽度：1280 窗口下 `1280 - 48(活动栏) - 280(侧栏) - 380(命令栏) = 572`。这是「命令栏常驻右侧」的既定代价，不是 bug；`verify-layout.cjs` 里有一条断言保证默认布局下主区仍 ≥ 560。
+
+跑真实数据压测：把 `%APPDATA%/ssh-workbench/data` 拷到 `.perf-data/data` 后把 `--user-data-dir` 指过去，即可复现 2929 条连接的场景。
+
+`tabStripProbe` 需要标签栏里有标签才量得到，而冒烟环境没有 SSH 服务器，所以它会调 `window.__lazy_test.seedTabs(3)` 造三个假会话。`__lazy_test` 只在 `ZM_TEST=1` 的构建里注入（见 `electron.vite.config.ts`），普通构建跑出来是 `tabCount: 0`、`tabH: -1` —— 要验这条断言必须 `ZM_TEST=1 npm run build` 后再跑冒烟，**验完记得重新做一次不带 `ZM_TEST` 的发布构建**。
+
+图标相关的一次性排查脚本（不属于常规自检，需要时手工跑）：
+
+```bash
+node scripts/probe-exe-icon.cjs "dist-v10/win-unpacked/SSH Workbench.exe"  # 解析 PE 资源，看 ico 有几档
+node scripts/probe-native-image.cjs                                       # Electron nativeImage 能否读 ico/png
+```
+
