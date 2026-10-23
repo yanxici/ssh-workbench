@@ -2,7 +2,9 @@ appId: com.sshworkbench.app
 productName: SSH Workbench
 directories:
   buildResources: build
-  output: dist-final
+  # 每次发版换一个输出目录，旧产物留着做对照（dist-v8…v10 → 本次 dist-v11）。
+  # 不要写回 dist-final：那里是上一版的成品，混进新包后分不清哪个是哪个。
+  output: dist-v11
 # ssh2 的 cpu-features 为可选加密加速（纯 JS 回退即可），跳过 native rebuild 避免依赖本机 VS
 npmRebuild: false
 files:
@@ -35,8 +37,12 @@ win:
   # 白边把绿色糊掉 —— 表现就是「图标明明是绿的，任务栏却发白」。
   icon: build/icon.ico
   target:
+    # ① 安装包（NSIS，可选安装目录、建桌面快捷方式）
     - nsis
+    # ② exe 直接执行版：单文件 portable，双击即用，不写注册表
     - portable
+    # ③ 免安装版：整个 win-unpacked 目录打成一个 zip，解压后直接跑 exe
+    - zip
 nsis:
   oneClick: false
   allowToChangeInstallationDirectory: true

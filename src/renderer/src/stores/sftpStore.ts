@@ -7,6 +7,7 @@ import type {
 } from '@shared/types'
 import { call } from '@/lib/ipc'
 import { localDirname, localJoin, remoteDirname, remoteJoin } from '@/lib/utils'
+import { normalizeRemoteDir, rememberUploadDir, resolveUploadDir } from '@/lib/uploadDir'
 import { useToastStore } from './toastStore'
 
 interface SftpState {
@@ -55,6 +56,15 @@ interface SftpState {
   setRemoteSel: (paths: string[]) => void
 
   uploadPaths: (localPaths: string[], remoteDir?: string) => Promise<void>
+  /**
+   * 请求上传：先解析默认目标目录并挂起一个待确认请求，
+   * 由 FileManagerPanel 渲染目标目录选择框，用户确认后才真正开始传输。
+   */
+  requestUpload: (localPaths: string[], preferredDir?: string) => Promise<void>
+  /** 待确认的上传请求（null = 没有） */
+  uploadRequest: { localPaths: string[]; defaultDir: string } | null
+  /** 关闭待确认请求（用户取消） */
+  cancelUploadRequest: () => void
   downloadPaths: (remotePaths: string[], localDir?: string) => Promise<void>
   applyProgress: (e: TransferProgressEvent) => void
   /** 暂停 / 继续 / 终止单个传输任务（主进程负责真正停住分块循环） */
@@ -96,6 +106,8 @@ export const useSftpStore = create<SftpState>()((set, get) => ({
   dockClosed: false,
   editing: null,
   treeVersion: 0,
+
+  uploadRequest: null,
 
   bumpTree: () => set((s) => ({ treeVersion: s.treeVersion + 1 })),
 
@@ -156,8 +168,18 @@ export const useSftpStore = create<SftpState>()((set, get) => ({
 
   uploadPaths: async (localPaths, remoteDir) => {
     const sessionId = get().sessionId
-    const target = remoteDir ?? get().remoteDir
-    if (!sessionId || localPaths.length === 0 || !target) return
+    if (!sessionId || localPaths.length === 0) return
+
+    // 目标目录按「显式指定 → 当前目录 → 上次目录 → 远端 home」解析；
+    // 全都拿不到时不再静默 return（以前就是这样，用户点了没反应），
+    // 而是弹出一个空白的目录选择框让用户自己填。
+    const target = normalizeRemoteDir(remoteDir ?? get().remoteDir) || (await resolveUploadDir(sessionId))
+    if (!target) {
+      set({ uploadRequest: { localPaths, defaultDir: '' } })
+      return
+    }
+
+    rememberUploadDir(sessionId, target)
     const ids = await call(window.api.sftp.upload(sessionId, localPaths, target), {
       errorTitle: '上传失败'
     })
@@ -169,6 +191,16 @@ export const useSftpStore = create<SftpState>()((set, get) => ({
       })
     }
   },
+
+  requestUpload: async (localPaths, preferredDir) => {
+    const sessionId = get().sessionId
+    if (!sessionId || localPaths.length === 0) return
+    const { remoteDir } = get()
+    const defaultDir = await resolveUploadDir(sessionId, preferredDir ?? remoteDir)
+    set({ uploadRequest: { localPaths, defaultDir } })
+  },
+
+  cancelUploadRequest: () => set({ uploadRequest: null }),
 
   downloadPaths: async (remotePaths, localDir) => {
     const sessionId = get().sessionId

@@ -374,9 +374,11 @@ function registerIpc(): void {
   handle(IPC.SFTP_WRITE, (sessionId: string, path: string, content: string) =>
     sftpManager.writeText(sessionId, path, content)
   )
-  handle(IPC.SFTP_UPLOAD, (sessionId: string, localPaths: string[], remoteDir: string) =>
-    sftpManager.upload(sessionId, localPaths, remoteDir)
-  )
+  handle(IPC.SFTP_UPLOAD, async (sessionId: string, localPaths: string[], remoteDir: string) => {
+    // 兜底：渲染层传空/空白目录时不再落到远端根 '/'，改用 home
+    const target = remoteDir?.trim() || (await sftpManager.home(sessionId))
+    return sftpManager.upload(sessionId, localPaths, target)
+  })
   handle(IPC.SFTP_DOWNLOAD, (sessionId: string, remotePaths: string[], localDir: string) =>
     sftpManager.download(sessionId, remotePaths, localDir)
   )
@@ -386,14 +388,16 @@ function registerIpc(): void {
 
   // 通过系统对话框选择文件/目录（文件树面板的单点上传/下载）
   handle(IPC.SFTP_UPLOAD_DIALOG, async (sessionId: string, remoteDir: string) => {
+    // 渲染层没给目标目录（以前会退化成 ''→'/name' 落根目录）：先解析成 home
+    const target = remoteDir?.trim() || (await sftpManager.home(sessionId))
     const win = BrowserWindow.getFocusedWindow() ?? mainWindow
     const res = await dialog.showOpenDialog(win as BrowserWindow, {
-      title: '选择要上传的文件',
+      title: `选择要上传到 ${target} 的文件`,
       buttonLabel: '上传',
       properties: ['openFile', 'multiSelections']
     })
     if (res.canceled || res.filePaths.length === 0) return { canceled: true, count: 0 }
-    const ids = sftpManager.upload(sessionId, res.filePaths, remoteDir)
+    const ids = sftpManager.upload(sessionId, res.filePaths, target)
     return { canceled: false, count: ids.length }
   })
 
@@ -1047,11 +1051,14 @@ function runSmoke(win: BrowserWindow): void {
            * 先造 3 个假标签再量。
            * 冒烟环境没有 SSH 服务器，标签栏本来是空的 —— 而「标签在绿栏里不满格」
            * 只有有标签时才量得出来（空标签栏的 stripH 也可能恰好是 44）。
+           *
+           * 造 14 个：满高只看 3 个就够，但横向滚动要溢出才看得见（每个标签 128~220px），
+           * 3 个撑不满一行，滚动条根本不会出现，`tabsScrollProbe` 就量不到东西。
            */
           await win.webContents.executeJavaScript(`
             (() => {
               const t = window.__lazy_test
-              if (t && typeof t.seedTabs === 'function') t.seedTabs(3)
+              if (t && typeof t.seedTabs === 'function') t.seedTabs(14)
             })()
           `)
           await settle(250)
@@ -1091,6 +1098,89 @@ function runSmoke(win: BrowserWindow): void {
           `)) as Record<string, unknown>
           /* 有标签的状态单独拍一张：这张图就是「标签是否满格」的直接证据 */
           const tabStripShot = await shoot('smoke-shot-tabs.png')
+
+          /*
+           * 标签条横向滚动探针。
+           *
+           * 用户反馈：「多会话连接后，绿色标题栏上方的滚动条无法使用」。
+           * 两个根因，各自都有可测量的痕迹：
+           * 1) 滚动容器带 `-webkit-app-region: drag`，滚动条收不到鼠标事件 →
+           *    断言容器的 computed `-webkit-app-region` 必须是 `no-drag`；
+           * 2) 原生横向滚动条要占 8px 高，标签就不满高 →
+           *    断言 strip 的 clientHeight - offsetHeight === 0（没有横向滚动条占位），
+           *    且 strip 的 scrollWidth > clientWidth（确实溢出，滚动能力还在），
+           *    并且存在自绘的 .tabs-scrollbar-thumb。
+           * 再真的拖一把：把滑块往右推 120px，看 scrollLeft 是否跟上了。
+           */
+          const tabsScrollProbe = (await win.webContents.executeJavaScript(`
+            (async () => {
+              const bar = document.querySelector('header.titlebar')
+              const strip = bar ? bar.querySelector('[data-tab-strip]') : null
+              if (!strip) return { found: false }
+              const appRegion = getComputedStyle(strip).getPropertyValue('-webkit-app-region').trim()
+              const nativeBarH = strip.offsetHeight - strip.clientHeight
+              const overflow = strip.scrollWidth - strip.clientWidth
+              let thumb = document.querySelector('.tabs-scrollbar-thumb')
+              const thumbBefore = thumb ? thumb.getBoundingClientRect() : null
+              const wait = (ms) => new Promise((r) => setTimeout(r, ms))
+              let scrolled = 0
+              if (thumb && overflow > 0) {
+                const startX = thumbBefore.left + thumbBefore.width / 2
+                const startY = thumbBefore.top + thumbBefore.height / 2
+                const opts = (x) => ({
+                  bubbles: true, cancelable: true, clientX: x, clientY: startY, button: 0, buttons: 1
+                })
+                const down = new MouseEvent('mousedown', opts(startX))
+                const el = thumb
+                el.dispatchEvent(down)
+                for (const dx of [30, 60, 90, 120]) {
+                  window.dispatchEvent(new MouseEvent('mousemove', opts(startX + dx)))
+                  await wait(16)
+                }
+                window.dispatchEvent(new MouseEvent('mouseup', opts(startX + 120)))
+                await wait(60)
+                scrolled = strip.scrollLeft
+              }
+              /*
+               * 滚轮：先归零，再竖着滚 3×120px。
+               * 标签条没有竖向可滚内容，竖滚轮必须被翻译成横向位移 ——
+               * 这是「只能用滚轮、拖不动」这类半残状态的反向验证。
+               * 顺带记 defaultPrevented：没锁住的话页面会被带着一起滚。
+               */
+              let wheeled = -1
+              let wheelPrevented = false
+              if (overflow > 0) {
+                strip.scrollLeft = 0
+                await wait(30)
+                for (let i = 0; i < 3; i++) {
+                  const ev = new WheelEvent('wheel', {
+                    bubbles: true, cancelable: true, deltaY: 120, deltaX: 0
+                  })
+                  strip.dispatchEvent(ev)
+                  if (ev.defaultPrevented) wheelPrevented = true
+                  await wait(24)
+                }
+                await wait(40)
+                wheeled = Math.round(strip.scrollLeft)
+              }
+              thumb = document.querySelector('.tabs-scrollbar-thumb')
+              const thumbAfter = thumb ? thumb.getBoundingClientRect() : null
+              return {
+                found: true,
+                appRegion,
+                nativeBarH,
+                overflow,
+                tabCount: strip.querySelectorAll('[data-tab-id]').length,
+                hasThumb: !!thumb,
+                thumbW: thumbBefore ? Math.round(thumbBefore.width) : -1,
+                thumbMoved: thumbBefore && thumbAfter ? Math.round(thumbAfter.left - thumbBefore.left) : -1,
+                scrolled: Math.round(scrolled),
+                wheeled,
+                wheelPrevented
+              }
+            })()
+          `)) as Record<string, unknown>
+          const tabsScrollShot = await shoot('smoke-shot-tabs-scroll.png')
 
           /*
            * 视觉约束断言（规范里的硬性禁止项）：
@@ -1618,6 +1708,8 @@ function runSmoke(win: BrowserWindow): void {
               shellProbe,
               tabStripProbe,
               tabStripShot,
+              tabsScrollProbe,
+              tabsScrollShot,
               visualProbe,
               switchProbe,
               switched,

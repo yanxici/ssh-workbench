@@ -31,7 +31,7 @@ export function LocalPane(): JSX.Element {
   const setSel = useSftpStore((s) => s.setLocalSel)
   const nav = useSftpStore((s) => s.navLocal)
   const refresh = useSftpStore((s) => s.refreshLocal)
-  const uploadPaths = useSftpStore((s) => s.uploadPaths)
+  const requestUpload = useSftpStore((s) => s.requestUpload)
   const downloadPaths = useSftpStore((s) => s.downloadPaths)
   const mkdir = useSftpStore((s) => s.mkdirLocal)
   const rename = useSftpStore((s) => s.renameLocal)
@@ -61,9 +61,9 @@ export function LocalPane(): JSX.Element {
     const targets = sel.includes(path) ? sel : [path]
     return [
       {
-        label: '上传到右侧目录',
+        label: '上传到远端目录…',
         icon: <Upload size={12} />,
-        onClick: () => void uploadPaths(targets)
+        onClick: () => void requestUpload(targets)
       },
       {
         label: '重命名',

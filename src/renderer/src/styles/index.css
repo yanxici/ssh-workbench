@@ -341,6 +341,62 @@
     -webkit-app-region: no-drag;
   }
 
+  /*
+   * 标签条横向滚动容器：隐藏原生滚动条，改用自绘的 .tabs-scrollbar。
+   * 隐藏的原因不是审美 —— 原生横向条在 44px 标题栏里要吃掉 8px 高度，
+   * 标签就撑不满（满高约定会破）。自绘条用 absolute 悬浮，不占布局。
+   * 必须保留 overflow-x:auto：滚动能力本身要靠它，只是把「条」藏起来。
+   */
+  .tabs-scroll {
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+
+  .tabs-scroll::-webkit-scrollbar {
+    display: none;
+    width: 0;
+    height: 0;
+  }
+
+  .tabs-scrollbar {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    height: 5px;
+    background: transparent;
+    cursor: default;
+    z-index: 5;
+  }
+
+  .tabs-scrollbar-thumb {
+    position: absolute;
+    top: 0;
+    height: 5px;
+    border-radius: 3px;
+    background: rgb(var(--c-on-brand) / 0.45);
+    cursor: grab;
+  }
+
+  .tabs-scrollbar-thumb:hover {
+    background: rgb(var(--c-on-brand) / 0.7);
+  }
+
+  .tabs-scrollbar-thumb:active {
+    background: rgb(var(--c-on-brand) / 0.85);
+    cursor: grabbing;
+  }
+
+  /* 深色主题下 on-brand 是深色字色，滑轨要跟着反过来 */
+  .dark .tabs-scrollbar-thumb {
+    background: rgb(var(--c-on-brand) / 0.3);
+  }
+
+  .dark .tabs-scrollbar-thumb:hover {
+    background: rgb(var(--c-on-brand) / 0.5);
+  }
+
   /* 细滚动条 */
   .scroll-thin {
     scrollbar-width: thin;

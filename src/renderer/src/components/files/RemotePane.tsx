@@ -33,6 +33,7 @@ export function RemotePane(): JSX.Element {
   const nav = useSftpStore((s) => s.navRemote)
   const refresh = useSftpStore((s) => s.refreshRemote)
   const uploadPaths = useSftpStore((s) => s.uploadPaths)
+  const requestUpload = useSftpStore((s) => s.requestUpload)
   const downloadPaths = useSftpStore((s) => s.downloadPaths)
   const mkdir = useSftpStore((s) => s.mkdirRemote)
   const rename = useSftpStore((s) => s.renameRemote)
@@ -139,7 +140,11 @@ export function RemotePane(): JSX.Element {
           if (!raw) return
           e.preventDefault()
           try {
-            void uploadPaths(JSON.parse(raw) as string[])
+            const paths = JSON.parse(raw) as string[]
+            // 拖到右栏 = 明确落到「右栏当前显示的目录」，这是用户看得见的选择；
+            // 只有右栏还没定位（dir 为空）时才回退到目录选择框。
+            if (dir) void uploadPaths(paths, dir)
+            else void requestUpload(paths)
           } catch {
             /* 无效拖拽数据 */
           }

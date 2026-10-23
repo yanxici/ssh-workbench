@@ -18,8 +18,11 @@ import {
 import type { RemoteFile } from '@shared/types'
 import type { SessionUi } from '@/stores/sessionStore'
 import { useSftpStore } from '@/stores/sftpStore'
+import { useToastStore } from '@/stores/toastStore'
 import { call } from '@/lib/ipc'
 import { cn, formatBytes, remoteDirname, remoteJoin } from '@/lib/utils'
+import { normalizeRemoteDir, rememberUploadDir, resolveUploadDir } from '@/lib/uploadDir'
+import { UploadTargetDialog } from './UploadTargetDialog'
 
 /**
  * 侧栏文件面板：工作区 / 文件系统 两个 Tab。
@@ -64,6 +67,11 @@ export function FileExplorer({
   const [selected, setSelected] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  /* 上传前先确认目标目录：以前这里直接把 currentDir 塞进系统文件对话框，
+     currentDir 为空时就是 '' → joinRemote('' , name) → '/name'，落根目录。 */
+  const [uploadOpen, setUploadOpen] = useState(false)
+  const [uploadDefault, setUploadDefault] = useState('')
+  const [uploadBusy, setUploadBusy] = useState(false)
 
   const version = useSftpStore((s) => s.treeVersion)
   const bumpTree = useSftpStore((s) => s.bumpTree)
@@ -76,14 +84,17 @@ export function FileExplorer({
   useEffect(() => {
     if (!sessionId || !connected) {
       setHome('')
+      setCurrentDir('')
       return
     }
     let cancelled = false
     void call(window.api.sftp.home(sessionId), { silent: true }).then((dir) => {
       if (cancelled) return
-      const h = dir || '/'
+      // home 拿不到时不假装是根目录：currentDir 保持空，上传按钮会先让用户选目录，
+      // 而不是像以前那样静默传到 '/'。
+      const h = normalizeRemoteDir(dir)
       setHome(h)
-      setCurrentDir((cur) => cur || h)
+      setCurrentDir((cur) => normalizeRemoteDir(cur) || h)
     })
     return () => {
       cancelled = true
@@ -161,6 +172,39 @@ export function FileExplorer({
     setTab('fs')
   }
 
+  /* ---------- 上传：先选目标目录，再选本地文件 ---------- */
+  const openUpload = async (): Promise<void> => {
+    if (!sessionId) return
+    // 当前目录 → 上次用的目录 → 远端 home；都拿不到就留空让用户自己填
+    const dir = await resolveUploadDir(sessionId, currentDir)
+    setUploadDefault(dir)
+    setUploadOpen(true)
+  }
+
+  const doUpload = async (dir: string): Promise<void> => {
+    if (!sessionId) return
+    const target = normalizeRemoteDir(dir)
+    if (!target) return
+    setUploadBusy(true)
+    try {
+      rememberUploadDir(sessionId, target)
+      const res = await call(window.api.sftp.uploadDialog(sessionId, target), {
+        errorTitle: '上传失败'
+      })
+      if (res && !res.canceled) {
+        useToastStore.getState().push({
+          kind: 'info',
+          title: `已加入 ${res.count} 个上传任务`,
+          detail: `目标：${target}`
+        })
+        bumpTree()
+      }
+    } finally {
+      setUploadBusy(false)
+      setUploadOpen(false)
+    }
+  }
+
   /* ---------- 面包屑：把路径拆成可点的段 ---------- */
   const crumbs = (() => {
     const p = currentDir || '/'
@@ -219,19 +263,17 @@ export function FileExplorer({
         </button>
         <button
           className="btn-icon h-6 w-6"
-          title="上传文件到当前目录"
-          onClick={() => {
-            void call(window.api.sftp.uploadDialog(sessionId!, currentDir), { silent: true }).then(
-              () => bumpTree()
-            )
-          }}
+          title={currentDir ? `上传文件到 ${currentDir}（可改目标目录）` : '上传文件（选择目标目录）'}
+          onClick={() => void openUpload()}
         >
           <Upload size={13} />
         </button>
         <button
           className="btn-icon h-6 w-6"
-          title="新建文件夹"
+          title={currentDir ? '在当前目录新建文件夹' : '请先进入一个目录'}
+          disabled={!currentDir}
           onClick={() => {
+            if (!currentDir) return
             void call(window.api.sftp.mkdir(sessionId!, remoteJoin(currentDir, '新建文件夹')), {
               silent: true
             }).then(() => bumpTree())
@@ -365,8 +407,8 @@ export function FileExplorer({
 
       {/* 底：当前目录 + 上级 */}
       <div className="flex h-7 shrink-0 items-center gap-1 border-t border-edge px-1.5 text-2xs text-ink-3">
-        <span className="min-w-0 flex-1 truncate font-mono" title={currentDir}>
-          {currentDir || '/'}
+        <span className="min-w-0 flex-1 truncate font-mono" title={currentDir || undefined}>
+          {currentDir || '未选择目录'}
         </span>
         {currentDir && currentDir !== '/' && (
           <button
@@ -377,6 +419,17 @@ export function FileExplorer({
           </button>
         )}
       </div>
+
+      {/* 上传目标目录（选完目录才弹本地文件选择框） */}
+      <UploadTargetDialog
+        open={uploadOpen}
+        sessionId={sessionId ?? ''}
+        defaultDir={uploadDefault}
+        hint={currentDir ? `当前浏览：${currentDir}` : '未进入目录，请手动指定上传位置'}
+        busy={uploadBusy}
+        onCancel={() => setUploadOpen(false)}
+        onConfirm={(dir) => void doUpload(dir)}
+      />
     </div>
   )
 }

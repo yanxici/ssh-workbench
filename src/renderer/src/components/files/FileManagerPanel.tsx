@@ -2,6 +2,7 @@ import { ArrowDownToLine, ArrowLeft, ArrowRight, FolderTree, X } from 'lucide-re
 import { useSftpStore } from '@/stores/sftpStore'
 import { LocalPane } from './LocalPane'
 import { RemotePane } from './RemotePane'
+import { UploadTargetDialog } from './UploadTargetDialog'
 
 /**
  * SFTP 文件管理面板（覆盖主区域的双栏视图）。
@@ -12,9 +13,14 @@ export function FileManagerPanel(): JSX.Element | null {
   const open = useSftpStore((s) => s.open)
   const sessionTitle = useSftpStore((s) => s.sessionTitle)
   const close = useSftpStore((s) => s.close)
+  const sessionId = useSftpStore((s) => s.sessionId)
   const localSel = useSftpStore((s) => s.localSel)
   const remoteSel = useSftpStore((s) => s.remoteSel)
+  const remoteDir = useSftpStore((s) => s.remoteDir)
   const uploadPaths = useSftpStore((s) => s.uploadPaths)
+  const requestUpload = useSftpStore((s) => s.requestUpload)
+  const cancelUploadRequest = useSftpStore((s) => s.cancelUploadRequest)
+  const uploadRequest = useSftpStore((s) => s.uploadRequest)
   const downloadPaths = useSftpStore((s) => s.downloadPaths)
   const transfers = useSftpStore((s) => s.transfers)
   const showDock = useSftpStore((s) => s.showDock)
@@ -63,9 +69,9 @@ export function FileManagerPanel(): JSX.Element | null {
         <div className="flex w-[52px] shrink-0 flex-col items-center justify-center gap-3 border-x border-edge-soft bg-panel/50">
           <button
             className="btn-icon h-8 w-8"
-            title={`上传选中项到右侧目录（已选 ${localSel.length}）`}
+            title={`上传选中项（已选 ${localSel.length}，可改目标目录）`}
             disabled={localSel.length === 0}
-            onClick={() => void uploadPaths(localSel)}
+            onClick={() => void requestUpload(localSel)}
           >
             <ArrowRight size={16} />
           </button>
@@ -83,6 +89,24 @@ export function FileManagerPanel(): JSX.Element | null {
           <RemotePane />
         </div>
       </div>
+
+      {/* 上传目标目录确认（双栏里点上传 / 拖拽本地文件过来时都会先走这里） */}
+      <UploadTargetDialog
+        open={uploadRequest !== null}
+        sessionId={sessionId ?? ''}
+        defaultDir={uploadRequest?.defaultDir ?? ''}
+        hint={
+          uploadRequest
+            ? `共 ${uploadRequest.localPaths.length} 项 · 右侧当前：${remoteDir || '未进入目录'}`
+            : undefined
+        }
+        onCancel={cancelUploadRequest}
+        onConfirm={(dir) => {
+          const paths = uploadRequest?.localPaths ?? []
+          cancelUploadRequest()
+          void uploadPaths(paths, dir)
+        }}
+      />
     </div>
   )
 }
