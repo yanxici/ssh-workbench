@@ -236,6 +236,14 @@ export interface AppSettings {
   connectionGroupOrder?: string[]
   /** 连接分组色标：分组名 -> 十六进制颜色（侧栏分组头左侧色条） */
   connectionGroupColors?: Record<string, string>
+  /**
+   * 断线自动重连。
+   * 现场设备（充电桩/机器人）常因网络抖动断开，手动点重连很烦；
+   * 关掉的话保持旧行为，只显示断线状态。
+   */
+  autoReconnect?: boolean
+  /** 最多重试次数，用尽后停止并提示（默认 5） */
+  autoReconnectMax?: number
   /** 三栏尺寸（拖拽分隔条后写入）；缺省用渲染层内置默认值，老配置无需迁移 */
   layout?: LayoutSizes
   /** 命令中心里收藏（置顶）的命令 id */
@@ -346,6 +354,57 @@ export interface MetricsEvent {
   running: boolean
   sample?: MetricsSample
   error?: string
+}
+
+/** 自动重连的阶段 */
+export type ReconnectPhase =
+  /** 已安排下一次尝试（等待退避） */
+  | 'scheduled'
+  /** 正在连接 */
+  | 'connecting'
+  /** 重连成功 */
+  | 'restored'
+  /** 本次尝试失败，还会继续重试 */
+  | 'failed'
+  /** 次数用尽，放弃 */
+  | 'gave-up'
+
+export interface ReconnectEvent {
+  sessionId: string
+  phase: ReconnectPhase
+  /** 给用户看的一句话 */
+  message: string
+  /** 第几次尝试（从 1 开始） */
+  attempt: number
+}
+
+/* ---------- 错误日志 ---------- */
+
+/** 一条错误记录。设计目标是「用户能看懂 + 开发能定位」，不是完整堆栈转储。 */
+export interface ErrorEntry {
+  id: string
+  /** 记录时间 */
+  at: number
+  /** 严重程度：错误 / 警告 */
+  level: 'error' | 'warn'
+  /** 来源层：主进程 / 渲染层 / IPC 通道名 */
+  source: string
+  /** 人话标题，给用户看的（例如「保存连接失败」） */
+  title: string
+  /** 详细信息：错误消息、通道名、可能的堆栈首行 */
+  detail?: string
+  /** 发生次数：相同内容只记一条并累加，避免刷屏占满磁盘 */
+  count: number
+  /** 最近一次发生时间（首次记录时等于 at） */
+  lastAt: number
+  /** 应用版本，排查时能区分版本差异 */
+  version?: string
+}
+
+export interface ErrorLogStats {
+  total: number
+  /** 按来源聚合，用于「哪个模块错得最多」 */
+  bySource: Array<{ source: string; count: number }>
 }
 
 /* ------------------------------------------------------------------ *

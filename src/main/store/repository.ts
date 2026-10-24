@@ -145,7 +145,10 @@ export const DEFAULT_SETTINGS: AppSettings = {
     'chmod -R 777 /',
     'kill -9 1'
   ],
-  strictHostKey: true
+  strictHostKey: true,
+  // 现场设备网络抖动频繁，默认开启自动重连；仍可在设置里关掉
+  autoReconnect: true,
+  autoReconnectMax: 5
 }
 
 /* ------------------------------------------------------------------ *

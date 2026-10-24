@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type DragEvent } from 'react'
+import { installErrorReporter } from '@/lib/errorReporter'
 import { lazy, Suspense } from 'react'
 import type { Command, ConnectionInput } from '@shared/types'
 import { useSettingsStore } from '@/stores/settingsStore'
@@ -84,6 +85,11 @@ const BackupPanel = lazy(() =>
  * 导航栏，命令栏常驻右侧 —— 两者本来就是并行信息。
  */
 export function App(): JSX.Element {
+  // 全局错误上报只需装一次；放在最外层组件的挂载期
+  useEffect(() => {
+    installErrorReporter()
+  }, [])
+
   const sessions = useSessionStore((s) => s.sessions)
   const activeId = useSessionStore((s) => s.activeId)
 
@@ -164,6 +170,10 @@ export function App(): JSX.Element {
     const offTunnel = window.api.on.tunnelStatus((info) => {
       useTunnelStore.getState().applyRuntime(info)
     })
+    // 自动重连进度：标签栏据此显示「N 秒后重连 / 第 x 次」
+    const offReconnect = window.api.on.reconnect((e) => {
+      useSessionStore.getState().applyReconnect(e)
+    })
     const offDiag = window.api.on.diagProgress((e) => {
       useDiagStore.getState().applyProgress(e)
     })
@@ -188,6 +198,7 @@ export function App(): JSX.Element {
       offStatus()
       offLatency()
       offTunnel()
+      offReconnect()
       offDiag()
       offBatch()
       offMetrics()

@@ -6,7 +6,7 @@ import {
   useState,
   type MouseEvent as ReactMouseEvent
 } from 'react'
-import { X, Plus, Pencil, XCircle, CircleSlash2, RefreshCw, SquarePlus } from 'lucide-react'
+import { X, Plus, Pencil, XCircle, CircleSlash2, Loader2, RefreshCw, SquarePlus } from 'lucide-react'
 import type { ConnStatus } from '@shared/types'
 import { useSessionStore } from '@/stores/sessionStore'
 import { useUiStore } from '@/stores/uiStore'
@@ -61,6 +61,7 @@ export function TabBar(): JSX.Element {
    * 且每次会话状态变化都要重扫。改成一次建索引 + 复用。
    */
   const sessionById = useMemo(() => new Map(sessions.map((x) => [x.id, x])), [sessions])
+  const reconnectById = useSessionStore((s) => s.reconnectById)
   const activeSession = activeId ? sessionById.get(activeId) : undefined
 
   const [editingId, setEditingId] = useState<string | null>(null)
@@ -216,6 +217,8 @@ export function TabBar(): JSX.Element {
         className="tabs-scroll no-drag flex h-full min-w-0 shrink items-stretch gap-px"
       >
         {sessions.map((s, i) => {
+          // 该标签的自动重连进度（有就说明正在自动恢复）
+          const rc = reconnectById[s.id]
           const isActive = s.id === activeId
           return (
             <div
@@ -275,21 +278,37 @@ export function TabBar(): JSX.Element {
                 <span className="min-w-0 flex-1 truncate">{s.title}</span>
               )}
 
-              {(s.status === 'disconnected' || s.status === 'error') && (
-                <button
+              {/*
+                * 自动重连进行中：显示脉冲点而不是重连按钮，
+                * 让用户知道「正在自己恢复，别急着手动点」。
+                */}
+              {rc && (s.status === 'disconnected' || s.status === 'error') ? (
+                <span
                   className={cn(
-                    'flex h-4 w-4 shrink-0 items-center justify-center rounded transition-colors duration-150',
-                    isActive ? 'text-warning hover:bg-hover' : 'text-on-brand hover:bg-on-brand/20'
+                    'flex h-4 shrink-0 items-center justify-center',
+                    isActive ? 'text-warning' : 'text-on-brand'
                   )}
-                  title="重新连接"
-                  onMouseDown={(e) => e.stopPropagation()}
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    reconnect(s.id)
-                  }}
+                  title={rc.message}
                 >
-                  <RefreshCw size={11} />
-                </button>
+                  <Loader2 size={11} className="animate-spin" />
+                </span>
+              ) : (
+                (s.status === 'disconnected' || s.status === 'error') && (
+                  <button
+                    className={cn(
+                      'flex h-4 w-4 shrink-0 items-center justify-center rounded transition-colors duration-150',
+                      isActive ? 'text-warning hover:bg-hover' : 'text-on-brand hover:bg-on-brand/20'
+                    )}
+                    title="重新连接"
+                    onMouseDown={(e) => e.stopPropagation()}
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      reconnect(s.id)
+                    }}
+                  >
+                    <RefreshCw size={11} />
+                  </button>
+                )
               )}
 
               <button

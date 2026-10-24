@@ -1,6 +1,12 @@
 import { Client, type ClientChannel, type ConnectConfig } from 'ssh2'
 import { StringDecoder } from 'node:string_decoder'
-import type { AppSettings, ConnStatus, Connection, SessionInfo } from '@shared/types'
+import type {
+  AppSettings,
+  ConnStatus,
+  Connection,
+  ReconnectEvent,
+  SessionInfo
+} from '@shared/types'
 import { getConnection, getSettings, touchConnection } from '../store/repository'
 import { recorder } from '../store/recorder'
 import { getSecret } from '../store/vault'
@@ -91,6 +97,31 @@ class SessionManager {
    * 改由 main 入口注入，回调未注入时静默跳过（预热只是优化）。
    */
   private sftpPrewarm: ((sessionId: string) => Promise<void>) | null = null
+  /** 自动重连进度回调，由 main 转发到渲染层 */
+  private onReconnect:
+    | ((e: ReconnectEvent) => void)
+    | null = null
+
+  setReconnectHandler(fn: (e: ReconnectEvent) => void): void {
+    this.onReconnect = fn
+  }
+  /**
+   * 每个会话的自动重连进度。
+   * 用 sessionId 索引而不是挂在 SessionRecord 上：teardown 会把 record 从
+   * sessions 里删掉，重连期间我们需要独立于旧 record 保存"重试到第几次了"。
+   */
+  private reconnectState = new Map<
+    string,
+    {
+      attempt: number
+      timer?: NodeJS.Timeout
+      /** 重连时复用的会话信息（record 已被 teardown 删除，只能靠快照） */
+      connectionId: string
+      title: string
+      cols: number
+      rows: number
+    }
+  >()
   private handlers: SessionEvents | null = null
   /** 会话关闭钩子（供 SFTP 等模块清理挂在会话上的资源） */
   private onClosed: ((sessionId: string) => void) | null = null
@@ -529,6 +560,178 @@ class SessionManager {
     this.settleReadyWaiters(record.id, status, error)
     this.onClosed?.(record.id)
     if (!silent) this.emitStatus(record, status, error)
+
+    /*
+     * 自动重连：只在「非用户主动关闭」且状态是 disconnected/error 时启动。
+     * 用户点了关闭标签（closedByUser）或程序退出时不重连 —— 那是主动行为，
+     * 重连会让用户觉得"关不掉"。
+     */
+    if (!record.closedByUser && (status === 'disconnected' || status === 'error')) {
+      void this.scheduleReconnect(record)
+    }
+  }
+
+  /**
+   * 安排一次自动重连（指数退避）。
+   *
+   * 退避序列（秒）：1, 2, 4, 8, 16 —— 上限 30s，默认最多 5 次。
+   * 为什么退避：服务器重启或网络中断时，立刻重试只会连续撞墙，
+   * 既刷日志又给对方增加无谓负担。退避能让短抖动（1~2 秒）快速恢复，
+   * 长中断则慢慢重试直到放弃。
+   *
+   * 放弃条件：次数用尽，或用户主动关闭该标签。
+   */
+  private async scheduleReconnect(record: SessionRecord): Promise<void> {
+    const existing = this.reconnectState.get(record.id)
+    const attempt = (existing?.attempt ?? 0) + 1
+
+    let settings: AppSettings
+    try {
+      settings = await getSettings()
+    } catch {
+      return
+    }
+    if (settings.autoReconnect === false) return
+
+    const max = Math.max(1, Math.min(settings.autoReconnectMax ?? 5, 20))
+    if (attempt > max) {
+      this.reconnectState.delete(record.id)
+      this.onReconnect?.({
+        sessionId: record.id,
+        phase: 'gave-up',
+        message: `已自动重试 ${max} 次仍未成功，请检查网络或手动重连`,
+        attempt: attempt - 1
+      })
+      return
+    }
+
+    /*
+     * 记录重连所需的全部信息。
+     * teardown 后 record 已从 sessions 移除，重连必须靠这份快照，
+     * 尤其是 connectionId（open 要它去查连接配置和凭据）。
+     */
+    const connectionId = record.connectionId
+    const title = record.connectionName
+    const { cols, rows } = record
+
+    const delaySec = Math.min(2 ** (attempt - 1), 30)
+    this.reconnectState.set(record.id, {
+      attempt,
+      connectionId,
+      title,
+      cols,
+      rows
+    })
+
+    this.onReconnect?.({
+      sessionId: record.id,
+      phase: 'scheduled',
+      message: `连接已断开，${delaySec} 秒后自动重连（第 ${attempt}/${max} 次）`,
+      attempt
+    })
+
+    const timer = setTimeout(() => {
+      void this.runReconnect(record.id)
+    }, delaySec * 1000)
+    timer.unref?.()
+    const st = this.reconnectState.get(record.id)
+    if (st) st.timer = timer
+  }
+
+  /** 真正执行一次重连；成功后清空状态，失败则排下一次 */
+  private async runReconnect(sessionId: string): Promise<void> {
+    const st = this.reconnectState.get(sessionId)
+    if (!st) return
+
+    this.onReconnect?.({
+      sessionId,
+      phase: 'connecting',
+      message: `正在重连（第 ${st.attempt} 次）…`,
+      attempt: st.attempt
+    })
+
+    try {
+      // open 内部会在 sessions 里重新登记 record，走完整流程（跳板/代理/shell）
+      await this.open(sessionId, st.connectionId, st.cols, st.rows)
+      this.reconnectState.delete(sessionId)
+      this.onReconnect?.({
+        sessionId,
+        phase: 'restored',
+        message: '已自动重连',
+        attempt: st.attempt
+      })
+      return
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      this.onReconnect?.({
+        sessionId,
+        phase: 'failed',
+        message: `重连失败：${message}`,
+        attempt: st.attempt
+      })
+      // 失败后继续按退避排下一次（次数 +1，用快照而不是 record）
+      await this.scheduleReconnectFromState(sessionId)
+    }
+  }
+
+  /**
+   * record 已销毁时用快照继续排重试。
+   * 与 scheduleReconnect 的差别：后者从 record 读快照，这里从 reconnectState 读。
+   */
+  private async scheduleReconnectFromState(sessionId: string): Promise<void> {
+    const st = this.reconnectState.get(sessionId)
+    if (!st) return
+
+    let settings: AppSettings
+    try {
+      settings = await getSettings()
+    } catch {
+      return
+    }
+    if (settings.autoReconnect === false) {
+      this.reconnectState.delete(sessionId)
+      return
+    }
+
+    const max = Math.max(1, Math.min(settings.autoReconnectMax ?? 5, 20))
+    const attempt = st.attempt + 1
+    if (attempt > max) {
+      this.reconnectState.delete(sessionId)
+      this.onReconnect?.({
+        sessionId,
+        phase: 'gave-up',
+        message: `已自动重试 ${max} 次仍未成功，请检查网络或手动重连`,
+        attempt: st.attempt
+      })
+      return
+    }
+
+    const delaySec = Math.min(2 ** (attempt - 1), 30)
+    this.reconnectState.set(sessionId, { ...st, attempt, timer: undefined })
+    this.onReconnect?.({
+      sessionId,
+      phase: 'scheduled',
+      message: `${delaySec} 秒后重试（第 ${attempt}/${max} 次）`,
+      attempt
+    })
+
+    const timer = setTimeout(() => void this.runReconnect(sessionId), delaySec * 1000)
+    timer.unref?.()
+    const cur = this.reconnectState.get(sessionId)
+    if (cur) cur.timer = timer
+  }
+
+  /** 取消自动重连（用户主动关闭标签、手动点重连、或连接成功时调用） */
+  cancelReconnect(sessionId: string): void {
+    const st = this.reconnectState.get(sessionId)
+    if (!st) return
+    if (st.timer) clearTimeout(st.timer)
+    this.reconnectState.delete(sessionId)
+  }
+
+  /** 是否有会话正在自动重连（供测试/诊断） */
+  isReconnecting(sessionId: string): boolean {
+    return this.reconnectState.has(sessionId)
   }
 
   private cleanup(record: SessionRecord): void {

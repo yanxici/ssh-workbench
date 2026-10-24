@@ -20,6 +20,7 @@ import { useToastStore } from '@/stores/toastStore'
 import { call } from '@/lib/ipc'
 import { cn } from '@/lib/utils'
 import { Modal, Toggle } from '@/components/ui'
+import { ErrorLogSection } from './ErrorLogSection'
 
 interface KnownHost {
   host: string
@@ -466,6 +467,30 @@ export function SettingsPanel({
           <Toggle checked={settings.autoLog} onChange={(v) => void update({ autoLog: v })} />
         </Row>
         <Row
+          label="断线自动重连"
+          hint="网络抖动断开后在后台按 1/2/4/8/16 秒退避重试，标签上显示进度；用户主动关闭标签则不重连"
+        >
+          <Toggle
+            checked={settings.autoReconnect !== false}
+            onChange={(v) => void update({ autoReconnect: v })}
+          />
+        </Row>
+        {settings.autoReconnect !== false && (
+          <Row label="最多重试次数" hint="用尽后停止并提示，可手动重连（1~20 次）">
+            <input
+              type="number"
+              min={1}
+              max={20}
+              className="input h-7 w-16 px-2 text-xs"
+              value={settings.autoReconnectMax ?? 5}
+              onChange={(e) => {
+                const n = Math.max(1, Math.min(20, Number(e.target.value) || 5))
+                void update({ autoReconnectMax: n })
+              }}
+            />
+          </Row>
+        )}
+        <Row
           label="严格主机指纹校验"
           hint="首次连接记录指纹；指纹变化（如重装系统/换固件）时拒绝连接并告警"
         >
@@ -585,6 +610,14 @@ export function SettingsPanel({
             ))}
           </div>
         )}
+      </Section>
+
+      <Section
+        id="errorlog"
+        title="错误日志"
+        hint="运行期异常自动收集，可搜索、复制、导出给同事排查"
+      >
+        <ErrorLogSection />
       </Section>
 
       <Section id="datadir" title="数据目录">

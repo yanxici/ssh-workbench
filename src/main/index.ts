@@ -87,6 +87,14 @@ import { tcpProbe } from './util/tcpProbe'
 import { hasSecret } from './store/vault'
 import { listDrives, localDelete, localList, localMkdir, localRename } from './store/localFs'
 import { recorder } from './store/recorder'
+import {
+  clearErrors,
+  deleteError,
+  errorStats,
+  exportErrorsText,
+  listErrors,
+  recordError
+} from './store/errorLog'
 import { parseSshCommand } from './util/parseSshCommand'
 import { sessionManager } from './ssh/sessionManager'
 import { sftpManager } from './ssh/sftpManager'
@@ -162,18 +170,91 @@ app.disableHardwareAcceleration()
  *  IPC 包装：主进程异常统一转为 { ok:false, error }，渲染层不感知异常
  * ------------------------------------------------------------------ */
 
+/**
+ * 注册 IPC 处理器，并把失败自动记进错误日志。
+ *
+ * 在统一出口处记录的好处：不用在每个 handler 里各写一遍 try/catch，
+ * 新增通道自动获得错误记录能力，也不会有人忘记加。
+ */
 function handle(channel: string, fn: (...args: never[]) => unknown): void {
   ipcMain.handle(channel, async (_event, ...args: unknown[]) => {
     try {
       const data = await fn(...(args as never[]))
       return { ok: true, data }
     } catch (err) {
-      return { ok: false, error: err instanceof Error ? err.message : String(err) }
+      const message = err instanceof Error ? err.message : String(err)
+      // 错误日志自身失败不影响返回值（recordError 内部已兜底，这里再保险一次）
+      void recordError({
+        level: 'error',
+        source: `ipc:${channel}`,
+        title: channelTitle(channel),
+        detail: message
+      })
+      return { ok: false, error: message }
     }
   })
 }
 
+/** 把 IPC 通道名翻成人话标题，用户在日志面板里能直接看懂 */
+function channelTitle(channel: string): string {
+  const map: Record<string, string> = {
+    'conn:save': '保存连接失败',
+    'conn:delete': '删除连接失败',
+    'conn:rename-group': '重命名连接分组失败',
+    'conn:delete-group': '删除连接分组失败',
+    'conn:delete-many': '批量删除连接失败',
+    'conn:test': '测试连接失败',
+    'session:open': '打开会话失败',
+    'session:write': '终端写入失败',
+    'sftp:list': '读取远程目录失败',
+    'sftp:upload': '上传失败',
+    'sftp:download': '下载失败',
+    'sftp:remove': '删除远程文件失败',
+    'sftp:mkdir': '新建远程目录失败',
+    'sftp:rename': '重命名远程文件失败',
+    'sftp:chmod': '修改远程权限失败',
+    'sftp:readText': '读取远程文件失败',
+    'sftp:writeText': '写入远程文件失败',
+    'tunnel:start': '启动端口转发失败',
+    'diag:run': '诊断巡检失败',
+    'batch:run': '批量执行失败'
+  }
+  return map[channel] ?? `操作失败（${channel}）`
+}
+
 function registerIpc(): void {
+  /* ---------------- 错误日志 ---------------- */
+  handle(IPC.ERR_LIST, () => listErrors())
+  handle(IPC.ERR_STATS, () => errorStats())
+  handle(IPC.ERR_CLEAR, () => clearErrors())
+  handle(IPC.ERR_DELETE, (id: string) => deleteError(id))
+  handle(IPC.ERR_EXPORT, async () => {
+    const text = await exportErrorsText()
+    const target = BrowserWindow.getFocusedWindow() ?? mainWindow
+    const res = await dialog.showSaveDialog(target as BrowserWindow, {
+      title: '导出错误日志',
+      defaultPath: join(app.getPath('desktop'), `错误日志-${Date.now()}.txt`),
+      filters: [{ name: '文本文件', extensions: ['txt'] }]
+    })
+    if (res.canceled || !res.filePath) return { canceled: true as const }
+    await fs.writeFile(res.filePath, text, 'utf-8')
+    return { canceled: false as const, path: res.filePath, bytes: Buffer.byteLength(text) }
+  })
+  /* ---------------- 自动重连 ---------------- */
+  handle(IPC.SESSION_RECONNECT_CANCEL, (sessionId: string) => {
+    sessionManager.cancelReconnect(sessionId)
+  })
+
+  handle(IPC.ERR_REPORT, (input: { source: string; title: string; detail?: string }) =>
+    recordError({
+      level: 'error',
+      // 渲染层上报统一加前缀，和主进程错误区分开
+      source: `renderer:${input.source}`,
+      title: input.title,
+      detail: input.detail
+    })
+  )
+
   /* ---------------- 连接管理 ---------------- */
   handle(IPC.CONN_LIST, () => listConnections())
   handle(IPC.CONN_SAVE, (input: ConnectionInput) => saveConnection(input))
@@ -1915,6 +1996,11 @@ if (!gotLock) {
      * 只有在两者都完成模块初始化之后才能安全地建立这条引用。
      */
     sessionManager.setSftpPrewarm((sessionId) => sftpManager.prewarm(sessionId))
+
+    // 自动重连进度转发到渲染层（标签栏显示倒计时/重试次数）
+    sessionManager.setReconnectHandler((event) => {
+      mainWindow?.webContents.send(IPC.EVT_RECONNECT, event)
+    })
 
     sftpManager.setProgressHandler((event) => {
       mainWindow?.webContents.send(IPC.EVT_TRANSFER_PROGRESS, event)

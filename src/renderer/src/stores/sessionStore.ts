@@ -1,6 +1,6 @@
 import { useMemo } from 'react'
 import { create } from 'zustand'
-import type { ConnStatus } from '@shared/types'
+import type { ConnStatus, ReconnectEvent } from '@shared/types'
 import type { Terminal } from '@xterm/xterm'
 import type { FitAddon } from '@xterm/addon-fit'
 import type { SearchAddon } from '@xterm/addon-search'
@@ -51,6 +51,17 @@ interface SessionState {
    * 拆出来后只有真正读延迟的 StatusBar 会重渲染。
    */
   latencyById: Record<string, number>
+  /**
+   * 自动重连进度：sessionId -> 事件。
+   * 与 latencyById 同理拆出来，避免每次重连进度变化都重建 sessions 数组
+   * 导致所有终端跟着重渲染。
+   */
+  reconnectById: Record<string, ReconnectEvent>
+
+  /** 收到主进程的重连事件 */
+  applyReconnect: (e: ReconnectEvent) => void
+  /** 取消自动重连（用户主动关闭标签时） */
+  cancelReconnect: (id: string) => void
 
   open: (conn: { id: string; name: string; host: string; username: string }) => string
   /** 断开 / 失败的会话原地重连（同一标签、保留终端内容） */
@@ -74,6 +85,25 @@ export const useSessionStore = create<SessionState>()((set, get) => ({
   sessions: [],
   activeId: null,
   latencyById: {},
+  reconnectById: {},
+
+  applyReconnect: (e) =>
+    set((s) => {
+      const next = { ...s.reconnectById }
+      // 重连成功或彻底放弃后不再需要显示，清掉
+      if (e.phase === 'restored' || e.phase === 'gave-up') delete next[e.sessionId]
+      else next[e.sessionId] = e
+      return { reconnectById: next }
+    }),
+
+  cancelReconnect: (id) => {
+    void window.api.session.reconnectCancel(id)
+    set((s) => {
+      const next = { ...s.reconnectById }
+      delete next[id]
+      return { reconnectById: next }
+    })
+  },
 
   open: (conn) => {
     const id = uid()
@@ -186,6 +216,8 @@ export const useSessionStore = create<SessionState>()((set, get) => ({
   },
 
   close: (id) => {
+    // 用户主动关闭：必须取消自动重连，否则标签关了还会被"重连"拉回来
+    void window.api.session.reconnectCancel(id)
     void window.api.session.close(id)
     const { sessions, activeId } = get()
     const idx = sessions.findIndex((s) => s.id === id)

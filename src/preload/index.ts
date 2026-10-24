@@ -28,6 +28,8 @@ import type {
   DiagSectionInput,
   DiscoverHost,
   DiscoverProgressEvent,
+  ErrorEntry,
+  ErrorLogStats,
   FirmwareFileInfo,
   FirmwareLogEvent,
   FirmwareUpgradeResult,
@@ -40,6 +42,7 @@ import type {
   NetInterfaceInfo,
   NetProbeResult,
   ParsedSshCommand,
+  ReconnectEvent,
   RemoteFile,
   SessionDataEvent,
   SessionInfo,
@@ -156,6 +159,9 @@ export const api = {
       rows: number
     }): Promise<IpcResult<void>> => invoke(IPC.SESSION_OPEN_SHELL, input),
     close: (sessionId: string): Promise<IpcResult<void>> => invoke(IPC.SESSION_CLOSE, sessionId),
+    /** 取消该会话正在进行的自动重连 */
+    reconnectCancel: (sessionId: string): Promise<IpcResult<void>> =>
+      invoke(IPC.SESSION_RECONNECT_CANCEL, sessionId),
     write: (sessionId: string, data: string): Promise<IpcResult<void>> =>
       invoke(IPC.SESSION_WRITE, sessionId, data),
     resize: (sessionId: string, cols: number, rows: number): Promise<IpcResult<void>> =>
@@ -199,6 +205,20 @@ export const api = {
   knownHosts: {
     list: (): Promise<IpcResult<KnownHostInfo[]>> => invoke(IPC.KNOWN_HOSTS_LIST),
     remove: (key: string): Promise<IpcResult<void>> => invoke(IPC.KNOWN_HOSTS_DELETE, key)
+  },
+
+  /** 错误日志：用户在设置里能直接查看、复制、导出 */
+  errors: {
+    list: (): Promise<IpcResult<ErrorEntry[]>> => invoke(IPC.ERR_LIST),
+    stats: (): Promise<IpcResult<ErrorLogStats>> => invoke(IPC.ERR_STATS),
+    clear: (): Promise<IpcResult<void>> => invoke(IPC.ERR_CLEAR),
+    remove: (id: string): Promise<IpcResult<void>> => invoke(IPC.ERR_DELETE, id),
+    export: (): Promise<
+      IpcResult<{ canceled: true } | { canceled: false; path: string; bytes: number }>
+    > => invoke(IPC.ERR_EXPORT),
+    /** 渲染层异常上报：窗口崩溃、React 渲染错误、未捕获 Promise 等 */
+    report: (input: { source: string; title: string; detail?: string }): Promise<IpcResult<unknown>> =>
+      invoke(IPC.ERR_REPORT, input)
   },
 
   sftp: {
@@ -439,6 +459,8 @@ export const api = {
       subscribe(IPC.EVT_TRANSFER_PROGRESS, cb),
     tunnelStatus: (cb: (e: TunnelRuntimeInfo) => void): (() => void) =>
       subscribe(IPC.EVT_TUNNEL_STATUS, cb),
+    reconnect: (cb: (e: ReconnectEvent) => void): (() => void) =>
+      subscribe(IPC.EVT_RECONNECT, cb),
     diagProgress: (cb: (e: DiagProgressEvent) => void): (() => void) =>
       subscribe(IPC.EVT_DIAG_PROGRESS, cb),
     batchProgress: (cb: (e: BatchProgressEvent) => void): (() => void) =>

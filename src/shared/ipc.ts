@@ -103,6 +103,21 @@ export const IPC = {
   LOG_EXPORT: 'log:export',
   LOG_OPEN_DIR: 'log:open-dir',
 
+  /* ---------------- 错误日志（用户可见、可导出） ---------------- */
+  ERR_LIST: 'err:list',
+  ERR_STATS: 'err:stats',
+  ERR_CLEAR: 'err:clear',
+  ERR_DELETE: 'err:delete',
+  ERR_EXPORT: 'err:export',
+  /** 渲染层把自身异常上报给主进程（窗口崩溃、React 错误等） */
+  ERR_REPORT: 'err:report',
+
+  /* ---------------- 自动重连 ---------------- */
+  /** 手动触发一次重连（UI 的「立即重试」按钮） */
+  SESSION_RECONNECT_NOW: 'session:reconnect-now',
+  /** 取消正在进行的自动重连（用户主动关闭标签） */
+  SESSION_RECONNECT_CANCEL: 'session:reconnect-cancel',
+
   /* ---------------- 端口转发 / 隧道 ---------------- */
   TUNNEL_LIST: 'tunnel:list',
   TUNNEL_SAVE: 'tunnel:save',
@@ -175,6 +190,8 @@ export const IPC = {
   EVT_SESSION_DATA: 'evt:session-data',
   EVT_SESSION_STATUS: 'evt:session-status',
   EVT_SESSION_LATENCY: 'evt:session-latency',
+  /** 自动重连进度（scheduled / connecting / restored / failed / gave-up） */
+  EVT_RECONNECT: 'evt:reconnect',
   EVT_TRANSFER_PROGRESS: 'evt:transfer-progress',
   EVT_TUNNEL_STATUS: 'evt:tunnel-status',
   EVT_DIAG_PROGRESS: 'evt:diag-progress',

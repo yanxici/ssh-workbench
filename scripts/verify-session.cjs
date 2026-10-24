@@ -126,7 +126,20 @@ async function main() {
   await new Promise((r) => server.listen(0, '127.0.0.1', r))
   const port = server.address().port
 
-  await M.setSettings({ latencyProbe: false, autoLog: true, strictHostKey: true })
+  /*
+   * 关掉自动重连。
+   *
+   * 本脚本测的是「连接泄漏」：每次断开后 liveConns 必须归零。
+   * 但自动重连是断开后主动重建连接 —— 那是功能，不是泄漏。
+   * 开着它，断言会把正在重连的连接数当成泄漏，误报。
+   * 重连本身的行为由 verify-errors-reconnect.cjs 覆盖。
+   */
+  await M.setSettings({
+    latencyProbe: false,
+    autoLog: true,
+    strictHostKey: true,
+    autoReconnect: false
+  })
   const conn = await M.saveConnection({
     name: 'test', host: '127.0.0.1', port, username: 'u', authType: 'password',
     password: 'p', group: '默认', tags: []
