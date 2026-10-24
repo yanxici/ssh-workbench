@@ -230,6 +230,10 @@ export interface AppSettings {
   commandGroups?: string[]
   /** 常用命令分组的显示顺序（分组名数组）；未列出的分组排在后面按名称排序 */
   commandGroupOrder?: string[]
+  /** 手动新建的连接分组（含暂时没有连接的空分组） */
+  connectionGroups?: string[]
+  /** 连接分组的显示顺序（分组名数组）；未列出的分组排在后面按名称排序 */
+  connectionGroupOrder?: string[]
   /** 三栏尺寸（拖拽分隔条后写入）；缺省用渲染层内置默认值，老配置无需迁移 */
   layout?: LayoutSizes
   /** 命令中心里收藏（置顶）的命令 id */

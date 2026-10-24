@@ -19,6 +19,9 @@ export const IPC = {
   CONN_IMPORT_PICK: 'conn:import-pick',
   CONN_IMPORT_PREVIEW: 'conn:import-preview',
   CONN_IMPORT_APPLY: 'conn:import-apply',
+  /** 连接分组：重命名 / 删除（整组迁移或清空） */
+  CONN_RENAME_GROUP: 'conn:rename-group',
+  CONN_DELETE_GROUP: 'conn:delete-group',
 
   /* ---------------- 会话 / 终端 ---------------- */
   SESSION_OPEN: 'session:open',

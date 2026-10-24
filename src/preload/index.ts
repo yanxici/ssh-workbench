@@ -127,6 +127,12 @@ export const api = {
       invoke(IPC.CONN_IMPORT_APPLY, path, passphrase, mode),
     test: (input: TestConnectionInput): Promise<IpcResult<TestConnectionResult>> =>
       invoke(IPC.CONN_TEST, input),
+    /** 连接分组重命名：返回整组迁移的连接数 */
+    renameGroup: (from: string, to: string): Promise<IpcResult<number>> =>
+      invoke(IPC.CONN_RENAME_GROUP, from, to),
+    /** 连接分组删除：返回连带删除的连接数 */
+    deleteGroup: (group: string): Promise<IpcResult<number>> =>
+      invoke(IPC.CONN_DELETE_GROUP, group),
     hasSecret: (id: string): Promise<IpcResult<boolean>> => invoke(IPC.CONN_HAS_SECRET, id),
     parseSshCommand: (text?: string): Promise<IpcResult<ParsedSshCommand>> =>
       invoke(IPC.CONN_PARSE_SSH_CMD, text)

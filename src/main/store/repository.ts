@@ -240,6 +240,36 @@ export async function deleteConnection(id: string): Promise<void> {
   await deleteSecret(id)
 }
 
+/**
+ * 连接分组重命名：一次读改写完成。
+ * 与命令分组同一套路 —— 逐条 saveConnection 会产生 N 次落盘，
+ * 上千条连接时每次改名要等几秒，这里直接改字段。
+ */
+export async function renameConnectionGroup(from: string, to: string): Promise<number> {
+  const target = to.trim()
+  if (!target) throw new Error('分组名称不能为空')
+  let count = 0
+  await connStore.update((list) =>
+    list.map((c) => {
+      if ((c.group || '默认') !== from) return c
+      count++
+      return { ...c, group: target, updatedAt: Date.now() }
+    })
+  )
+  return count
+}
+
+/** 删除连接分组及其下全部连接，返回删除的连接数（连带清理凭据保险箱） */
+export async function deleteConnectionGroup(group: string): Promise<number> {
+  let removedIds: string[] = []
+  await connStore.update((list) => {
+    removedIds = list.filter((c) => (c.group || '默认') === group).map((c) => c.id)
+    return list.filter((c) => (c.group || '默认') !== group)
+  })
+  for (const id of removedIds) await deleteSecret(id)
+  return removedIds.length
+}
+
 /** 记录最近使用时间 */
 export async function touchConnection(id: string): Promise<void> {
   await connStore.update((list) =>

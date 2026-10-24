@@ -7,6 +7,7 @@ import {
   Copy,
   FileDown,
   FileUp,
+  FolderInput,
   FolderPlus,
   Pencil,
   Plug,
@@ -19,6 +20,7 @@ import {
 import type { Connection, ConnectionInput } from '@shared/types'
 import { groupConnections, useConnectionStore } from '@/stores/connectionStore'
 import { useSessionStore } from '@/stores/sessionStore'
+import { useSettingsStore } from '@/stores/settingsStore'
 import { useToastStore } from '@/stores/toastStore'
 import { cn, formatRelativeTime } from '@/lib/utils'
 import { call } from '@/lib/ipc'
@@ -27,6 +29,7 @@ import {
   ConfirmDialog,
   ContextMenu,
   EmptyState,
+  PromptDialog,
   useContextMenu,
   type MenuEntry
 } from '@/components/ui'
@@ -52,6 +55,12 @@ export function ConnectionSidebar({
   const toggleGroup = useConnectionStore((s) => s.toggleGroup)
   const remove = useConnectionStore((s) => s.remove)
   const save = useConnectionStore((s) => s.save)
+  const createGroup = useConnectionStore((s) => s.createGroup)
+  const renameGroup = useConnectionStore((s) => s.renameGroup)
+  const deleteGroup = useConnectionStore((s) => s.deleteGroup)
+  const setGroupOrder = useConnectionStore((s) => s.setGroupOrder)
+  const savedGroups = useSettingsStore((s) => s.settings.connectionGroups)
+  const savedOrder = useSettingsStore((s) => s.settings.connectionGroupOrder)
 
   const sessions = useSessionStore((s) => s.sessions)
   const open = useSessionStore((s) => s.open)
@@ -62,7 +71,24 @@ export function ConnectionSidebar({
   const transferMenu = useContextMenu<'transfer'>()
   const [transfer, setTransfer] = useState<'export' | 'import' | null>(null)
 
-  const groups = useMemo(() => groupConnections(connections, keyword), [connections, keyword])
+  // 分组管理的三个弹窗 / 一个右键菜单
+  const groupMenu = useContextMenu<string>()
+  const [newGroupOpen, setNewGroupOpen] = useState(false)
+  const [renamingGroup, setRenamingGroup] = useState<string | null>(null)
+  const [pendingDeleteGroup, setPendingDeleteGroup] = useState<string | null>(null)
+  /** 拖拽中的分组名（用于分组之间拖拽排序） */
+  const [draggingGroup, setDraggingGroup] = useState<string | null>(null)
+  /** 「移到分组」的目标连接 */
+  const [movingConn, setMovingConn] = useState<Connection | null>(null)
+  const moveToGroup = useConnectionStore((s) => s.moveToGroup)
+
+  const groups = useMemo(
+    () => groupConnections(connections, keyword, savedGroups ?? [], savedOrder ?? []),
+    [connections, keyword, savedGroups, savedOrder]
+  )
+
+  /** 所有分组名（含空分组），用于「移到分组 / 新建同组」的候选列表 */
+  const allGroupNames = useMemo(() => groups.map((g) => g.group), [groups])
 
   /**
    * 连接 id → 会话索引。
@@ -129,6 +155,38 @@ export function ConnectionSidebar({
     })
   }
 
+  /** 分组右键菜单：新建 / 重命名 / 删除 */
+  const groupMenuItems = (group: string): MenuEntry[] => [
+    {
+      label: '在此分组新建连接',
+      icon: <Plus size={12} />,
+      onClick: () => onEdit(null, { group })
+    },
+    {
+      label: '重命名分组',
+      icon: <Pencil size={12} />,
+      onClick: () => setRenamingGroup(group)
+    },
+    { label: '新建分组…', icon: <FolderPlus size={12} />, onClick: () => setNewGroupOpen(true) },
+    {
+      label: '删除分组',
+      icon: <Trash2 size={12} />,
+      danger: true,
+      separatorBefore: true,
+      onClick: () => setPendingDeleteGroup(group)
+    }
+  ]
+
+  /** 拖拽分组排序：放到 target 之前或之后 */
+  const dropGroup = (src: string, target: string, after: boolean): void => {
+    if (src === target) return
+    const names = allGroupNames.filter((n) => n !== src)
+    const ti = names.indexOf(target)
+    if (ti < 0) return
+    names.splice(after ? ti + 1 : ti, 0, src)
+    void setGroupOrder(names)
+  }
+
   const menuItems = (c: Connection): MenuEntry[] => [
     { label: '连接', icon: <Plug size={12} />, onClick: () => openConnection(c) },
     { label: '编辑', icon: <Pencil size={12} />, onClick: () => onEdit(c) },
@@ -137,6 +195,16 @@ export function ConnectionSidebar({
       label: '新建同组连接',
       icon: <FolderPlus size={12} />,
       onClick: () => onEdit(null, { group: c.group })
+    },
+    {
+      label: '移到分组',
+      icon: <FolderInput size={12} />,
+      disabled: allGroupNames.length === 0,
+      onClick: () => {
+        // 子菜单在 ContextMenu 里不支持，这里用「切到下一个分组」的确定性行为代替弹窗：
+        // 直接弹分组选择由 setMovingConn 控制，见下方 moveDialog
+        setMovingConn(c)
+      }
     },
     {
       label: '删除',
@@ -170,6 +238,14 @@ export function ConnectionSidebar({
           onClick={() => void importFromClipboard()}
         >
           <ClipboardPaste size={13} />
+        </button>
+        <button
+          className="btn-icon h-6 w-6"
+          title="新建分组"
+          aria-label="新建分组"
+          onClick={() => setNewGroupOpen(true)}
+        >
+          <FolderPlus size={13} />
         </button>
         <button
           className="btn-icon h-6 w-6"
@@ -232,11 +308,43 @@ export function ConnectionSidebar({
           const rest = items.length - visible.length
 
           return (
-            <div key={group} className="mb-1">
+            <div
+              key={group}
+              className="mb-1"
+              onDragOver={(e) => {
+                if (!draggingGroup) return
+                e.preventDefault()
+                e.dataTransfer.dropEffect = 'move'
+              }}
+              onDrop={(e) => {
+                if (!draggingGroup) return
+                e.preventDefault()
+                const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
+                // 落在分组下半区就是「放在这个分组之后」
+                const after = e.clientY > rect.top + Math.min(rect.height, 24) / 2
+                dropGroup(draggingGroup, group, after)
+                setDraggingGroup(null)
+              }}
+            >
               {/* 分组头做成 sticky：几千条连接往下滚时，永远知道自己在哪个组 */}
               <button
-                className="sticky top-0 z-10 flex w-full cursor-default items-center gap-1 rounded-md bg-panel px-1.5 py-1 text-2xs font-semibold text-ink-3 transition-colors hover:text-ink-2"
+                className={cn(
+                  'sticky top-0 z-10 flex w-full cursor-default items-center gap-1 rounded-md bg-panel px-1.5 py-1 text-2xs font-semibold text-ink-3 transition-colors hover:text-ink-2',
+                  draggingGroup === group && 'opacity-40'
+                )}
+                draggable
+                title="右键管理分组；按住拖拽可调整分组顺序"
                 onClick={() => toggleGroup(group, isCollapsed)}
+                onDragStart={(e) => {
+                  setDraggingGroup(group)
+                  e.dataTransfer.effectAllowed = 'move'
+                }}
+                onDragEnd={() => setDraggingGroup(null)}
+                onContextMenu={(e) => {
+                  e.preventDefault()
+                  e.stopPropagation()
+                  groupMenu.openMenu(e, group)
+                }}
               >
                 {isCollapsed ? <ChevronRight size={11} /> : <ChevronDown size={11} />}
                 <span className="truncate">{group}</span>
@@ -378,6 +486,120 @@ export function ConnectionSidebar({
       </div>
 
       {menu && <ContextMenu x={menu.x} y={menu.y} items={menuItems(menu.target)} onClose={closeMenu} />}
+
+      {groupMenu.menu && (
+        <ContextMenu
+          x={groupMenu.menu.x}
+          y={groupMenu.menu.y}
+          items={groupMenuItems(groupMenu.menu.target)}
+          onClose={groupMenu.closeMenu}
+        />
+      )}
+
+      {/* 新建分组 */}
+      <PromptDialog
+        open={newGroupOpen}
+        title="新建分组"
+        label="分组名称"
+        placeholder="例如：机器人 / 充电桩 / 现场设备"
+        onCancel={() => setNewGroupOpen(false)}
+        onConfirm={(name) => {
+          setNewGroupOpen(false)
+          void createGroup(name).then((ok) => {
+            if (ok) {
+              useToastStore.getState().push({ kind: 'success', title: `已新建分组「${name}」` })
+            }
+          })
+        }}
+      />
+
+      {/* 重命名分组 */}
+      <PromptDialog
+        open={renamingGroup !== null}
+        title="重命名分组"
+        label="新名称"
+        defaultValue={renamingGroup ?? ''}
+        onCancel={() => setRenamingGroup(null)}
+        onConfirm={(name) => {
+          const old = renamingGroup
+          setRenamingGroup(null)
+          if (!old) return
+          void renameGroup(old, name).then(() => {
+            useToastStore.getState().push({ kind: 'success', title: `已重命名为「${name}」` })
+          })
+        }}
+      />
+
+      {/* 删除分组确认 */}
+      <ConfirmDialog
+        open={pendingDeleteGroup !== null}
+        title="删除分组"
+        danger
+        confirmText="删除"
+        message={
+          <>
+            确定删除分组
+            <span className="font-medium text-ink">「{pendingDeleteGroup}」</span>
+            及其下全部连接吗？
+            <div className="mt-2 text-2xs text-ink-3">
+              该分组内共
+              <span className="font-medium text-ink">
+                {' '}
+                {groups.find((g) => g.group === pendingDeleteGroup)?.items.length ?? 0}{' '}
+              </span>
+              条连接，删除后已保存的密码会一并从凭据保险箱移除，操作不可撤销。
+            </div>
+          </>
+        }
+        onCancel={() => setPendingDeleteGroup(null)}
+        onConfirm={() => {
+          const target = pendingDeleteGroup
+          setPendingDeleteGroup(null)
+          if (!target) return
+          void deleteGroup(target).then((n) => {
+            if (n !== null) {
+              useToastStore
+                .getState()
+                .push({ kind: 'success', title: `已删除分组「${target}」及 ${n} 条连接` })
+            }
+          })
+        }}
+      />
+
+      {/* 移到分组：列出全部分组，点一个就迁过去 */}
+      {movingConn && (
+        <ContextMenu
+          x={window.innerWidth / 2 - 90}
+          y={window.innerHeight / 2 - 120}
+          items={[
+            ...allGroupNames.map((g) => ({
+              label: g,
+              disabled: (movingConn.group || '默认') === g,
+              onClick: () => {
+                const target = movingConn
+                setMovingConn(null)
+                if (!target) return
+                void moveToGroup([target.id], g).then((n) => {
+                  if (n > 0) {
+                    useToastStore
+                      .getState()
+                      .push({ kind: 'success', title: `已移到分组「${g}」` })
+                  }
+                })
+              }
+            })),
+            {
+              label: '新建分组并移入…',
+              separatorBefore: true,
+              onClick: () => {
+                setMovingConn(null)
+                setNewGroupOpen(true)
+              }
+            }
+          ]}
+          onClose={() => setMovingConn(null)}
+        />
+      )}
 
       {transferMenu.menu && (
         <ContextMenu
