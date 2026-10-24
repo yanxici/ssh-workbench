@@ -228,6 +228,12 @@ export class SftpManager {
   private wrappers = new Map<string, SFTPWrapper>()
   /** 正在挂载中的 SFTP 通道（并发请求共享同一次挂载，避免重复 sftp 子系统） */
   private pendingMounts = new Map<string, Promise<SFTPWrapper>>()
+  /**
+   * 每个会话的远端 home 绝对路径缓存。
+   * home() 走一次 realpath，打开文件面板时至少多点一次往返；
+   * home 在一个会话生命周期内不会变，缓存到断开为止即可。
+   */
+  private homes = new Map<string, string>()
   private onProgress: ProgressHandler | null = null
   /** 在途/排队中的传输控制块：暂停、继续、取消都从这里找 */
   private controls = new Map<string, TransferControl>()
@@ -311,6 +317,7 @@ export class SftpManager {
   /** 会话关闭时清理对应 SFTP 通道 */
   clearSession(sessionId: string): void {
     this.pendingMounts.delete(sessionId)
+    this.homes.delete(sessionId)
     const wrapper = this.wrappers.get(sessionId)
     if (!wrapper) return
     this.wrappers.delete(sessionId)
@@ -365,13 +372,37 @@ export class SftpManager {
   /* ------------------------------ 目录与文件 ------------------------------ */
 
   async home(sessionId: string): Promise<string> {
+    const cached = this.homes.get(sessionId)
+    if (cached) return cached
     const sftp = await this.getSftp(sessionId)
-    return new Promise((resolve, reject) => {
-      sftp.realpath('.', (err, abs) => {
+    const abs = await new Promise<string>((resolve, reject) => {
+      sftp.realpath('.', (err, path) => {
         if (err) reject(new Error(`无法获取远端主目录：${err.message}`))
-        else resolve(abs)
+        else resolve(path)
       })
     })
+    this.homes.set(sessionId, abs)
+    return abs
+  }
+
+  /**
+   * 预挂载 SFTP 子系统（方案 B）。
+   *
+   * 首次点开文件面板时，getSftp() 要单独做一次 client.sftp() 握手，
+   * 真实服务器上常见 200~800ms，而且这次握手与随后的 readdir 是串行的 ——
+   * 用户看到的就是「点了要等一会」。
+   *
+   * SSH 连接建立后立刻在后台预热，把这段时间提前吃掉；同时把 home 也解析好，
+   * 打开面板时直接命中缓存。失败静默：预热只是优化，不该影响连接主流程。
+   */
+  async prewarm(sessionId: string): Promise<void> {
+    try {
+      await this.getSftp(sessionId)
+      // 顺手解析 home，打开面板时不用再等一次 realpath
+      await this.home(sessionId)
+    } catch {
+      /* 预热失败不影响主流程，后续按需挂载即可 */
+    }
   }
 
   async list(sessionId: string, dir: string): Promise<RemoteFile[]> {

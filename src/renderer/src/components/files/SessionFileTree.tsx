@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { loadDir, peekDir } from '@/lib/dirCache'
 import {
   ChevronDown,
   ChevronRight,
@@ -357,6 +358,15 @@ function TreeLevel({
   const [files, setFiles] = useState<RemoteFile[] | null>(null)
   /** 大目录默认只渲染前 300 项，用户点「展开全部」后才铺满 */
   const [showAll, setShowAll] = useState(false)
+  /** 后台静默刷新中：有缓存时界面不空，只在角落提示一下 */
+  const [refreshing, setRefreshing] = useState(false)
+  /*
+   * version 变化表示「外部要求强制刷新」（上传/删除/新建等写操作之后）。
+   * 用它和「普通挂载」区分：普通挂载吃缓存，写操作后必须绕过缓存。
+   */
+  const lastVersionRef = useRef(version)
+  const forceRefresh = version !== lastVersionRef.current
+  if (forceRefresh) lastVersionRef.current = version
   // 初始展开状态：自动展开链中属于本层子目录的项
   const [openDirs, setOpenDirs] = useState<Set<string>>(
     () => new Set(autoExpand.filter((p) => remoteDirname(p) === path))
@@ -364,9 +374,32 @@ function TreeLevel({
 
   useEffect(() => {
     let cancelled = false
-    void call(window.api.sftp.list(sessionId, path), { silent: true }).then((list) => {
-      if (!cancelled) setFiles(list ?? [])
+
+    /*
+     * 先看缓存：命中就直接上屏，避免折叠再展开、切走再切回都重新等一次往返。
+     * 过期缓存也先用，随后后台静默刷新（stale-while-revalidate）。
+     */
+    const { cached, fresh } = peekDir(sessionId, path)
+    if (cached) {
+      setFiles(cached.files)
+      setRefreshing(!fresh)
+      if (fresh) return
+    } else {
+      setRefreshing(true)
+    }
+
+    void loadDir(
+      sessionId,
+      path,
+      () => call(window.api.sftp.list(sessionId, path), { silent: true }),
+      // version 变化 = 外部要求强制刷新（上传、删除等写操作后）
+      forceRefresh
+    ).then((list) => {
+      if (cancelled) return
+      if (list) setFiles(list)
+      setRefreshing(false)
     })
+
     return () => {
       cancelled = true
     }
@@ -381,10 +414,29 @@ function TreeLevel({
     })
   }
 
+  /*
+   * 无缓存时的占位（方案 C）。
+   *
+   * 旧实现只画一个转圈图标，在慢链路上看起来就像「点了没反应」。
+   * 改成几行灰色骨架条：既提示正在加载，又提前占住高度，
+   * 数据到达后不会整块跳动。
+   */
   if (!files) {
     return (
-      <div className="flex items-center gap-2 py-1" style={{ paddingLeft: 10 + depth * 12 }}>
-        <Loader2 size={11} className="animate-spin text-ink-3" />
+      <div style={{ paddingLeft: 10 + depth * 12 }}>
+        {[0, 1, 2].map((i) => (
+          <div key={i} className="flex items-center gap-1.5 py-0.5 pr-2">
+            <span className="h-2.5 w-2.5 shrink-0 animate-pulse rounded-sm bg-edge-soft" />
+            <span
+              className="h-2 animate-pulse rounded bg-edge-soft"
+              style={{ width: 60 + i * 22, animationDelay: i * 120 + "ms" }}
+            />
+          </div>
+        ))}
+        <div className="flex items-center gap-1 pl-0.5 pt-0.5 text-3xs text-ink-3">
+          <Loader2 size={9} className="animate-spin" />
+          读取中…
+        </div>
       </div>
     )
   }
@@ -443,6 +495,17 @@ function TreeLevel({
         >
           还有 {hidden} 项，点击展开全部
         </button>
+      )}
+
+      {/* 有缓存时后台静默刷新：不遮挡内容，只在末尾挂一个极轻的提示 */}
+      {refreshing && files !== null && (
+        <div
+          className="flex items-center gap-1 py-0.5 text-3xs text-ink-3/70"
+          style={{ paddingLeft: 10 + depth * 12 }}
+        >
+          <Loader2 size={8} className="animate-spin" />
+          同步中
+        </div>
       )}
     </>
   )

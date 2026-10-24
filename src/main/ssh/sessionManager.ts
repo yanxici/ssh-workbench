@@ -83,6 +83,14 @@ interface ReadyWaiter {
 
 class SessionManager {
   private sessions = new Map<string, SessionRecord>()
+  /**
+   * SFTP 预挂载回调。
+   *
+   * 不能在这里直接 import sftpManager —— sftpManager 已经 import 了本模块，
+   * 互相 import 会让其中一方在初始化阶段拿到 undefined。
+   * 改由 main 入口注入，回调未注入时静默跳过（预热只是优化）。
+   */
+  private sftpPrewarm: ((sessionId: string) => Promise<void>) | null = null
   private handlers: SessionEvents | null = null
   /** 会话关闭钩子（供 SFTP 等模块清理挂在会话上的资源） */
   private onClosed: ((sessionId: string) => void) | null = null
@@ -249,6 +257,8 @@ class SessionManager {
       record.client = client
       this.wireClientEvents(record)
       this.emitStatus(record, 'connected')
+      // 后台预热 SFTP：把首次打开文件面板的握手延迟提前吃掉
+      void this.prewarmSftp(record.id)
 
       // ---- 打开交互式 shell ----
       await this.attachShell(record)
@@ -318,6 +328,7 @@ class SessionManager {
       this.wireClientEvents(record)
       await this.attachShell(record)
       this.emitStatus(record, 'connected')
+      void this.prewarmSftp(record.id)
 
       const settings = await getSettings()
       if (settings.autoLog && !record.closed) {
@@ -663,6 +674,25 @@ class SessionManager {
     } catch {
       // 连接瞬断时忽略本次探测
       finish()
+    }
+  }
+
+  /** 注入 SFTP 预挂载实现（见 sftpPrewarm 字段说明） */
+  setSftpPrewarm(fn: (sessionId: string) => Promise<void>): void {
+    this.sftpPrewarm = fn
+  }
+
+  /**
+   * 后台预热 SFTP。失败不抛：预热只是把延迟提前吃掉，
+   * 预热不了（服务器禁 SFTP、连接已断）时后续按需挂载照常工作。
+   */
+  private async prewarmSftp(sessionId: string): Promise<void> {
+    const fn = this.sftpPrewarm
+    if (!fn) return
+    try {
+      await fn(sessionId)
+    } catch {
+      /* 静默：见方法注释 */
     }
   }
 

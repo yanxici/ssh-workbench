@@ -1909,6 +1909,13 @@ if (!gotLock) {
         mainWindow?.webContents.send(IPC.EVT_SESSION_LATENCY, { sessionId, ms })
     })
 
+    /*
+     * 注入 SFTP 预挂载：SSH 一连接就在后台把 SFTP 子系统挂好。
+     * 放在这里是因为 sessionManager 与 sftpManager 互相 import，
+     * 只有在两者都完成模块初始化之后才能安全地建立这条引用。
+     */
+    sessionManager.setSftpPrewarm((sessionId) => sftpManager.prewarm(sessionId))
+
     sftpManager.setProgressHandler((event) => {
       mainWindow?.webContents.send(IPC.EVT_TRANSFER_PROGRESS, event)
       if (

@@ -8,6 +8,7 @@ import type {
 import { call } from '@/lib/ipc'
 import { localDirname, localJoin, remoteDirname, remoteJoin } from '@/lib/utils'
 import { normalizeRemoteDir, rememberUploadDir, resolveUploadDir } from '@/lib/uploadDir'
+import { clearDirCache, invalidateDir, loadDir, peekDir } from '@/lib/dirCache'
 import { useToastStore } from './toastStore'
 
 interface SftpState {
@@ -114,6 +115,8 @@ export const useSftpStore = create<SftpState>()((set, get) => ({
   /* ---------------- 开关 ---------------- */
 
   openFor: async (sessionId, title) => {
+    // 会话切换：旧会话的目录缓存不再有意义，清掉避免串味
+    if (get().sessionId !== sessionId) clearDirCache()
     set({ open: true, sessionId, sessionTitle: title, localSel: [], remoteSel: [] })
 
     if (!get().localDir) {
@@ -143,11 +146,26 @@ export const useSftpStore = create<SftpState>()((set, get) => ({
   navRemote: async (dir) => {
     const sessionId = get().sessionId
     if (!sessionId) return
-    set({ remoteLoading: true })
-    const files = await call(window.api.sftp.list(sessionId, dir), {
-      errorTitle: '读取远程目录失败'
-    })
-    if (files) set({ remoteDir: dir, remoteFiles: files, remoteSel: [] })
+
+    /*
+     * 先看缓存：有就直接上屏，不让界面空着等往返。
+     * 过期缓存也先用（stale-while-revalidate），随后后台补新数据。
+     */
+    const { cached, fresh } = peekDir(sessionId, dir)
+    if (cached) {
+      set({ remoteDir: dir, remoteFiles: cached.files, remoteSel: [], remoteLoading: !fresh })
+      if (fresh) return
+    } else {
+      set({ remoteLoading: true })
+    }
+
+    const files = await loadDir(sessionId, dir, () =>
+      call(window.api.sftp.list(sessionId, dir), { errorTitle: '读取远程目录失败' })
+    )
+    // 后台刷新返回时用户可能已经切到别的目录，只认当前目录的结果
+    if (files && get().sessionId === sessionId && (get().remoteDir === dir || !cached)) {
+      set({ remoteDir: dir, remoteFiles: files, remoteSel: get().remoteSel })
+    }
     set({ remoteLoading: false })
   },
 
@@ -184,6 +202,8 @@ export const useSftpStore = create<SftpState>()((set, get) => ({
       errorTitle: '上传失败'
     })
     if (ids) {
+      // 上传会改变目标目录内容：失效该目录并在完成后刷新，避免看到旧列表
+      invalidateDir(sessionId, target)
       useToastStore.getState().push({
         kind: 'info',
         title: `已加入 ${ids.length} 个上传任务`,
@@ -359,6 +379,8 @@ export const useSftpStore = create<SftpState>()((set, get) => ({
       errorTitle: '删除失败'
     })
     if (done !== null) {
+      // 写操作后必须让缓存失效，否则再进这个目录看到的是删除前的旧列表
+      invalidateDir(sessionId, remoteDirname(path))
       useToastStore.getState().push({ kind: 'success', title: '已删除' })
       await get().refreshRemote()
     }
@@ -370,7 +392,10 @@ export const useSftpStore = create<SftpState>()((set, get) => ({
     const done = await call(window.api.sftp.mkdir(sessionId, remoteJoin(remoteDir, name)), {
       errorTitle: '新建文件夹失败'
     })
-    if (done !== null) await get().refreshRemote()
+    if (done !== null) {
+      invalidateDir(sessionId, remoteDir)
+      await get().refreshRemote()
+    }
   },
 
   renameRemote: async (path, newName) => {
@@ -380,7 +405,10 @@ export const useSftpStore = create<SftpState>()((set, get) => ({
       window.api.sftp.rename(sessionId, path, remoteJoin(remoteDirname(path), newName)),
       { errorTitle: '重命名失败' }
     )
-    if (done !== null) await get().refreshRemote()
+    if (done !== null) {
+      invalidateDir(sessionId, remoteDirname(path))
+      await get().refreshRemote()
+    }
   },
 
   chmodRemote: async (path, mode) => {
@@ -390,6 +418,7 @@ export const useSftpStore = create<SftpState>()((set, get) => ({
       errorTitle: '修改权限失败'
     })
     if (done !== null) {
+      invalidateDir(sessionId, remoteDirname(path))
       useToastStore.getState().push({ kind: 'success', title: `权限已更新为 ${mode.toString(8)}` })
       await get().refreshRemote()
     }
