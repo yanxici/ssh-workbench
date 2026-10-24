@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { AlertTriangle, FileDown, FileUp, Loader2 } from 'lucide-react'
 import type { ConnImportMode, ConnImportPreview } from '@shared/types'
 import { groupConnections, useConnectionStore } from '@/stores/connectionStore'
+import { useSettingsStore } from '@/stores/settingsStore'
 import { useToastStore } from '@/stores/toastStore'
 import { call } from '@/lib/ipc'
 import { cn } from '@/lib/utils'
@@ -29,7 +30,13 @@ export function ConnTransferDialog({
 
 function ExportDialog({ onClose }: { onClose: () => void }): JSX.Element {
   const connections = useConnectionStore((s) => s.connections)
-  const groups = useMemo(() => groupConnections(connections, ''), [connections])
+  // 空分组也要能选：用户可能刚建好分组就想把别的组导进去
+  const savedGroups = useSettingsStore((s) => s.settings.connectionGroups)
+  const savedOrder = useSettingsStore((s) => s.settings.connectionGroupOrder)
+  const groups = useMemo(
+    () => groupConnections(connections, '', savedGroups ?? [], savedOrder ?? []),
+    [connections, savedGroups, savedOrder]
+  )
 
   const [selected, setSelected] = useState<Set<string>>(() => new Set(groups.map((g) => g.group)))
   const [includeSecrets, setIncludeSecrets] = useState(true)
