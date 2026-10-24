@@ -7,7 +7,7 @@ import {
   Unplug
 } from 'lucide-react'
 import type { ConnStatus } from '@shared/types'
-import { useSessionStore } from '@/stores/sessionStore'
+import { useSessionById, useSessionStore } from '@/stores/sessionStore'
 import { useConnectionStore } from '@/stores/connectionStore'
 import { useSftpStore } from '@/stores/sftpStore'
 import { call } from '@/lib/ipc'
@@ -56,7 +56,9 @@ function Sep(): JSX.Element {
  * 非 Git 目录 / 未连接时静默不显示 —— 这里不该出现「not a git repository」这种噪音。
  */
 export function StatusBar(): JSX.Element {
-  const session = useSessionStore((s) => s.sessions.find((x) => x.id === s.activeId) ?? null)
+  const activeId = useSessionStore((s) => s.activeId)
+  // 只订阅当前会话本身；旧写法会在任意会话变化时重跑 find
+  const session = useSessionById(activeId)
   const count = useSessionStore((s) => s.sessions.length)
   // 延迟单独从 latencyById 取：只有这里会因延迟变化重渲染，
   // 不会像旧实现那样把整个 sessions 数组换掉、连带终端全量重跑

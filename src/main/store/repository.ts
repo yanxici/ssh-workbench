@@ -241,6 +241,29 @@ export async function deleteConnection(id: string): Promise<void> {
 }
 
 /**
+ * 批量删除连接：一次读改写，返回实际删除条数。
+ *
+ * 逐个 deleteConnection 会走 N 次 update（每次一次落盘），
+ * 删几百条时既慢又产生 N 次临时文件重命名；这里合并成一次。
+ */
+export async function deleteConnections(ids: string[]): Promise<number> {
+  if (ids.length === 0) return 0
+  const want = new Set(ids)
+  let removed = 0
+  await connStore.update((list) => {
+    const next = list.filter((c) => {
+      if (!want.has(c.id)) return true
+      removed++
+      return false
+    })
+    return next
+  })
+  // 凭据清理不阻塞主流程，逐条删（secrets 体量小）
+  for (const id of ids) await deleteSecret(id)
+  return removed
+}
+
+/**
  * 连接分组重命名：一次读改写完成。
  * 与命令分组同一套路 —— 逐条 saveConnection 会产生 N 次落盘，
  * 上千条连接时每次改名要等几秒，这里直接改字段。

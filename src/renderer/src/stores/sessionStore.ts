@@ -1,3 +1,4 @@
+import { useMemo } from 'react'
 import { create } from 'zustand'
 import type { ConnStatus } from '@shared/types'
 import type { Terminal } from '@xterm/xterm'
@@ -259,4 +260,25 @@ export const useSessionStore = create<SessionState>()((set, get) => ({
 export function activeSession(): SessionUi | null {
   const s = useSessionStore.getState()
   return s.sessions.find((x) => x.id === s.activeId) ?? null
+}
+
+/**
+ * 按 id 取会话的 hook。
+ *
+ * 为什么不用 useSessionStore((s) => s.sessions.find(...))：
+ * 那个 selector 会在**任意会话**变化时重新执行 find —— 包括每 5 秒一次的
+ * 延迟探测、任意终端的输出。StatusBar / SideNav / TabBar 是常驻组件，
+ * 多标签时每次都要线性扫一遍；TabBar 里每个标签还各扫一次，是 O(n²)。
+ *
+ * 这里只订阅「这个 id 对应的会话对象」，其余会话变化不会触发重渲染。
+ * 返回的也是原引用（不是新对象），符合 zustand 的相等性判断。
+ */
+export function useSessionById(id: string | null): SessionUi | null {
+  return useSessionStore((s) => (id ? (s.sessions.find((x) => x.id === id) ?? null) : null))
+}
+
+/** 会话 id -> 会话对象的索引，供需要遍历多个会话的场景（如侧栏状态点） */
+export function useSessionIndex(): Map<string, SessionUi> {
+  const sessions = useSessionStore((s) => s.sessions)
+  return useMemo(() => new Map(sessions.map((x) => [x.id, x])), [sessions])
 }

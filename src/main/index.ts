@@ -39,6 +39,7 @@ import {
   deleteCommandGroup,
   deleteConnection,
   deleteConnectionGroup,
+  deleteConnections,
   deleteDiagSection,
   deleteKnownHost,
   deleteProfile,
@@ -179,6 +180,7 @@ function registerIpc(): void {
   handle(IPC.CONN_DELETE, (id: string) => deleteConnection(id))
   handle(IPC.CONN_RENAME_GROUP, (from: string, to: string) => renameConnectionGroup(from, to))
   handle(IPC.CONN_DELETE_GROUP, (group: string) => deleteConnectionGroup(group))
+  handle(IPC.CONN_DELETE_MANY, (ids: string[]) => deleteConnections(ids))
   handle(IPC.CONN_TEST, (input: TestConnectionInput) => testConnection(input))
 
   // 连接导出：选保存位置后打包（可带密码 / 私钥，可加口令）

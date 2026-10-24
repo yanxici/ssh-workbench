@@ -53,37 +53,63 @@ class DiagnosticsRunner {
     const results: DiagSectionResult[] = []
     const total = picked.length
 
-    for (let i = 0; i < picked.length; i++) {
-      const section = picked[i]
+    /*
+     * 受控并发执行。
+     *
+     * 旧实现是一条跑完再跑下一条：10 个检查项，每项都要一次 SSH 往返，
+     * 总耗时 = 各项之和，巡检经常要等十几秒。
+     *
+     * 但也不能无脑 Promise.all —— 单个 SSH 连接上并开几十个 channel 会把
+     * 服务端的 MaxSessions 打满，反而出现 open failed。
+     * 所以固定 4 个并发：足够把往返延迟重叠掉，又远低于常见 MaxSessions(10)。
+     */
+    const CONCURRENCY = 4
+    /** 按下标预占位，保证进度与结果顺序仍与传入顺序一致 */
+    const slots: Array<DiagSectionResult | undefined> = new Array(picked.length)
+    let nextIndex = 0
+    let finishedCount = 0
 
-      if (token.cancelled) {
-        const skipped: DiagSectionResult = {
-          sectionId: section.id,
-          name: section.name,
-          group: section.group,
-          command: section.command,
-          status: 'skipped',
-          output: '',
-          exitCode: null,
-          durationMs: 0
+    const runOne = async (): Promise<void> => {
+      for (;;) {
+        const i = nextIndex++
+        if (i >= picked.length) return
+        const section = picked[i]
+
+        if (token.cancelled) {
+          const skipped: DiagSectionResult = {
+            sectionId: section.id,
+            name: section.name,
+            group: section.group,
+            command: section.command,
+            status: 'skipped',
+            output: '',
+            exitCode: null,
+            durationMs: 0
+          }
+          slots[i] = skipped
+          finishedCount++
+          this.onProgress?.({
+            runId,
+            sectionId: section.id,
+            status: 'skipped',
+            index: finishedCount,
+            total,
+            result: skipped
+          })
+          continue
         }
-        results.push(skipped)
+
         this.onProgress?.({
           runId,
           sectionId: section.id,
-          status: 'skipped',
-          index: i + 1,
-          total,
-          result: skipped
+          status: 'running',
+          index: finishedCount + 1,
+          total
         })
-        continue
-      }
 
-      this.onProgress?.({ runId, sectionId: section.id, status: 'running', index: i + 1, total })
-
-      const t0 = Date.now()
-      const out = await execCollect(client, section.command, section.timeoutMs, token)
-      const durationMs = Date.now() - t0
+        const t0 = Date.now()
+        const out = await execCollect(client, section.command, section.timeoutMs, token)
+        const durationMs = Date.now() - t0
 
       // 状态判定：执行完成但退出码非 0 且无输出 → 异常（命令不存在/权限等）；
       // 有输出即使退出码非 0 也视为完成（grep 无匹配、条件命令等属正常语义）
@@ -96,27 +122,36 @@ class DiagnosticsRunner {
         status = out.status
       }
 
-      const result: DiagSectionResult = {
-        sectionId: section.id,
-        name: section.name,
-        group: section.group,
-        command: section.command,
-        status,
-        output: out.stdout,
-        error: (out.error ?? out.stderr).trim() || undefined,
-        exitCode: out.exitCode,
-        durationMs
+        const result: DiagSectionResult = {
+          sectionId: section.id,
+          name: section.name,
+          group: section.group,
+          command: section.command,
+          status,
+          output: out.stdout,
+          error: (out.error ?? out.stderr).trim() || undefined,
+          exitCode: out.exitCode,
+          durationMs
+        }
+        slots[i] = result
+        finishedCount++
+        this.onProgress?.({
+          runId,
+          sectionId: section.id,
+          status,
+          index: finishedCount,
+          total,
+          result
+        })
       }
-      results.push(result)
-      this.onProgress?.({
-        runId,
-        sectionId: section.id,
-        status,
-        index: i + 1,
-        total,
-        result
-      })
     }
+
+    await Promise.all(
+      Array.from({ length: Math.min(CONCURRENCY, picked.length) }, () => runOne())
+    )
+
+    // 按原始顺序回收结果；理论上不会有空洞，兜底过滤掉防御性 undefined
+    results.push(...slots.filter((r): r is DiagSectionResult => r !== undefined))
 
     this.runs.delete(runId)
     const finishedAt = Date.now()

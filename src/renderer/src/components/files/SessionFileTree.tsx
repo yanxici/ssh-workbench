@@ -355,6 +355,8 @@ function TreeLevel({
   onUploadTo: (dir: string) => void
 }): JSX.Element {
   const [files, setFiles] = useState<RemoteFile[] | null>(null)
+  /** 大目录默认只渲染前 300 项，用户点「展开全部」后才铺满 */
+  const [showAll, setShowAll] = useState(false)
   // 初始展开状态：自动展开链中属于本层子目录的项
   const [openDirs, setOpenDirs] = useState<Set<string>>(
     () => new Set(autoExpand.filter((p) => remoteDirname(p) === path))
@@ -387,9 +389,20 @@ function TreeLevel({
     )
   }
 
+  /*
+   * 大目录截断。
+   *
+   * 远端 var-log、家目录这类目录动辄几千项，一次性全渲染会让展开瞬间卡死。
+   * 这里只渲染前 LIMIT 项，剩下的给一个按钮 —— 用「用户主动要求」换流畅度，
+   * 比直接上虚拟列表改动小得多（层级递归的虚拟化很容易出错）。
+   */
+  const LIMIT = 300
+  const shown = files.length > LIMIT ? files.slice(0, showAll ? files.length : LIMIT) : files
+  const hidden = files.length - shown.length
+
   return (
     <>
-      {files.map((f) => (
+      {shown.map((f) => (
         <div key={f.path}>
           <TreeRow
             file={f}
@@ -421,6 +434,16 @@ function TreeLevel({
           )}
         </div>
       ))}
+
+      {hidden > 0 && (
+        <button
+          className="w-full py-1 text-left text-2xs text-ink-3 hover:text-ink"
+          style={{ paddingLeft: 10 + depth * 12 }}
+          onClick={() => setShowAll(true)}
+        >
+          还有 {hidden} 项，点击展开全部
+        </button>
+      )}
     </>
   )
 }

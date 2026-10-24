@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { Connection, ConnectionInput } from '@shared/types'
 import { useLayoutStore, type ActivityView } from '@/stores/layoutStore'
-import { useSessionStore } from '@/stores/sessionStore'
+import { useSessionById, useSessionStore } from '@/stores/sessionStore'
 import { ConnectionSidebar } from '@/components/connections/ConnectionSidebar'
 import { HistoryPanel } from '@/components/panels/HistoryPanel'
 import { SessionLogsPanel } from '@/components/panels/SessionLogsPanel'
@@ -46,9 +46,8 @@ export function SideNav({
   const activityView = useLayoutStore((s) => s.activityView)
   const setActivityView = useLayoutStore((s) => s.setActivityView)
 
-  const activeSession = useSessionStore(
-    (s) => s.sessions.find((x) => x.id === s.activeId) ?? null
-  )
+  const activeId = useSessionStore((s) => s.activeId)
+  const activeSession = useSessionById(activeId)
 
   /* 已挂载过的视图集合：首次进入才加进去，之后不再移除 */
   const [mounted, setMounted] = useState<ActivityView[]>([activityView])

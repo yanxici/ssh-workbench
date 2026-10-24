@@ -133,6 +133,9 @@ export const api = {
     /** 连接分组删除：返回连带删除的连接数 */
     deleteGroup: (group: string): Promise<IpcResult<number>> =>
       invoke(IPC.CONN_DELETE_GROUP, group),
+    /** 批量删除：一次读改写，返回实际删除条数 */
+    removeMany: (ids: string[]): Promise<IpcResult<number>> =>
+      invoke(IPC.CONN_DELETE_MANY, ids),
     hasSecret: (id: string): Promise<IpcResult<boolean>> => invoke(IPC.CONN_HAS_SECRET, id),
     parseSshCommand: (text?: string): Promise<IpcResult<ParsedSshCommand>> =>
       invoke(IPC.CONN_PARSE_SSH_CMD, text)

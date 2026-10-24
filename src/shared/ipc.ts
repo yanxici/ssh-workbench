@@ -22,6 +22,8 @@ export const IPC = {
   /** 连接分组：重命名 / 删除（整组迁移或清空） */
   CONN_RENAME_GROUP: 'conn:rename-group',
   CONN_DELETE_GROUP: 'conn:delete-group',
+  /** 批量删除连接（多选后一次删掉） */
+  CONN_DELETE_MANY: 'conn:delete-many',
 
   /* ---------------- 会话 / 终端 ---------------- */
   SESSION_OPEN: 'session:open',

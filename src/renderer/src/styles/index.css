@@ -313,6 +313,22 @@
     @apply scroll-thin min-h-0 flex-1 overflow-y-auto p-1;
   }
 
+  /*
+   * 屏幕外行跳过渲染（等效虚拟滚动）。
+   *
+   * 连接可能有几千条，全部实例化会同时挂上几千个 DOM 节点与事件监听，
+   * 输入搜索时会明显掉帧。content-visibility: auto 让浏览器跳过视口外
+   * 子树的布局/绘制，滚到近处才补齐；contain-intrinsic-size 提供占位高度，
+   * 避免滚动条乱跳。
+   *
+   * 为什么不用 react-window：这里是「多个分组 + sticky 分组头 + 行高可变」
+   * 的结构，重写成扁平虚拟列表要拆掉分组语义，得不偿失。
+   */
+  .conn-row-cv {
+    content-visibility: auto;
+    contain-intrinsic-size: auto 52px;
+  }
+
   /* 列表行：统一圆角、左右内距与 hover 色 */
   .row {
     @apply relative flex w-full cursor-default items-center gap-2 rounded-md px-2 py-1.5

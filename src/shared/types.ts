@@ -234,6 +234,8 @@ export interface AppSettings {
   connectionGroups?: string[]
   /** 连接分组的显示顺序（分组名数组）；未列出的分组排在后面按名称排序 */
   connectionGroupOrder?: string[]
+  /** 连接分组色标：分组名 -> 十六进制颜色（侧栏分组头左侧色条） */
+  connectionGroupColors?: Record<string, string>
   /** 三栏尺寸（拖拽分隔条后写入）；缺省用渲染层内置默认值，老配置无需迁移 */
   layout?: LayoutSizes
   /** 命令中心里收藏（置顶）的命令 id */

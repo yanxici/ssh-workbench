@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type MouseEvent as ReactMouseEvent
+} from 'react'
 import { X, Plus, Pencil, XCircle, CircleSlash2, RefreshCw, SquarePlus } from 'lucide-react'
 import type { ConnStatus } from '@shared/types'
 import { useSessionStore } from '@/stores/sessionStore'
@@ -49,7 +56,12 @@ export function TabBar(): JSX.Element {
   const reconnect = useSessionStore((s) => s.reconnect)
   const openTerminal = useSessionStore((s) => s.openTerminal)
   const openConnEditor = useUiStore((s) => s.openConnEditor)
-  const activeSession = sessions.find((x) => x.id === activeId)
+  /*
+   * 旧实现每个标签各 find 一次，标签一多就是 O(n²)；
+   * 且每次会话状态变化都要重扫。改成一次建索引 + 复用。
+   */
+  const sessionById = useMemo(() => new Map(sessions.map((x) => [x.id, x])), [sessions])
+  const activeSession = activeId ? sessionById.get(activeId) : undefined
 
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editText, setEditText] = useState('')
@@ -154,7 +166,7 @@ export function TabBar(): JSX.Element {
   }
 
   const menuItems = (id: string): MenuEntry[] => {
-    const s = sessions.find((x) => x.id === id)
+    const s = sessionById.get(id)
     const canReconnect = s && (s.status === 'disconnected' || s.status === 'error')
     return [
       ...(canReconnect

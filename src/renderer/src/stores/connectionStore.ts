@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import type { Connection, ConnectionInput } from '@shared/types'
 import { call } from '@/lib/ipc'
+import { fuzzyMatch } from '@/lib/fuzzy'
 import { useSettingsStore } from './settingsStore'
 import { useToastStore } from './toastStore'
 
@@ -38,7 +39,14 @@ interface ConnectionState {
   load: () => Promise<void>
   save: (input: ConnectionInput) => Promise<Connection | null>
   remove: (id: string) => Promise<boolean>
+  /** 批量删除，返回实际删除条数 */
+  removeMany: (ids: string[]) => Promise<number>
   setKeyword: (kw: string) => void
+  /** 「只看这组」：限定只渲染某个分组，null = 不限制 */
+  onlyGroup: string | null
+  setOnlyGroup: (group: string | null) => void
+  /** 设置分组色标（传 undefined 清除） */
+  setGroupColor: (group: string, color: string | undefined) => Promise<void>
   /**
    * 折叠/展开一个分组。
    * currentlyCollapsed 必须传「界面当前的视觉状态」——超长分组是默认折叠但
@@ -64,6 +72,7 @@ export const useConnectionStore = create<ConnectionState>()((set, get) => ({
   loaded: false,
   keyword: '',
   collapsed: {},
+  onlyGroup: null,
 
   load: async () => {
     const list = await call(window.api.conn.list(), { silent: true })
@@ -96,7 +105,25 @@ export const useConnectionStore = create<ConnectionState>()((set, get) => ({
     return true
   },
 
+  removeMany: async (ids) => {
+    if (ids.length === 0) return 0
+    const n = await call(window.api.conn.removeMany(ids), { errorTitle: '批量删除失败' })
+    if (n === null) return 0
+    const gone = new Set(ids)
+    set((s) => ({ connections: s.connections.filter((c) => !gone.has(c.id)) }))
+    return n
+  },
+
   setKeyword: (keyword) => set({ keyword }),
+
+  setOnlyGroup: (onlyGroup) => set({ onlyGroup }),
+
+  setGroupColor: async (group, color) => {
+    const cur = { ...(useSettingsStore.getState().settings.connectionGroupColors ?? {}) }
+    if (color) cur[group] = color
+    else delete cur[group]
+    await useSettingsStore.getState().update({ connectionGroupColors: cur })
+  },
 
   toggleGroup: (group, currentlyCollapsed) =>
     set((s) => ({
@@ -224,28 +251,84 @@ export interface ConnectionGroup {
 }
 
 /**
+ * 单条连接的相关度打分。
+ *
+ * 旧实现是五个字段轮流 `toLowerCase().includes()`，只认连续子串：
+ * 输 `r223` 搜不到「机器人-R223」，输 `xxkd` 搜不到「信阳快大」，
+ * 而这正是现场设备名的常见形态。这里换成 fuzzy 子序列匹配 + 字段权重。
+ *
+ * 权重理由：名字是用户自己起的，最能代表意图；主机/用户名次之；
+ * 标签再次；分组名最后（按分组找连接时用户会直接点分组）。
+ * 命中权重越高，同分时排越前。
+ */
+const FIELD_WEIGHT = { name: 1000, host: 500, username: 400, tag: 200, group: 100 } as const
+
+export interface ConnectionMatch {
+  connection: Connection
+  score: number
+}
+
+function scoreConnection(c: Connection, kw: string): number {
+  let best = 0
+
+  const nameHit = fuzzyMatch(c.name, kw)
+  if (nameHit) best = Math.max(best, nameHit.score + FIELD_WEIGHT.name)
+
+  const hostHit = fuzzyMatch(c.host, kw)
+  if (hostHit) best = Math.max(best, hostHit.score + FIELD_WEIGHT.host)
+
+  const userHit = fuzzyMatch(c.username, kw)
+  if (userHit) best = Math.max(best, userHit.score + FIELD_WEIGHT.username)
+
+  for (const t of c.tags) {
+    const tagHit = fuzzyMatch(t, kw)
+    if (tagHit) best = Math.max(best, tagHit.score + FIELD_WEIGHT.tag)
+  }
+
+  const groupHit = fuzzyMatch(c.group || '默认', kw)
+  if (groupHit) best = Math.max(best, groupHit.score + FIELD_WEIGHT.group)
+
+  return best
+}
+
+/**
  * 过滤 + 按分组聚合并排序（最近使用的排前面）。
  *
  * 空分组也要出现在列表里 —— 用户新建分组后立刻能看到并往里放连接，
  * 否则「新建分组」点了像没反应。空分组只来自 settings.connectionGroups。
+ *
+ * 搜索时组内按相关度排（而不是最近使用）：用户输关键字就是要找最匹配的那条，
+ * 最近使用在这里是干扰项。
  */
 export function groupConnections(
   connections: Connection[],
   keyword: string,
   extraGroups: string[] = [],
-  order: string[] = []
+  order: string[] = [],
+  /** 只看这一组（侧栏点分组名进入的「聚焦」态）；null/undefined = 全部 */
+  onlyGroup?: string | null
 ): ConnectionGroup[] {
-  const kw = keyword.trim().toLowerCase()
-  const filtered = kw
-    ? connections.filter(
-        (c) =>
-          c.name.toLowerCase().includes(kw) ||
-          c.host.toLowerCase().includes(kw) ||
-          c.username.toLowerCase().includes(kw) ||
-          c.group.toLowerCase().includes(kw) ||
-          c.tags.some((t) => t.toLowerCase().includes(kw))
-      )
+  const kw = keyword.trim()
+  // 聚焦某组时先按组裁剪，再做关键字匹配 —— 两者的交集才是用户要的
+  const scoped = onlyGroup
+    ? connections.filter((c) => (c.group || '默认') === onlyGroup)
     : connections
+  let filtered: Connection[]
+  /** 搜索态下的相关度表，用于组内排序 */
+  let scoreById: Map<string, number> | null = null
+
+  if (kw) {
+    const scored: ConnectionMatch[] = []
+    for (const c of scoped) {
+      const score = scoreConnection(c, kw)
+      if (score > 0) scored.push({ connection: c, score })
+    }
+    // 相关度只在搜索态需要，非搜索态避免多建一个 Map
+    scoreById = new Map(scored.map((s) => [s.connection.id, s.score]))
+    filtered = scored.map((s) => s.connection)
+  } else {
+    filtered = scoped
+  }
 
   const map = new Map<string, Connection[]>()
   for (const c of filtered) {
@@ -261,7 +344,10 @@ export function groupConnections(
    */
   if (!kw) {
     for (const g of extraGroups) {
-      if (g && g.trim() && !map.has(g)) map.set(g, [])
+      if (!g || !g.trim() || map.has(g)) continue
+      // 聚焦态下只保留被聚焦的那个空分组
+      if (onlyGroup && g !== onlyGroup) continue
+      map.set(g, [])
     }
   }
 
@@ -279,6 +365,12 @@ export function groupConnections(
     .sort(([a], [b]) => byName(a, b))
     .map(([group, items]) => ({
       group,
-      items: [...items].sort((a, b) => (b.lastUsedAt ?? 0) - (a.lastUsedAt ?? 0))
+      items: [...items].sort((a, b) => {
+        if (scoreById) {
+          const d = (scoreById.get(b.id) ?? 0) - (scoreById.get(a.id) ?? 0)
+          if (d !== 0) return d
+        }
+        return (b.lastUsedAt ?? 0) - (a.lastUsedAt ?? 0)
+      })
     }))
 }
