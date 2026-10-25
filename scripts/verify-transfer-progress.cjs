@@ -19,7 +19,8 @@ const os = require('os')
 const esbuild = require('esbuild')
 
 const ROOT = path.join(__dirname, '..')
-const OUT_DIR = path.join(ROOT, '.tsc-verify')
+// 用独立子目录：本脚本开头和结尾都会整目录清理，不能波及 .tsc-verify 下其他脚本的产物
+const OUT_DIR = path.join(ROOT, '.tsc-verify', 'transfer-progress')
 fs.rmSync(OUT_DIR, { recursive: true, force: true })
 fs.mkdirSync(OUT_DIR, { recursive: true })
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'sftp-verify-'))

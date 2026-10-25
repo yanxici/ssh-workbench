@@ -151,6 +151,8 @@ for (let i = 0; i < 500; i++) {
 const perCall = Number(process.hrtime.bigint() - t0) / 1e6 / 500
 ok(`单次检索 ${perCall.toFixed(3)}ms < 5ms`, perCall < 5)
 
-fs.rmSync(path.join(root, '.tsc-verify'), { recursive: true, force: true })
+// 只删自己的产物：整目录删除会把 tsconfig.verify.json 编出的 main/util/*.js 一起清掉，
+// 批量跑时排在后面的 verify-zip / verify-diff 等就找不到模块
+fs.rmSync(out, { force: true })
 console.log(`\n通过 ${pass} 失败 ${fail}`)
 process.exit(fail ? 1 : 0)
