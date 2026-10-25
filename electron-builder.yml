@@ -9,9 +9,9 @@ directories:
 npmRebuild: false
 # 新增 ASAR 打包配置：启用压缩
 asar: true
-# 安装包压缩算法：gzip 兼容性最好，7z 体积更小但解压更慢且个别杀软误报更多。
-# 我们的包体积主要是 Electron 运行时，换 7z 只能省几 MB，不值得换取更长的首次启动。
-compression: gzip
+# 安装包压缩级别：normal 是默认值，maximum 只省一点体积却明显拖慢构建，
+# store 仅用于快速测试。这里显式写 normal，让打包行为不随工具默认值漂移。
+compression: normal
 files:
   - out/**
   - package.json

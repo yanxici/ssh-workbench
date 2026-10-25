@@ -381,6 +381,11 @@ export function ConnectionSidebar({
           onClick: () => setBatchMoveFor(batch)
         },
         {
+          label: `批量编辑标签（${batch.length} 条）`,
+          icon: <Pencil size={12} />,
+          onClick: () => setBatchTagsOpen(true)
+        },
+        {
           label: `删除选中的 ${batch.length} 条`,
           icon: <Trash2 size={12} />,
           danger: true,

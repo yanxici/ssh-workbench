@@ -64,7 +64,21 @@ check_content "src/renderer/src/components/connections/ConnectionSidebar.tsx" "�
 check_content "src/renderer/src/components/settings/SettingsPanel.tsx" "detectShortcutConflicts" "快捷键冲突检测导入"
 check_content "src/renderer/src/components/settings/SettingsPanel.tsx" "会话恢复" "会话恢复设置项"
 check_content "electron-builder.yml" "asar: true" "ASAR 打包启用"
-check_content "electron-builder.yml" "compression: gzip" "gzip 压缩配置"
+# electron-builder 的 compression 合法值只有 maximum|normal|store。
+# 原检查要求 "compression: gzip"，而 gzip 不是合法值 ——
+# 照做会让 electron-builder 直接抛出 ValidationError 导致打包失败。
+check_content_regex() {
+    TOTAL=$((TOTAL + 1))
+    if grep -qE "$2" "$1" 2>/dev/null; then
+        echo -e "${GREEN}✓${NC} $3"
+        PASS=$((PASS + 1))
+        return 0
+    else
+        echo -e "${YELLOW}✗${NC} $3 - 未找到: $2 in $1"
+        return 1
+    fi
+}
+check_content_regex "electron-builder.yml" "compression: (maximum|normal|store)" "压缩级别配置合法"
 echo ""
 
 echo "📝 功能模块检查"
