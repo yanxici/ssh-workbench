@@ -241,7 +241,12 @@ const ZM_START = [42, 42, 24, 66, 48]
   const app = fs.readFileSync(path.join(ROOT, 'src/renderer/src/App.tsx'), 'utf8')
   check('App 数据路径按 ZMODEM 分支', /isZmodemAttached\(sessionId\)/.test(app))
   check('App 喂入原始字节', /feedZmodem\(sessionId, raw, data\)/.test(app))
-  check('渲染 ZmodemOverlay', /<ZmodemOverlay \/>/.test(app))
+  // 界面重构后 ZmodemOverlay 由 MainWorkspace 渲染（a5c9def），不再挂在 App 里
+  const workspace = fs.readFileSync(
+    path.join(ROOT, 'src/renderer/src/components/layout/MainWorkspace.tsx'),
+    'utf8'
+  )
+  check('渲染 ZmodemOverlay', /<ZmodemOverlay \/>/.test(workspace))
 })()
 
 /* ---------- 6. 方向映射：role -> direction 必须不取反 ---------- */

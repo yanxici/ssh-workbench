@@ -4,7 +4,7 @@
  *   1. 每个主题必须同时提供 dark / light 两套（否则某种明暗组合会缺色）
  *   2. 变量必须齐全（缺一个 --c-xxx 会让对应 tailwind 类失效，静默变透明）
  *   3. 颜色必须是「R G B」三通道数字（tailwind <alpha-value> 依赖此格式）
- *   4. 未知主题 id 必须回落到 Workbench，老配置不能崩
+ *   4. 未知主题 id 必须回落到默认主题（vscode），老配置不能崩
  *   5. 各主题在暗色下应真正互不相同（防止复制粘贴漏改）
  * 用法：node scripts/verify-theme.cjs
  */
@@ -46,6 +46,10 @@ const REQUIRED_VARS = [
   'ink',
   'ink-2',
   'ink-3',
+  // 外壳重构（P4-d）后新增：品牌绿 / 品牌底上的字色 / 选中态
+  'brand',
+  'on-brand',
+  'select',
   'accent',
   'success',
   'warning',
@@ -67,7 +71,8 @@ const TERMINAL_KEYS = [
 ]
 
 /* ---------- 1. 主题清单 ---------- */
-ok('主题数量为 6', COLOR_THEMES.length === 6, `实际 ${COLOR_THEMES.length}`)
+// 7 套：v1.0.0 的 6 套 + 界面重构时新增的 vscode（默认浅色规范配色）
+ok('主题数量为 7', COLOR_THEMES.length === 7, `实际 ${COLOR_THEMES.length}`)
 const ids = COLOR_THEMES.map((t) => t.id)
 ok('主题 id 无重复', new Set(ids).size === ids.length, ids.join(','))
 ok('包含 workbench 默认主题', ids.includes('workbench'))
@@ -121,9 +126,9 @@ const termBgs = COLOR_THEMES.map((t) => t.dark.terminal.background)
 ok('各主题终端背景互不相同', new Set(termBgs).size === COLOR_THEMES.length, termBgs.join('  '))
 
 /* ---------- 4. 回退行为 ---------- */
-ok('未知 id 回落到 workbench', getColorTheme('not-a-theme').id === 'workbench')
-ok('undefined 回落到 workbench', getColorTheme(undefined).id === 'workbench')
-ok('空字符串回落到 workbench', getColorTheme('').id === 'workbench')
+ok('未知 id 回落到 vscode（默认主题）', getColorTheme('not-a-theme').id === 'vscode')
+ok('undefined 回落到 vscode', getColorTheme(undefined).id === 'vscode')
+ok('空字符串回落到 vscode', getColorTheme('').id === 'vscode')
 ok('已知 id 正常返回', getColorTheme('dracula').id === 'dracula')
 ok('getThemeVariant dark 命中暗色', getThemeVariant('nord', true).vars.app === '36 41 51')
 ok('getThemeVariant light 命中亮色', getThemeVariant('nord', false).vars.app === '236 239 244')
@@ -245,7 +250,7 @@ const typesSrc = fsx.readFileSync(path.join(ROOT, 'src/shared/types.ts'), 'utf8'
 ok('types.ts 定义 ColorThemeId', typesSrc.includes('export type ColorThemeId'))
 ok('AppSettings 含 colorTheme', typesSrc.includes('colorTheme?: ColorThemeId'))
 const repoSrc = fsx.readFileSync(path.join(ROOT, 'src/main/store/repository.ts'), 'utf8')
-ok('主进程 DEFAULT_SETTINGS 含 colorTheme', repoSrc.includes("colorTheme: 'workbench'"))
+ok('主进程 DEFAULT_SETTINGS 含 colorTheme', repoSrc.includes("colorTheme: 'vscode'"))
 
 /* ---------- 12. CSS 变量表与主题定义必须对得上 ---------- */
 const cssSrc = fsx.readFileSync(path.join(ROOT, 'src/renderer/src/styles/index.css'), 'utf8')
