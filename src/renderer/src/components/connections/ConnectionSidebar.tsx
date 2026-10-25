@@ -210,8 +210,13 @@ export function ConnectionSidebar({
   const [pendingBatchDelete, setPendingBatchDelete] = useState(false)
   /** 批量编辑标签 */
   const [batchTagsOpen, setBatchTagsOpen] = useState(false)
-  /** 批量「移到分组」的弹出菜单坐标 */
-  const [batchMenu, setBatchMenu] = useState<{ x: number; y: number } | null>(null)
+  /**
+   * 批量移动：待移动的 id 集合。
+   * 坐标复用右键菜单的 menu.x/menu.y —— 批量项本身就从那个菜单点出来，
+   * 在原位弹出分组列表，视觉上是「原地展开」而不是又跳出一坨。
+   */
+  const [batchMoveIds, setBatchMoveIds] = useState<string[] | null>(null)
+  const setBatchMoveFor = (ids: string[]): void => setBatchMoveIds(ids)
   /** 正在设置色标的分组名 */
   const [colorFor, setColorForState] = useState<string | null>(null)
   const [pendingDelete, setPendingDelete] = useState<Connection | null>(null)
@@ -358,33 +363,61 @@ export function ConnectionSidebar({
     void setGroupOrder(names)
   }
 
-  const menuItems = (c: Connection): MenuEntry[] => [
-    { label: '连接', icon: <Plug size={12} />, onClick: () => openConnection(c) },
-    { label: '编辑', icon: <Pencil size={12} />, onClick: () => onEdit(c) },
-    { label: '复制连接', icon: <Copy size={12} />, onClick: () => void duplicateConnection(c) },
-    {
-      label: '新建同组连接',
-      icon: <FolderPlus size={12} />,
-      onClick: () => onEdit(null, { group: c.group })
-    },
-    {
-      label: '移到分组',
-      icon: <FolderInput size={12} />,
-      disabled: allGroupNames.length === 0,
-      onClick: () => {
-        // 子菜单在 ContextMenu 里不支持，这里用「切到下一个分组」的确定性行为代替弹窗：
-        // 直接弹分组选择由 setMovingConn 控制，见下方 moveDialog
-        setMovingConn(c)
-      }
-    },
-    {
-      label: '删除',
-      icon: <Trash2 size={12} />,
-      danger: true,
-      separatorBefore: true,
-      onClick: () => setPendingDelete(c)
+  /*
+   * 右键菜单。
+   *
+   * 批量操作放在这里而不是顶部工具栏：选中连接时突然多出一条横栏，
+   * 会把列表整体往下推、打断扫视，用起来很难受。
+   * 改成「多选后右键 → 菜单顶部出现批量项」，界面不动，操作还更顺手。
+   */
+  const menuItems = (c: Connection): MenuEntry[] => {
+    const batch = selectedIds.size > 1 && selectedIds.has(c.id) ? [...selectedIds] : null
+
+    if (batch) {
+      return [
+        {
+          label: `已选 ${batch.length} 条 · 移到分组`,
+          icon: <FolderInput size={12} />,
+          onClick: () => setBatchMoveFor(batch)
+        },
+        {
+          label: `删除选中的 ${batch.length} 条`,
+          icon: <Trash2 size={12} />,
+          danger: true,
+          onClick: () => setPendingBatchDelete(true)
+        },
+        {
+          label: '取消选择',
+          separatorBefore: true,
+          onClick: () => setSelectedIds(new Set())
+        }
+      ]
     }
-  ]
+
+    return [
+      { label: '连接', icon: <Plug size={12} />, onClick: () => openConnection(c) },
+      { label: '编辑', icon: <Pencil size={12} />, onClick: () => onEdit(c) },
+      { label: '复制连接', icon: <Copy size={12} />, onClick: () => void duplicateConnection(c) },
+      {
+        label: '新建同组连接',
+        icon: <FolderPlus size={12} />,
+        onClick: () => onEdit(null, { group: c.group })
+      },
+      {
+        label: '移到分组',
+        icon: <FolderInput size={12} />,
+        disabled: allGroupNames.length === 0,
+        onClick: () => setMovingConn(c)
+      },
+      {
+        label: '删除',
+        icon: <Trash2 size={12} />,
+        danger: true,
+        separatorBefore: true,
+        onClick: () => setPendingDelete(c)
+      }
+    ]
+  }
 
   return (
     <div className="flex h-full flex-col">
@@ -450,58 +483,16 @@ export function ConnectionSidebar({
         </div>
       </div>
 
-      {/* 多选操作条：有选中才出现，避免常驻占高度 */}
-      {selectedIds.size > 0 && (
-        <div className="flex items-center gap-1 border-b border-edge-soft bg-select/40 px-2 py-1">
-          <span className="text-2xs font-medium text-ink-2">已选 {selectedIds.size} 条</span>
-          <span className="flex-1" />
-          <button
-            className="btn-icon h-6 w-6"
-            title="清空选择 (Esc)"
-            onClick={() => setSelectedIds(new Set())}
-          >
-            <X size={12} />
-          </button>
-          <button
-            className="btn h-6 px-2 text-2xs"
-            title="批量编辑标签"
-            onClick={() => setBatchTagsOpen(true)}
-          >
-            <Pencil size={11} className="mr-1" />
-            编辑标签
-          </button>
-          <button
-            className="btn h-6 px-2 text-2xs"
-            title="移到其他分组"
-            onClick={(e) => {
-              if (allGroupNames.length === 0) {
-                setNewGroupOpen(true)
-                return
-              }
-              const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
-              setBatchMenu({ x: rect.left, y: rect.bottom + 4 })
-            }}
-          >
-            <FolderInput size={11} className="mr-1" />
-            移到分组
-          </button>
-          <button
-            className="btn btn-danger h-6 px-2 text-2xs"
-            title="删除选中的连接"
-            onClick={() => setPendingBatchDelete(true)}
-          >
-            <Trash2 size={11} className="mr-1" />
-            删除
-          </button>
-        </div>
-      )}
-
       {/* 列表 */}
       <div
         data-testid="connection-sidebar"
         className="panel-body"
+        onKeyDown={(e) => {
+          // Esc 随时清掉多选（没有顶部横栏了，键盘要有兜底出口）
+          if (e.key === 'Escape') setSelectedIds(new Set())
+        }}
         onClick={(e) => {
-          // 点空白处取消选择（行自己的 onClick 会 stopPropagation 之外先冒泡处理）
+          // 点空白处取消选择
           if (e.target === e.currentTarget) setSelectedIds(new Set())
         }}
       >
@@ -638,7 +629,14 @@ export function ConnectionSidebar({
                       className={cn(
                         'conn-row-cv group relative cursor-default rounded-md py-1.5 pl-2 pr-1 transition-colors duration-150',
                         'focus-visible:bg-hover focus-visible:outline-none',
-                        active ? 'bg-select' : 'hover:bg-hover'
+                        /*
+                         * 选中态刻意做得很轻：只留一层浅描边 + 左侧细色条。
+                         * 整块 bg-select 太抢眼，扫视列表时会被一块亮色一直牵着走，
+                         * 而用户点选只是为了右键或拖拽，不需要那么强的视觉回报。
+                         */
+                        active
+                          ? 'bg-select/35 ring-1 ring-inset ring-edge'
+                          : 'hover:bg-hover'
                       )}
                       draggable
                       onDragStart={(e) => {
@@ -672,7 +670,13 @@ export function ConnectionSidebar({
                           anchorId.current = c.id
                           return
                         }
-                        setSelectedIds(new Set([c.id]))
+                        /*
+                         * 普通单击：清掉多选，但**不**把这一条高亮成选中态。
+                         * 用户反馈「选中就变亮、上面还多一条操作栏」很干扰视线；
+                         * 双击才是打开连接，单击高亮没有实际用途。
+                         * 锚点仍要记，否则 Shift 连选没有起点。
+                         */
+                        if (selectedIds.size > 0) setSelectedIds(new Set())
                         anchorId.current = c.id
                       }}
                       onDoubleClick={() => openConnection(c)}
@@ -960,17 +964,19 @@ export function ConnectionSidebar({
       )}
       <ConnTransferDialog mode={transfer} onClose={() => setTransfer(null)} />
 
-      {/* 批量移到分组 */}
-      {batchMenu && (
+      {/* 批量移到分组：从右键菜单的批量项触发，在原右键位置弹出分组列表 */}
+      {batchMoveIds && menu && (
         <ContextMenu
-          x={batchMenu.x}
-          y={batchMenu.y}
+          x={menu.x}
+          y={menu.y}
           items={[
             ...allGroupNames.map((g) => ({
               label: g,
               onClick: () => {
-                setBatchMenu(null)
-                const ids = [...selectedIds]
+                const ids = batchMoveIds
+                setBatchMoveIds(null)
+                closeMenu()
+                if (!ids) return
                 void moveToGroup(ids, g).then((n) => {
                   if (n > 0) {
                     useToastStore.getState().push({
@@ -986,12 +992,16 @@ export function ConnectionSidebar({
               label: "新建分组并移入…",
               separatorBefore: true,
               onClick: () => {
-                setBatchMenu(null)
+                setBatchMoveIds(null)
+                closeMenu()
                 setNewGroupOpen(true)
               }
             }
           ]}
-          onClose={() => setBatchMenu(null)}
+          onClose={() => {
+            setBatchMoveIds(null)
+            closeMenu()
+          }}
         />
       )}
 

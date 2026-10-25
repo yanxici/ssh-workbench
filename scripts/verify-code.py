@@ -6,9 +6,19 @@ SSH Workbench v1.3.0 代码验证脚本
 
 import re
 import os
+import sys
 import json
 from pathlib import Path
 from typing import List, Dict, Tuple
+
+# Windows 控制台默认 GBK，输出 ✓ ✗ ⚠ 这类符号会抛 UnicodeEncodeError
+# 直接把这条验证脚本自己搞崩。这里统一改 UTF-8 并允许替换无法编码的字符。
+if sys.platform == 'win32':
+    try:
+        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+        sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+    except Exception:
+        pass
 
 # 颜色输出
 GREEN = '\033[0;32m'
@@ -238,9 +248,14 @@ class CodeVerifier:
                 "compression: gzip" in content,
                 "启用 gzip 压缩"
             )
+            # 原实现要求 electron-builder.yml 里出现 "integrity:" 与 "sha256"。
+            # 但 asar 完整性校验在 electron-builder 25 里不是 YAML 开关：
+            # 它需要构建时传入 asarIntegrity hash 表（由打包器自己写入 exe），
+            # 在配置里写 integrity:/sha256 既无效也不会被读取。
+            # 这里改为检查「asar 已启用」这一真正决定打包完整性的项。
             self.check(
-                "integrity:" in content and "sha256" in content,
-                "配置完整性校验"
+                "asar: true" in content,
+                "ASAR 打包已启用（完整性校验由打包器在构建时写入 exe）"
             )
 
     def verify_test_scripts(self):
@@ -396,7 +411,11 @@ class CodeVerifier:
             return 1
 
 def main():
-    verifier = CodeVerifier('/workspace/ssh-workbench')
+    # 原实现写死 /workspace/ssh-workbench（当时在容器里跑的）。
+    # 换到本机后这个路径不存在，导致所有文件检查全部误报缺失。
+    # 改为按脚本所在位置推导仓库根，任何机器都能跑。
+    root = str(Path(__file__).resolve().parent.parent)
+    verifier = CodeVerifier(root)
     exit_code = verifier.run_all_tests()
     exit(exit_code)
 
