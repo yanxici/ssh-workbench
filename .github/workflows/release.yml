@@ -7,9 +7,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version tag (e.g., v1.2.0)'
+        description: 'Release tag to upload to (e.g., v1.4.0)'
         required: true
-        default: 'v1.2.0'
+        default: 'v1.4.0'
 
 permissions:
   contents: write
@@ -17,88 +17,63 @@ permissions:
 jobs:
   build:
     runs-on: windows-latest
-    
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-      
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '18'
-      
+          node-version: '20'
+          cache: 'npm'
+
       - name: Install dependencies
-        run: npm install
-      
+        run: npm ci
+
+      # --publish never：只出包，不让 electron-builder 自己去建 / 改 release
       - name: Build application
-        run: npm run build:win
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      
-      - name: Get version
-        id: get_version
+        run: npm run build:win -- --publish never
+
+      - name: Resolve version
+        id: v
         shell: bash
         run: |
-          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
-            echo "VERSION=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ github.event.inputs.version }}"
           else
-            echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+            TAG="${GITHUB_REF#refs/tags/}"
           fi
-      
-      - name: Create Release
-        id: create_release
-        uses: actions/create-release@v1
+          PKG="$(node -p "require('./package.json').version")"
+          # 防止把别的版本的包传到这个 tag 上
+          if [ "$TAG" != "v$PKG" ]; then
+            echo "tag $TAG 与 package.json 版本 $PKG 不一致" >&2
+            exit 1
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "pkg=$PKG" >> "$GITHUB_OUTPUT"
+
+      - name: Collect artifacts
+        shell: bash
+        run: |
+          V='${{ steps.v.outputs.pkg }}'
+          T='${{ steps.v.outputs.tag }}'
+          mkdir -p release
+          cp "dist-v11/SSH Workbench Setup $V.exe"     "release/SSH-Workbench-Setup-$T.exe"
+          cp "dist-v11/SSH Workbench-$V-portable.exe"  "release/SSH-Workbench-$T-portable.exe"
+          cp "dist-v11/SSH Workbench-$V-win.zip"       "release/SSH-Workbench-$T-win.zip"
+          ls -l release
+          sha256sum release/*
+
+      # release 已存在：只覆盖上传资产，不改标题和说明；不存在才新建
+      - name: Publish to release
+        shell: bash
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag_name: ${{ steps.get_version.outputs.VERSION }}
-          release_name: Release ${{ steps.get_version.outputs.VERSION }}
-          body: |
-            ## 更新内容
-            
-            ### 新功能
-            - ✨ 批量编辑标签功能
-            - ✨ 会话恢复（自动保存打开的标签页）
-            - ✨ 快捷键冲突检测
-            - 🎨 优化安装包体积
-            
-            ### 改进
-            - 📦 更好的批量操作体验
-            - 🚀 更快的启动速度
-            
-            ### 下载说明
-            - **安装版**: `SSH-Workbench-Setup-x.x.x.exe` - 需要管理员权限安装
-            - **免安装版**: `SSH-Workbench-x.x.x.exe` - 解压即用，适合绿色便携使用
-            - **解压版**: `SSH-Workbench-win32-x64-x.x.x.zip` - 完整文件夹，可自定义配置
-          draft: false
-          prerelease: false
-      
-      - name: Upload Setup Package
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./dist-v11/SSH Workbench Setup 1.4.0.exe
-          asset_name: SSH-Workbench-Setup-${{ steps.get_version.outputs.VERSION }}.exe
-          asset_content_type: application/octet-stream
-      
-      - name: Upload Portable Package
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./dist-v11/SSH Workbench-1.4.0-portable.exe
-          asset_name: SSH-Workbench-${{ steps.get_version.outputs.VERSION }}-portable.exe
-          asset_content_type: application/octet-stream
-      
-      - name: Upload ZIP Package
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./dist-v11/SSH Workbench-1.4.0-win.zip
-          asset_name: SSH-Workbench-${{ steps.get_version.outputs.VERSION }}-win.zip
-          asset_content_type: application/zip
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          T='${{ steps.v.outputs.tag }}'
+          if gh release view "$T" > /dev/null 2>&1; then
+            gh release upload "$T" release/* --clobber
+          else
+            gh release create "$T" release/* --title "Release $T" --generate-notes
+          fi
