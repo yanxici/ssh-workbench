@@ -7,17 +7,18 @@ A lightweight desktop SSH client with a built-in workbench for embedded-device t
 ## Features
 
 **Connections & terminal**
-- Connection manager with groups, tags and colors; password, private key (PEM / OpenSSH / PuTTY `.ppk`), SSH agent and keyboard-interactive auth
+- Connection manager with groups (create, rename, delete, drag-to-reorder), tags and colors; password, private key (PEM / OpenSSH / PuTTY `.ppk`), SSH agent and keyboard-interactive auth
 - ProxyJump chains, SOCKS5 / HTTP CONNECT proxies
 - Paste an `ssh user@host -p 22` command from the clipboard to create a connection
 - Multi-tab terminal (xterm.js) with search, custom shortcuts and ZMODEM (`rz` / `sz`; `sz` downloads stream in chunks to a folder you pick)
 - Encrypted connection export / import between machines
+- Auto-reconnect on connection drop with visible error logs
 
 **Command panel**
 - One-click saved commands with `{{variables}}`, dangerous-command confirmation, groups, drag-and-drop, search, favorites and history
 - JSON import / export
 - Always-on command rail on the right (fixed 3-column button wall, `Ctrl+Alt+B` to toggle)
-- Command Center (`Ctrl+K`): fuzzy search, Chinese/English synonyms, usage-based ranking, full keyboard control
+- Command Center (`Ctrl+K`): fuzzy search with Chinese/English synonyms, usage-based ranking, full keyboard control, scope filtering (all / recent / most used / favorites)
 
 **Files & tunnels**
 - SFTP file tree beside the terminal, dual-pane transfer mode, remote edit with automatic `.bak` backup
@@ -37,6 +38,7 @@ A lightweight desktop SSH client with a built-in workbench for embedded-device t
 **Interface**
 - Title bar + activity bar + resizable sidebar and command rail (drag to resize, double-click to reset)
 - 7 color themes (VS Code Light, Workbench, Dracula, Nord, Solarized, One Dark, Gruvbox), each with light and dark variants; UI and terminal colors switch together
+- Optimized for large connection lists (2900+ tested): pagination, fold long groups by default, indexed session lookup
 
 **Security**
 - Credentials encrypted with the OS keystore (Electron `safeStorage`)
@@ -73,3 +75,13 @@ npm run dev                   # dev mode with hot reload
 ## Docs
 
 Architecture, directory layout and roadmap (Chinese): [DESIGN.md](./DESIGN.md)
+
+## Version
+
+Current: **v1.3.0**
+
+Recent updates:
+- Auto-reconnect on connection drop
+- Performance optimization for large connection lists (2900+ connections tested)
+- Connection group management (create, rename, delete, drag-to-reorder)
+- SFTP directory open performance improvement
