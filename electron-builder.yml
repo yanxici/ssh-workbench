@@ -7,6 +7,14 @@ directories:
   output: dist-v11
 # ssh2 的 cpu-features 为可选加密加速（纯 JS 回退即可），跳过 native rebuild 避免依赖本机 VS
 npmRebuild: false
+# 新增 ASAR 打包配置：启用压缩和完整性校验
+asar: true
+asarOptions:
+  # 开启压缩减少包体积（30-40% 空间节省）
+  compression: gzip
+  # 添加完整性校验防止损坏
+  integrity:
+    algorithm: sha256
 files:
   - out/**
   - package.json

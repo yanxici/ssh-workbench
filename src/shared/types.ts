@@ -251,6 +251,12 @@ export interface AppSettings {
   /** 命令中心默认排序方式 */
   commandSort?: 'smart' | 'name' | 'recent' | 'frequent'
   /**
+   * 会话恢复：记录退出时打开的连接ID列表，重启后自动恢复
+   */
+  restoreSessions?: boolean
+  /** 上次退出时打开的连接ID列表 */
+  lastOpenSessions?: Array<{ connectionId: string; connectionName: string }>
+  /**
    * 外观外壳版本号。
    *
    * 每次外壳整体换代就 +1，用于把老配置一次性迁到新默认值 ——

@@ -9,10 +9,12 @@ import {
   Palette,
   RotateCcw,
   Sun,
-  Trash2
+  Trash2,
+  AlertTriangle
 } from 'lucide-react'
 import type { ColorThemeId, LayoutSizes, ShortcutAction, ThemeMode } from '@shared/types'
 import { SHORTCUT_ACTIONS, resolveShortcuts } from '@/lib/shortcuts'
+import { detectShortcutConflicts, checkSingleConflict } from '@/lib/shortcutConflict'
 import { KEYS, PANE_LABEL, PANE_SPECS, clampPane } from '@/lib/layout'
 import { COLOR_THEMES } from '@/theme/colorThemes'
 import { useIsDark, useSettingsStore } from '@/stores/settingsStore'
@@ -236,13 +238,42 @@ function ShortcutRows(): JSX.Element {
   const update = useSettingsStore((s) => s.update)
   const current = resolveShortcuts(settings.shortcuts)
   const [recording, setRecording] = useState<ShortcutAction | null>(null)
+  const [pendingCombo, setPendingCombo] = useState<string>('')
+  const [conflictWarning, setConflictWarning] = useState<{ action: string; conflict: string } | null>(null)
+
+  // 检测当前快捷键映射中的冲突
+  const conflicts = detectShortcutConflicts(settings.shortcuts)
 
   const commit = (action: ShortcutAction, combo: string | undefined): void => {
+    // 检查冲突
+    if (combo) {
+      const conflict = checkSingleConflict(combo, action, settings.shortcuts)
+      if (conflict) {
+        setPendingCombo(combo)
+        setConflictWarning({
+          action,
+          conflict: conflict.label
+        })
+        return
+      }
+    }
+    
     const next = { ...settings.shortcuts }
     if (combo === undefined) delete next[action]
     else next[action] = combo
     void update({ shortcuts: next })
     setRecording(null)
+    setPendingCombo('')
+  }
+  
+  const forceCommit = (): void => {
+    if (!conflictWarning || !pendingCombo) return
+    const next = { ...settings.shortcuts }
+    next[conflictWarning.action as ShortcutAction] = pendingCombo
+    void update({ shortcuts: next })
+    setRecording(null)
+    setPendingCombo('')
+    setConflictWarning(null)
   }
 
   const onKeyDown = (e: React.KeyboardEvent): void => {
@@ -281,6 +312,23 @@ function ShortcutRows(): JSX.Element {
         点击右侧键位进入录制，按下新组合键即保存；<kbd className="kbd">Esc</kbd> 取消、
         <kbd className="kbd">Backspace</kbd> 清除该项。
       </div>
+      
+      {/* 冲突警告 */}
+      {conflicts.length > 0 && (
+        <div className="mb-2 flex items-start gap-2 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2">
+          <AlertTriangle size={14} className="mt-0.5 shrink-0 text-warning" />
+          <div className="min-w-0 flex-1 text-2xs leading-relaxed text-ink-2">
+            检测到 {conflicts.length} 个快捷键冲突：
+            {conflicts.map((c, i) => (
+              <div key={i} className="mt-1">
+                <code className="text-warning">{c.combo}</code> 被分配给：
+                {c.actions.map((a) => a.label).join('、')}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      
       {SHORTCUT_ACTIONS.map((action) => {
         const value = current[action.id]
         const isRecording = recording === action.id
@@ -324,6 +372,47 @@ function ShortcutRows(): JSX.Element {
         提示：终端内「搜索 / 复制 / 粘贴」的组合键（Ctrl+F / Ctrl+Shift+C / Ctrl+Shift+V）在此配置后，
         在终端聚焦时同样生效；避免与系统/浏览器快捷键冲突。
       </div>
+      
+      {/* 快捷键冲突确认弹窗 */}
+      {conflictWarning && (
+        <Modal
+          open
+          title="快捷键冲突"
+          onClose={() => {
+            setConflictWarning(null)
+            setPendingCombo('')
+            setRecording(null)
+          }}
+        >
+          <div className="space-y-3">
+            <div className="flex items-start gap-2 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2">
+              <AlertTriangle size={16} className="mt-0.5 shrink-0 text-warning" />
+              <div className="text-xs text-ink-2">
+                快捷键 <code className="rounded bg-raised px-1 py-0.5 font-mono text-warning">{pendingCombo}</code> 
+                {' '}已被「{conflictWarning.conflict}」使用。
+              </div>
+            </div>
+            <div className="text-2xs text-ink-3">
+              继续保存将覆盖原有快捷键，建议选择不同的组合键避免冲突。
+            </div>
+            <div className="flex justify-end gap-2 pt-2">
+              <button 
+                className="btn" 
+                onClick={() => {
+                  setConflictWarning(null)
+                  setPendingCombo('')
+                  setRecording(null)
+                }}
+              >
+                取消
+              </button>
+              <button className="btn btn-danger" onClick={forceCommit}>
+                强制保存
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
     </div>
   )
 }
@@ -497,6 +586,15 @@ export function SettingsPanel({
           <Toggle
             checked={settings.strictHostKey}
             onChange={(v) => void update({ strictHostKey: v })}
+          />
+        </Row>
+        <Row
+          label="会话恢复"
+          hint="启动时自动恢复上次退出时打开的连接（最多 10 个）"
+        >
+          <Toggle
+            checked={settings.restoreSessions ?? false}
+            onChange={(v) => void update({ restoreSessions: v })}
           />
         </Row>
         {/* 原来这里有个「常用命令面板位置：右侧栏 / 底部横条」的开关。

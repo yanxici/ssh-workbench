@@ -149,6 +149,57 @@ export function App(): JSX.Element {
     void useMetricsStore.getState().syncStates()
   }, [loadSettings, loadConnections, loadCommands])
 
+  /* ---------- 会话恢复：启动时自动打开上次退出时的连接 ---------- */
+  const restoredRef = useRef(false)
+  useEffect(() => {
+    // 确保settings和connections都已加载，且只恢复一次
+    if (restoredRef.current || !settings || !settings.restoreSessions) return
+    
+    const connections = useConnectionStore.getState().connections
+    const lastSessions = settings.lastOpenSessions
+    if (!lastSessions || lastSessions.length === 0 || connections.length === 0) return
+    
+    restoredRef.current = true
+    const openSession = useSessionStore.getState().open
+    
+    // 延迟恢复，避免在初始化期间阻塞
+    setTimeout(() => {
+      lastSessions.forEach(({ connectionId, connectionName }) => {
+        const conn = connections.find((c) => c.id === connectionId)
+        if (conn) {
+          openSession({ id: conn.id, name: conn.name, host: conn.host, username: conn.username })
+        } else {
+          // 连接已被删除，跳过
+          console.warn(`会话恢复：连接 ${connectionName} (${connectionId}) 不存在`)
+        }
+      })
+    }, 300)
+  }, [settings])
+
+  /* ---------- 退出时保存打开的会话列表 ---------- */
+  useEffect(() => {
+    if (!settings.restoreSessions) return
+    
+    const handleBeforeUnload = (): void => {
+      const activeSessions = sessions
+        .filter((s) => s.status === 'connected' || s.status === 'connecting')
+        .map((s) => ({
+          connectionId: s.connectionId,
+          connectionName: s.connectionName
+        }))
+      
+      // 最多保存 10 个会话避免文件膨胀
+      const toSave = activeSessions.slice(0, 10)
+      
+      if (toSave.length > 0) {
+        void useSettingsStore.getState().update({ lastOpenSessions: toSave })
+      }
+    }
+    
+    window.addEventListener('beforeunload', handleBeforeUnload)
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload)
+  }, [sessions, settings.restoreSessions])
+
   /* ---------- 主进程事件 -> 终端写入 / 会话状态 ---------- */
   useEffect(() => {
     const offData = window.api.on.sessionData(({ sessionId, data, raw }) => {

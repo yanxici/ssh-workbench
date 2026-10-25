@@ -59,6 +59,111 @@ const GROUP_PALETTE = [
 const CONN_MIME = 'application/x-ssh-conn-ids'
 
 /**
+ * 批量编辑标签弹窗
+ */
+function BatchTagsEditor({
+  selectedIds,
+  connections,
+  onClose,
+  onConfirm
+}: {
+  selectedIds: Set<string>
+  connections: Connection[]
+  onClose: () => void
+  onConfirm: () => void
+}): JSX.Element {
+  const save = useConnectionStore((s) => s.save)
+  const selectedConns = connections.filter((c) => selectedIds.has(c.id))
+  const existingTags = Array.from(new Set(selectedConns.flatMap((c) => c.tags)))
+  
+  const [tagsInput, setTagsInput] = useState(existingTags.join(', '))
+  const [addMode, setAddMode] = useState<'replace' | 'append'>('append')
+
+  return (
+    <Modal open title={`批量编辑标签（${selectedIds.size} 条连接）`} onClose={onClose}>
+      <div className="space-y-3">
+        <div>
+          <label className="mb-1 block text-xs text-ink-2">标签（英文逗号分隔）</label>
+          <input
+            className="input w-full"
+            placeholder="例如：生产,充电桩,现场"
+            value={tagsInput}
+            onChange={(e) => setTagsInput(e.target.value)}
+          />
+        </div>
+        <div className="flex items-center gap-3 text-xs">
+          <label className="flex items-center gap-1.5">
+            <input
+              type="radio"
+              checked={addMode === 'append'}
+              onChange={() => setAddMode('append')}
+            />
+            <span>追加到现有标签</span>
+          </label>
+          <label className="flex items-center gap-1.5">
+            <input
+              type="radio"
+              checked={addMode === 'replace'}
+              onChange={() => setAddMode('replace')}
+            />
+            <span>替换所有标签</span>
+          </label>
+        </div>
+        {existingTags.length > 0 && addMode === 'append' && (
+          <div className="text-2xs text-ink-3">
+            当前标签：{existingTags.join(', ')}
+          </div>
+        )}
+        <div className="flex justify-end gap-2 pt-2">
+          <button className="btn" onClick={onClose}>
+            取消
+          </button>
+          <button
+            className="btn btn-primary"
+            onClick={() => {
+              const newTags = tagsInput
+                .split(',')
+                .map((t) => t.trim())
+                .filter(Boolean)
+              
+              const promises = selectedConns.map((conn) => {
+                const finalTags = addMode === 'replace' 
+                  ? newTags
+                  : Array.from(new Set([...conn.tags, ...newTags]))
+                
+                return save({
+                  id: conn.id,
+                  name: conn.name,
+                  host: conn.host,
+                  port: conn.port,
+                  username: conn.username,
+                  authType: conn.authType,
+                  privateKeyPath: conn.privateKeyPath,
+                  group: conn.group,
+                  tags: finalTags,
+                  color: conn.color,
+                  remark: conn.remark
+                })
+              })
+              
+              void Promise.all(promises).then(() => {
+                useToastStore.getState().push({
+                  kind: 'success',
+                  title: `已更新 ${selectedIds.size} 条连接的标签`
+                })
+                onConfirm()
+              })
+            }}
+          >
+            确定
+          </button>
+        </div>
+      </div>
+    </Modal>
+  )
+}
+
+/**
  * 每个分组默认先渲染多少条（滚动到「还有 N 条」按钮时再追加）。
  * 配合 .conn-row-cv（content-visibility），视口外的行不再产生布局/绘制开销，
  * 单批可以放大到 200 —— 减少「继续展开」的点击次数，同时不会拖慢滚动。
@@ -103,6 +208,8 @@ export function ConnectionSidebar({
   /** Shift 连选的锚点 */
   const anchorId = useRef<string | null>(null)
   const [pendingBatchDelete, setPendingBatchDelete] = useState(false)
+  /** 批量编辑标签 */
+  const [batchTagsOpen, setBatchTagsOpen] = useState(false)
   /** 批量「移到分组」的弹出菜单坐标 */
   const [batchMenu, setBatchMenu] = useState<{ x: number; y: number } | null>(null)
   /** 正在设置色标的分组名 */
@@ -354,6 +461,14 @@ export function ConnectionSidebar({
             onClick={() => setSelectedIds(new Set())}
           >
             <X size={12} />
+          </button>
+          <button
+            className="btn h-6 px-2 text-2xs"
+            title="批量编辑标签"
+            onClick={() => setBatchTagsOpen(true)}
+          >
+            <Pencil size={11} className="mr-1" />
+            编辑标签
           </button>
           <button
             className="btn h-6 px-2 text-2xs"
@@ -937,6 +1052,19 @@ export function ConnectionSidebar({
           })
         }}
       />
+
+      {/* 批量编辑标签 */}
+      {batchTagsOpen && (
+        <BatchTagsEditor
+          selectedIds={selectedIds}
+          connections={connections}
+          onClose={() => setBatchTagsOpen(false)}
+          onConfirm={() => {
+            setBatchTagsOpen(false)
+            setSelectedIds(new Set())
+          }}
+        />
+      )}
     </div>
   )
 }
