@@ -7,9 +7,9 @@
   },
   {
     "iterations": 500,
-    "totalTime": 1,
-    "avgTime": "0.002",
-    "throughput": "500000"
+    "totalTime": 2,
+    "avgTime": "0.004",
+    "throughput": "250000"
   },
   {
     "iterations": 1000,
@@ -19,8 +19,8 @@
   },
   {
     "iterations": 5000,
-    "totalTime": 11,
-    "avgTime": "0.002",
-    "throughput": "454545"
+    "totalTime": 13,
+    "avgTime": "0.003",
+    "throughput": "384615"
   }
 ]

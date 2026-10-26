@@ -6,7 +6,7 @@ import { useToastStore } from '@/stores/toastStore'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { COLORS, COMMAND_ICONS, DynamicIcon } from '@/lib/icons'
 import { cn } from '@/lib/utils'
-import { Field, Modal, Toggle } from '@/components/ui'
+import { Combobox, Field, Modal, Toggle } from '@/components/ui'
 
 const VAR_RE = /\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}/g
 
@@ -143,19 +143,12 @@ export function CommandEditor({
         </Field>
 
         <Field label="分组" hint="可用 / 分层">
-          <>
-            <input
-              className="input selectable"
-              list="cmd-group-options"
-              value={group}
-              onChange={(e) => setGroup(e.target.value)}
-            />
-            <datalist id="cmd-group-options">
-              {groupOptions.map((g) => (
-                <option key={g} value={g} />
-              ))}
-            </datalist>
-          </>
+          <Combobox
+            value={group}
+            onChange={setGroup}
+            options={groupOptions}
+            placeholder="默认"
+          />
         </Field>
 
         <Field label="命令内容" hint="用 {{变量名}} 声明占位符" className="col-span-2">

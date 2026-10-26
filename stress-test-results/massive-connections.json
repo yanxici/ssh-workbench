@@ -4,7 +4,7 @@
     "generateTime": 0,
     "batchTagTime": 0,
     "totalTime": 0,
-    "memoryUsed": 5.273979187011719
+    "memoryUsed": 5.248664855957031
   },
   {
     "size": 500,
@@ -18,13 +18,13 @@
     "generateTime": 0,
     "batchTagTime": 1,
     "totalTime": 1,
-    "memoryUsed": 5.19879150390625
+    "memoryUsed": 5.173713684082031
   },
   {
     "size": 2000,
-    "generateTime": 1,
-    "batchTagTime": 1,
+    "generateTime": 2,
+    "batchTagTime": 0,
     "totalTime": 2,
-    "memoryUsed": 6.327705383300781
+    "memoryUsed": 6.3387603759765625
   }
 ]

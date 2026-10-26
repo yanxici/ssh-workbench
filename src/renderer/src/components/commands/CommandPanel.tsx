@@ -738,8 +738,14 @@ export function CommandPanel({
                           dragId === c.id && 'opacity-40'
                         )}
                       >
-                        {/* 名称行：图标 + 名字（右侧留出 24px 给角标/操作槽） */}
-                        <span className="flex min-w-0 items-center gap-1.5">
+                        {/*
+                         * 名称行：图标 + 名字（右侧留出 24px 给角标/操作槽）。
+                         * 必须带 w-full：与下面命令行同一个坑 —— button 的 UA 样式是
+                         * align-items:flex-start，交叉轴上子项宽度由内容决定，行内那个
+                         * flex-1 truncate 拿不到可收缩的宽度基准，长命令名会撑出卡片
+                         * （129 张里 92 张中招，最宽溢出 123px）。
+                         */}
+                        <span className="flex w-full min-w-0 items-center gap-1.5">
                           <span
                             className={cn(
                               'flex h-5 w-5 shrink-0 items-center justify-center rounded-md border',

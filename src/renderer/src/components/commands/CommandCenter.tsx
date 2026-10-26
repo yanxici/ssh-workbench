@@ -473,7 +473,8 @@ export function CommandCenter({
                               }}
                               onContextMenu={(e) => menu.openMenu(e, c)}
                             >
-                              <span className="flex min-w-0 items-center gap-1.5">
+                              {/* w-full 同 CommandPanel：UA 的 align-items:flex-start 会让长命令名撑出卡片 */}
+                              <span className="flex w-full min-w-0 items-center gap-1.5">
                                 <span
                                   className={cn(
                                     'flex h-5 w-5 shrink-0 items-center justify-center rounded-md border',

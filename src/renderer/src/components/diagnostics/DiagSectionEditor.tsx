@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { DiagSection, DiagSectionInput } from '@shared/types'
-import { Field, Modal } from '@/components/ui'
+import { Combobox, Field, Modal } from '@/components/ui'
 import { useDiagStore } from '@/stores/diagStore'
 
 /**
@@ -123,20 +123,14 @@ export function DiagSectionEditor({
             />
           </Field>
           <Field label="分组">
-            <input
-              className="input selectable"
+            <Combobox
               value={form.group}
-              onChange={(e) => set('group', e.target.value)}
-              list="diag-groups"
+              onChange={(v) => set('group', v)}
+              options={groups}
               placeholder="自定义"
             />
           </Field>
         </div>
-        <datalist id="diag-groups">
-          {groups.map((g) => (
-            <option key={g} value={g} />
-          ))}
-        </datalist>
 
         <Field label="采集命令（在设备侧执行，支持 ; || 组合与重定向）">
           <textarea

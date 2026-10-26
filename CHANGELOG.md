@@ -5,6 +5,28 @@ All notable changes to SSH Workbench will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.4] - 2026-10-26
+
+### Fixed
+
+#### 新建命令时选不了其他分组（严重）
+- 「分组」输入框原来用原生 `<datalist>`。datalist 会拿输入框的**当前值**做子串过滤，而新建命令时它预填了「默认」，于是点开下拉只剩 1 条与「默认」匹配的项，用户看到的就是「分组锁死在默认、选不了别的」
+- 浏览器不提供关闭该过滤的开关，因此新增 `Combobox` 组件（`src/renderer/src/components/ui/index.tsx`）：输入框 + 自绘候选列表
+  - 聚焦/点箭头 → 显示**全量**候选（不再被当前值过滤）
+  - 打字 → 按子串过滤，并允许直接用新名字创建分组
+  - 支持 ↑/↓ 移动、Enter 选中、Esc 关闭、点外部关闭
+  - 浮层用 fixed 定位并按输入框实测坐标摆放，下方空间不足时自动向上翻，不会被 modal 的 `overflow-hidden` 裁掉
+- 同一坑位一并修掉：`ConnectionEditor`（连接分组）、`DiagSectionEditor`（诊断分组）
+
+#### 命令名（名称行）溢出卡片边界
+- 1.4.3 只修了命令行，名称行是同一根因：`<button>` 的 UA `align-items: flex-start` 让 column flex 交叉轴子项宽度由内容决定，`truncate` 不参与收缩
+- `CommandPanel` / `CommandCenter` 的名称行补 `w-full min-w-0`；实测（CDP 量取）129 张卡片中名称行溢出数 **92 → 0**
+
+### Changed
+
+#### 全量溢出复查
+- 用 CDP 逐屏打开全部 12 个视图/面板（连接、文件、历史、日志、隧道、诊断、批量、档案、资源、固件、发现、备份、设置）扫描「元素右边界超出非裁切父容器」，结果 **0 处**，无需再改
+
 ## [1.4.3] - 2026-10-26
 
 ### Fixed

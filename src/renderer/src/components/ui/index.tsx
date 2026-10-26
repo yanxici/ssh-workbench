@@ -8,7 +8,9 @@ import {
 } from 'react'
 import {
   AlertTriangle,
+  Check,
   CheckCircle2,
+  ChevronDown,
   Info,
   X,
   XCircle
@@ -89,6 +91,185 @@ export function Field({
         {hint && <span className="ml-1.5 font-normal text-ink-3/80">{hint}</span>}
       </div>
       {children}
+    </div>
+  )
+}
+
+/**
+ * 可输入的组合框：输入框 + 直接画在 React 里的候选列表。
+ *
+ * 为什么不用 <datalist>：原生 datalist 会拿输入框的**当前值**做子串过滤，
+ * 而这类字段（分组、标签）几乎总是预填了旧值（如「默认」）。用户点开下拉时
+ * 看到的只剩与「默认」匹配的 1 条，视觉上就是「选不了其他分组」。
+ * 浏览器不给任何控制过滤行为的开关，所以自带一层列表：
+ * - 未输入（只是聚焦/点箭头）→ 全量候选
+ * - 已输入 → 子串过滤，且允许输入全新值
+ */
+export function Combobox({
+  value,
+  onChange,
+  options,
+  placeholder,
+  className,
+  inputClassName
+}: {
+  value: string
+  onChange: (next: string) => void
+  options: string[]
+  placeholder?: string
+  className?: string
+  inputClassName?: string
+}): JSX.Element {
+  const [open, setOpen] = useState(false)
+  /** null = 用户还没打字，显示全量；非 null = 当前输入串，按它过滤 */
+  const [typed, setTyped] = useState<string | null>(null)
+  const [active, setActive] = useState(0)
+  /** 浮层用 fixed 定位：modal 祖先带 overflow-hidden，absolute 会被裁掉 */
+  const [rect, setRect] = useState<{ left: number; top: number; width: number } | null>(null)
+  const boxRef = useRef<HTMLDivElement>(null)
+  const listRef = useRef<HTMLDivElement>(null)
+
+  const unique = options.filter((o, i) => o && options.indexOf(o) === i)
+  const keyword = (typed ?? '').trim().toLowerCase()
+  const shown = keyword === '' ? unique : unique.filter((o) => o.toLowerCase().includes(keyword))
+
+  const measure = (): void => {
+    const el = boxRef.current?.querySelector('input')
+    if (!el) return
+    const r = el.getBoundingClientRect()
+    // 下方空间不足时向上翻
+    const spaceBelow = window.innerHeight - r.bottom
+    const top = spaceBelow < 200 ? Math.max(8, r.top - 8 - 180) : r.bottom + 3
+    setRect({ left: r.left, top, width: r.width })
+  }
+
+  // 点外部关闭
+  useEffect(() => {
+    if (!open) return
+    const onDown = (e: globalThis.MouseEvent): void => {
+      const t = e.target as Node
+      if (!boxRef.current?.contains(t) && !listRef.current?.contains(t)) setOpen(false)
+    }
+    window.addEventListener('mousedown', onDown)
+    return () => window.removeEventListener('mousedown', onDown)
+  }, [open])
+
+  // 打开时跟随滚动/缩放重新定位
+  useEffect(() => {
+    if (!open) return
+    measure()
+    const onScroll = (): void => measure()
+    window.addEventListener('scroll', onScroll, true)
+    window.addEventListener('resize', onScroll)
+    return () => {
+      window.removeEventListener('scroll', onScroll, true)
+      window.removeEventListener('resize', onScroll)
+    }
+  }, [open])
+
+  // 打开时把高亮项滚进可视区
+  useEffect(() => {
+    if (!open) return
+    const el = listRef.current?.children[active] as HTMLElement | undefined
+    el?.scrollIntoView({ block: 'nearest' })
+  }, [open, active])
+
+  const commit = (next: string): void => {
+    onChange(next)
+    setTyped(null)
+    setOpen(false)
+    setActive(0)
+  }
+
+  const openList = (): void => {
+    setTyped(null)
+    measure()
+    setOpen(true)
+    const idx = unique.indexOf(value)
+    setActive(idx >= 0 ? idx : 0)
+  }
+
+  return (
+    <div ref={boxRef} className={cn('relative', className)}>
+      <div className="relative">
+        <input
+          className={cn('input selectable pr-7', inputClassName)}
+          value={value}
+          placeholder={placeholder}
+          autoComplete="off"
+          onChange={(e) => {
+            onChange(e.target.value)
+            setTyped(e.target.value)
+            setOpen(true)
+            measure()
+            setActive(0)
+          }}
+          onFocus={openList}
+          onClick={() => {
+            if (!open) openList()
+          }}
+          onKeyDown={(e) => {
+            if (e.key === 'ArrowDown') {
+              e.preventDefault()
+              if (!open) openList()
+              else setActive((i) => Math.min(i + 1, shown.length - 1))
+            } else if (e.key === 'ArrowUp') {
+              e.preventDefault()
+              setActive((i) => Math.max(i - 1, 0))
+            } else if (e.key === 'Enter') {
+              if (open && shown[active] !== undefined) {
+                e.preventDefault()
+                commit(shown[active])
+              }
+            } else if (e.key === 'Escape' && open) {
+              e.preventDefault()
+              e.stopPropagation()
+              setOpen(false)
+            }
+          }}
+        />
+        <button
+          type="button"
+          tabIndex={-1}
+          title="展开候选"
+          className="absolute right-1 top-1/2 flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded text-ink-3 transition-colors hover:text-ink"
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={() => (open ? setOpen(false) : openList())}
+        >
+          <ChevronDown size={12} />
+        </button>
+      </div>
+
+      {open && rect && (
+        <div
+          ref={listRef}
+          className="scroll-thin fixed z-[60] max-h-44 overflow-y-auto rounded-md border border-edge bg-panel p-1 shadow-pop"
+          style={{ left: rect.left, top: rect.top, width: rect.width }}
+        >
+          {shown.length === 0 ? (
+            <div className="px-2 py-1.5 text-2xs text-ink-3">
+              {value.trim() ? `回车使用「${value.trim()}」` : '暂无候选'}
+            </div>
+          ) : (
+            shown.map((o, i) => (
+              <button
+                key={o}
+                type="button"
+                className={cn(
+                  'flex w-full cursor-default items-center gap-1.5 rounded px-2 py-1 text-left text-xs transition-colors',
+                  i === active ? 'bg-hover text-ink' : 'text-ink-2 hover:bg-hover hover:text-ink'
+                )}
+                onMouseEnter={() => setActive(i)}
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => commit(o)}
+              >
+                <span className="min-w-0 flex-1 truncate">{o}</span>
+                {o === value && <Check size={11} className="shrink-0 text-accent" />}
+              </button>
+            ))
+          )}
+        </div>
+      )}
     </div>
   )
 }

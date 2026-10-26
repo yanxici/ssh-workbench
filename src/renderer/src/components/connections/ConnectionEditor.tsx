@@ -13,7 +13,7 @@ import { useToastStore } from '@/stores/toastStore'
 import { COLORS } from '@/lib/icons'
 import { cn } from '@/lib/utils'
 import { call } from '@/lib/ipc'
-import { Field, Modal } from '@/components/ui'
+import { Combobox, Field, Modal } from '@/components/ui'
 
 interface FormState {
   name: string
@@ -573,20 +573,12 @@ export function ConnectionEditor({
         </Field>
 
         <Field label="分组" hint="用于左侧列表归类">
-          <>
-            <input
-              className="input selectable"
-              list="conn-group-options"
-              value={form.group}
-              onChange={(e) => set('group', e.target.value)}
-              placeholder="默认"
-            />
-            <datalist id="conn-group-options">
-              {groupOptions.map((g) => (
-                <option key={g} value={g} />
-              ))}
-            </datalist>
-          </>
+          <Combobox
+            value={form.group}
+            onChange={(v) => set('group', v)}
+            options={groupOptions}
+            placeholder="默认"
+          />
         </Field>
 
         <Field label="标签" hint="逗号分隔，用于搜索">
