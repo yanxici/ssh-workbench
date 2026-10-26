@@ -488,7 +488,8 @@ export function CommandCenter({
                                   {c.name}
                                 </span>
                               </span>
-                              <span className="truncate font-mono text-3xs leading-tight text-ink-3">
+                              {/* w-full 同 CommandPanel：UA 的 align-items:flex-start 会让长命令撑出卡片 */}
+                              <span className="w-full min-w-0 truncate font-mono text-3xs leading-tight text-ink-3">
                                 {c.command}
                               </span>
                               {/*

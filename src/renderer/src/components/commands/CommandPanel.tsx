@@ -754,8 +754,14 @@ export function CommandPanel({
                           </span>
                         </span>
 
-                        {/* 命令行：单行省略，作为「这是干什么的」的辨识辅助 */}
-                        <span className="truncate font-mono text-3xs leading-tight text-ink-3">
+                        {/*
+                         * 命令行：单行省略，作为「这是干什么的」的辨识辅助。
+                         * 必须带 w-full：button 的 UA 样式是 align-items:flex-start，
+                         * 交叉轴上子项宽度由内容决定，truncate 的 overflow:hidden
+                         * 不参与收缩 —— 长命令会直接撑出卡片右边界（128 张里 82 张中招）。
+                         * w-full 把宽度钉在卡片内容宽，truncate 才真正生效。
+                         */}
+                        <span className="w-full min-w-0 truncate font-mono text-3xs leading-tight text-ink-3">
                           <Highlight text={c.command} indices={hit?.cmdIndices ?? []} />
                         </span>
 

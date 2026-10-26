@@ -5,6 +5,16 @@ All notable changes to SSH Workbench will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.3] - 2026-10-26
+
+### Fixed
+
+#### 命令文本溢出卡片边界
+- 侧栏命令墙里，长命令不再撑出卡片右边界。`CommandPanel` 的命令行 `<span>` 补 `w-full min-w-0`
+- 根因：`<button>` 的 UA 样式是 `align-items: flex-start`，column flex 交叉轴上的子项宽度由内容决定，`truncate` 的 `overflow: hidden` 不参与收缩；只加 `min-width: 0` 无效，必须显式钉住宽度
+- 同一问题在 `CommandCenter` 命令墙卡片同步修复
+- 实测（CDP 量取 bounding rect）：128 张卡片中溢出数由 **82 → 0**，剩余长命令正确显示省略号
+
 ## [1.4.2] - 2026-10-26
 
 ### Added

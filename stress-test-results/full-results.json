@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-10-26T02:40:42.471Z",
+  "timestamp": "2026-10-26T05:38:09.779Z",
   "platform": "win32",
   "arch": "x64",
   "nodeVersion": "v24.21.0",
@@ -10,13 +10,13 @@
         "generateTime": 0,
         "batchTagTime": 0,
         "totalTime": 0,
-        "memoryUsed": 4.794410705566406
+        "memoryUsed": 5.273979187011719
       },
       {
         "size": 500,
-        "generateTime": 1,
+        "generateTime": 0,
         "batchTagTime": 0,
-        "totalTime": 1,
+        "totalTime": 0,
         "memoryUsed": 5.292503356933594
       },
       {
@@ -24,14 +24,14 @@
         "generateTime": 0,
         "batchTagTime": 1,
         "totalTime": 1,
-        "memoryUsed": 5.181610107421875
+        "memoryUsed": 5.19879150390625
       },
       {
         "size": 2000,
         "generateTime": 1,
         "batchTagTime": 1,
         "totalTime": 2,
-        "memoryUsed": 6.3394775390625
+        "memoryUsed": 6.327705383300781
       }
     ],
     "shortcutConflicts": [
@@ -55,16 +55,16 @@
       },
       {
         "iterations": 5000,
-        "totalTime": 12,
+        "totalTime": 11,
         "avgTime": "0.002",
-        "throughput": "416667"
+        "throughput": "454545"
       }
     ],
     "sessionRestore": [
       {
         "sessionCount": 1,
         "saveTime": 0,
-        "restoreTime": 1,
+        "restoreTime": 0,
         "dataSize": 76
       },
       {
@@ -87,5 +87,5 @@
       }
     ]
   },
-  "totalTime": 32
+  "totalTime": 33
 }

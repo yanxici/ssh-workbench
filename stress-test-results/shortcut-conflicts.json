@@ -19,8 +19,8 @@
   },
   {
     "iterations": 5000,
-    "totalTime": 12,
+    "totalTime": 11,
     "avgTime": "0.002",
-    "throughput": "416667"
+    "throughput": "454545"
   }
 ]
