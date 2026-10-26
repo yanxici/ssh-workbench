@@ -19,9 +19,11 @@ A lightweight desktop SSH client with a built-in workbench for embedded-device t
 - JSON import / export
 - Always-on command rail on the right (fixed 3-column button wall, `Ctrl+Alt+B` to toggle)
 - Command Center (`Ctrl+K`): fuzzy search with Chinese/English synonyms, usage-based ranking, full keyboard control, scope filtering (all / recent / most used / favorites)
+- Group fields are searchable comboboxes: the full list shows up on open, typing filters it, and a brand-new group name can be created on the spot
 
 **Files & tunnels**
 - SFTP file tree beside the terminal, dual-pane transfer mode, remote edit with automatic `.bak` backup
+- Right-click menu on the sidebar file tree: edit, download file / download directory (expanded recursively), download straight to the local Downloads folder, upload here, new folder, rename, delete
 - Transfer queue with live progress and speed; pause / resume (continues from the transferred offset) / cancel (partial files are cleaned up)
 - Port forwarding: local (`-L`), remote (`-R`) and dynamic SOCKS5 (`-D`)
 
@@ -39,6 +41,7 @@ A lightweight desktop SSH client with a built-in workbench for embedded-device t
 - Title bar + activity bar + resizable sidebar and command rail (drag to resize, double-click to reset)
 - 7 color themes (VS Code Light, Workbench, Dracula, Nord, Solarized, One Dark, Gruvbox), each with light and dark variants; UI and terminal colors switch together
 - Optimized for large connection lists (2900+ tested): pagination, fold long groups by default, indexed session lookup
+- Long command names and command text truncate with an ellipsis instead of overflowing the card; all 12 views audited for text overflow
 
 **Security**
 - Credentials encrypted with the OS keystore (Electron `safeStorage`)
@@ -78,9 +81,12 @@ Architecture, directory layout and roadmap (Chinese): [DESIGN.md](./DESIGN.md)
 
 ## Version
 
-Current: **v1.3.0**
+Current: **v1.4.4**
 
 Recent updates:
+- Command group selection fixed: the group field no longer locks to the default group (replaced native `datalist` with a proper combobox)
+- Command name and command text now truncate instead of overflowing the card
+- Sidebar file panel right-click menu, including download file / download directory
 - Auto-reconnect on connection drop
 - Performance optimization for large connection lists (2900+ connections tested)
 - Connection group management (create, rename, delete, drag-to-reorder)

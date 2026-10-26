@@ -1,7 +1,7 @@
 # SSH Workbench — 整体方案与设计文档
 
 > 轻量级 SSH 客户端 + 嵌入式技术支持工作台
-> 更新时间：2026-10-25 ｜ 阶段：v1.3.0，P0–P4 已实现，v1.1-v1.3 新增连接分组管理、大规模连接性能优化、断线自动重连、命令中心范围筛选
+> 更新时间：2026-10-26 ｜ 阶段：v1.4.4，P0–P4 已实现，v1.1-v1.4 新增连接分组管理、大规模连接性能优化、断线自动重连、命令中心范围筛选、侧栏文件面板右键下载、分组 Combobox、命令卡文本溢出修复
 
 ---
 
@@ -312,6 +312,26 @@ xterm.write  ◀──webContents.send── EVT_SESSION_DATA ◀── shell da
 
 ### 7.0 版本更新记录
 
+#### v1.4.4（2026-10-26）
+
+| 分类 | 内容 |
+|---|---|
+| **严重缺陷修复** | **分组字段选不了其他分组**：原生 `<datalist>` 会拿输入框当前值做子串过滤（预填「默认」时只剩 1 条候选），且浏览器无关闭开关。新增 `Combobox`（`src/renderer/src/components/ui/index.tsx`）替换三处分组字段：`CommandEditor`、`ConnectionEditor`、`DiagSectionEditor`。全量候选 + 打字过滤 + ↑↓/Enter/Esc + fixed 浮层按实测坐标定位、下方空间不足自动上翻 |
+| **UI 修复** | **命令名/命令文本撑出卡片**：`<button>` 的 UA `align-items: flex-start` 使 column flex 交叉轴子项宽度由内容决定，`truncate` 不参与收缩。`CommandPanel` / `CommandCenter` 名称行与命令行补 `w-full min-w-0`；实测 129 张卡命令行溢出 82→0、名称行 92→0 |
+| **全量复查** | 用 CDP 逐屏打开 12 个视图/面板扫描「元素右边界超出非裁切父容器」，结果 0 处 |
+
+#### v1.4.2（2026-10-26）
+
+| 分类 | 内容 |
+|---|---|
+| **新增功能** | **侧栏文件面板右键菜单**：行上右键作用于该文件/目录，空白处右键作用于当前目录。菜单项含编辑、下载文件/下载目录（主进程 `sftpManager.transferDownloadDir` 递归展开）、下载到本机「下载」文件夹（新增 IPC `sftp:downloads-dir`）、上传文件到此处、新建文件夹、重命名、删除（目录前弹递归删除确认） |
+
+#### v1.4.0 / v1.4.1（2026-10-25）
+
+| 分类 | 内容 |
+|---|---|
+| **UI 调整** | 去掉连接选中操作栏，批量操作统一走右键菜单；批量编辑标签接回右键菜单；修正 `electron-builder.yml` 中 `compression` 非法值 |
+
 #### v1.3.0（2026-10-25）
 
 | 分类 | 内容 |
@@ -419,6 +439,7 @@ env -u ELECTRON_RUN_AS_NODE ./node_modules/electron/dist/electron.exe . --smoke 
 | 问题 | 现象 | 处理方式 |
 |---|---|---|
 | **安全软件按路径拦截** | `electron.exe` 从**桌面路径**启动时被静默终止（终端无任何输出），换到其他目录可正常运行 | 把项目放在非桌面目录（如 `D:ssh-workbench`），或将 `node_moduleselectrondist` 加入安全软件排除项 |
+| **目录完整性标签为 Low** | 目录被打上 `Low Mandatory Level` 后，Electron 沙箱子进程启动即崩：退出码恒为 `-2147483645` / `0xC0000005`，双击毫无反应，且**同一份 exe 拷到别的目录就能跑**（字节一致也不影响结论） | 先查 `icacls "<DIR>" \| Select-String "Mandatory"`，命中 Low 就 `icacls "<DIR>" /setintegritylevel "(OI)(CI)Medium" /T`。这是本机反复出现的坑，遇到「双击没反应 / 原地崩 copy 就好」优先查这条，不要先去怀疑 exe 或 asar |
 | 本机无 VS C++ 编译环境 | `npm install` 在 cpu-features（ssh2 可选原生加速）处卡死 | `npm install --omit=optional`（无功能影响） |
 | 直连 GitHub 不可达 | electron 二进制安装失败 | 项目 `.npmrc` 已固化 `electron_mirror=https://npmmirror.com/mirrors/electron/` |
 
@@ -432,6 +453,8 @@ env -u ELECTRON_RUN_AS_NODE ./node_modules/electron/dist/electron.exe . --smoke 
 - 中英同义表 `SYNONYMS` 是手工维护的 22 组，新增命令分组时不会自动扩展 —— 需要新词时改表并跑 `scripts/verify-synonyms.cjs`；
 - 连接分组拖拽排序已实现（v1.3.0），支持分组间拖放和组内排序，空分组会在下次加载时保留；
 - 断线自动重连（v1.3.0）使用指数退避策略（1s / 2s / 4s / 8s / 16s 上限），最多尝试 5 次后需要用户手动重连；错误日志在终端内可见。
+- **`<button>` 里的 column flex 一定要钉宽度**（v1.4.3/v1.4.4 连续踩两次）：浏览器给 `<button>` 的 UA 样式含 `align-items: flex-start`，交叉轴子项宽度由内容决定，`truncate` 的 `overflow: hidden` 拿不到受约束宽度、不参与收缩，长文本直接顶出边界。只加 `min-width: 0` 无效，必须 `w-full min-w-0` 一起上。新增任何「按钮内多行文本」结构都要复查这一条；
+- **分组/枚举类输入不要用原生 `<datalist>`**（v1.4.4）：datalist 会拿输入框当前值做子串过滤，预填默认值时用户几乎看不到其他候选，且无关闭开关。统一用 `Combobox`（`src/renderer/src/components/ui/index.tsx`），浮层走 `fixed` + 实测坐标定位，避免被 modal 的 `overflow-hidden` 裁切。
 
 ## 10. 开发自检
 

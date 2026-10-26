@@ -1,236 +1,136 @@
-# SSH Workbench v1.3.0 - 发布前检查清单
+# SSH Workbench 发布前检查清单
 
-## ✅ 代码实现
-
-### 批量编辑标签
-- [x] 新增 `BatchTagsEditor` 组件
-- [x] 支持追加和替换两种模式
-- [x] 集成到右键菜单
-- [x] 添加成功提示
-- [x] 自动去重标签
-
-### 会话恢复
-- [x] 在 `types.ts` 中添加配置类型
-- [x] 在 `App.tsx` 中实现保存逻辑
-- [x] 在 `App.tsx` 中实现恢复逻辑
-- [x] 在设置面板中添加开关
-- [x] 限制最多 10 个会话
-- [x] 延迟 300ms 恢复避免阻塞
-
-### 快捷键冲突检测
-- [x] 创建 `shortcutConflict.ts` 工具模块
-- [x] 实现 `detectShortcutConflicts()` 函数
-- [x] 实现 `checkSingleConflict()` 函数
-- [x] 在设置面板中显示冲突警告
-- [x] 添加冲突确认对话框
-- [x] 支持强制保存选项
-
-### ASAR 打包优化
-- [x] 在 `electron-builder.yml` 中启用 ASAR
-- [x] 配置 gzip 压缩
-- [x] 添加 SHA256 校验
-- [x] 排除 resources 目录
-
-## ✅ 测试脚本
-
-- [x] 创建 `stress-test.js` 脚本
-- [x] 实现大量连接测试
-- [x] 实现快捷键冲突检测测试
-- [x] 实现会话恢复测试
-- [x] 生成 JSON 测试结果
-- [x] 生成文本测试报告
-
-## ✅ 构建脚本
-
-- [x] 创建 `build-release.sh` (Linux/macOS)
-- [x] 创建 `build-release.bat` (Windows)
-- [x] 自动运行类型检查
-- [x] 自动运行压力测试
-- [x] 自动构建和打包
-- [x] 显示包体积统计
-
-## ✅ 文档
-
-- [x] 创建 `OPTIMIZATION_SUMMARY.md` - 技术实现总结
-- [x] 创建 `USAGE_GUIDE.md` - 用户使用指南
-- [x] 创建 `CHANGELOG.md` - 完整更新日志
-- [x] 创建 `RELEASE_NOTES.md` - 发布说明
-- [x] 创建 `RELEASE_CHECKLIST.md` - 检查清单（本文件）
-
-## 📋 发布前测试清单
-
-### 功能测试
-
-#### 批量编辑标签
-- [ ] 选中 2 个连接，测试追加模式
-- [ ] 选中 5 个连接，测试替换模式
-- [ ] 输入空标签，验证错误处理
-- [ ] 输入重复标签，验证去重功能
-- [ ] 取消操作，验证无副作用
-
-#### 会话恢复
-- [ ] 启用会话恢复，打开 3 个连接，重启应用
-- [ ] 禁用会话恢复，重启应用验证不恢复
-- [ ] 打开 15 个连接，验证只恢复 10 个
-- [ ] 恢复期间删除连接，验证跳过逻辑
-- [ ] 快速连续重启，验证稳定性
-
-#### 快捷键冲突检测
-- [ ] 将两个操作设为同一快捷键，验证警告显示
-- [ ] 录制新快捷键时触发冲突，验证弹窗
-- [ ] 点击"取消"，验证不保存
-- [ ] 点击"强制保存"，验证覆盖成功
-- [ ] 恢复默认快捷键，验证冲突消失
-
-### 性能测试
-
-#### 压力测试
-- [ ] 运行 `node scripts/stress-test.js`
-- [ ] 验证所有测试通过
-- [ ] 检查性能指标在预期范围内
-- [ ] 查看 `stress-test-results/` 目录
-
-#### 大量连接
-- [ ] 创建 100 个连接，测试列表滚动
-- [ ] 创建 500 个连接，测试搜索性能
-- [ ] 批量编辑 100 个连接的标签
-- [ ] 监控内存占用（应 < 100MB）
-
-### 打包测试
-
-#### Windows
-- [ ] 运行 `npm run build:win`
-- [ ] 测试安装版（Setup.exe）
-- [ ] 测试便携版（portable.exe）
-- [ ] 验证图标显示正常
-- [ ] 检查包体积（应 < 80MB）
-
-#### Linux
-- [ ] 运行 `npm run build:linux`
-- [ ] 测试 AppImage 可执行性
-- [ ] 验证图标和启动菜单
-- [ ] 检查包体积（应 < 90MB）
-
-#### macOS
-- [ ] 运行 `npm run build:mac`
-- [ ] 测试 DMG 安装
-- [ ] 验证应用签名（如适用）
-- [ ] 检查包体积（应 < 85MB）
-
-### 兼容性测试
-
-- [ ] Windows 10 x64
-- [ ] Windows 11 x64
-- [ ] Ubuntu 20.04 LTS
-- [ ] Ubuntu 22.04 LTS
-- [ ] macOS 12 (Monterey)
-- [ ] macOS 13 (Ventura)
-
-### 回归测试
-
-- [ ] 现有连接配置正常加载
-- [ ] SSH 连接功能正常
-- [ ] 文件传输（SFTP）正常
-- [ ] 终端功能（搜索、复制、粘贴）正常
-- [ ] 命令执行正常
-- [ ] 设置保存和读取正常
-
-## 🚀 发布步骤
-
-### 1. 准备发布
-
-```bash
-# 更新版本号（如果尚未更新）
-# 编辑 package.json 中的 version 字段
-
-# 提交所有更改
-git add .
-git commit -m "Release v1.3.0: 批量编辑标签、会话恢复、快捷键冲突检测、ASAR优化"
-git push origin main
-```
-
-### 2. 打标签
-
-```bash
-git tag -a v1.3.0 -m "Release v1.3.0"
-git push origin v1.3.0
-```
-
-### 3. 构建所有平台
-
-```bash
-# Windows
-npm run build:win
-
-# Linux
-npm run build:linux
-
-# macOS
-npm run build:mac
-```
-
-### 4. 验证构建产物
-
-```bash
-# 检查输出目录
-ls -lh dist-v11/
-
-# 验证文件完整性
-sha256sum dist-v11/*.exe
-sha256sum dist-v11/*.AppImage
-sha256sum dist-v11/*.dmg
-```
-
-### 5. 创建 GitHub Release
-
-1. 访问 https://github.com/yourusername/ssh-workbench/releases/new
-2. 选择标签：v1.3.0
-3. 标题：SSH Workbench v1.3.0
-4. 描述：粘贴 RELEASE_NOTES.md 内容
-5. 上传文件：
-   - SSH-Workbench-1.3.0-Setup.exe
-   - SSH-Workbench-1.3.0-portable.exe
-   - SSH-Workbench-1.3.0-win.zip
-   - SSH-Workbench-1.3.0.AppImage
-   - SSH-Workbench-1.3.0.dmg
-6. 勾选 "Set as the latest release"
-7. 点击 "Publish release"
-
-### 6. 发布后验证
-
-- [ ] 下载链接可访问
-- [ ] 所有平台的安装包完整
-- [ ] Release notes 格式正确
-- [ ] Changelog 已更新
-- [ ] 文档链接有效
-
-## 📢 宣传渠道
-
-发布后可在以下渠道宣传：
-
-- [ ] GitHub Release 页面
-- [ ] 项目 README 更新
-- [ ] 用户邮件列表（如有）
-- [ ] 社交媒体（Twitter、微博等）
-- [ ] 技术社区（Reddit、V2EX、知乎等）
-
-## 🎯 关键指标
-
-发布后跟踪：
-
-- [ ] 下载次数
-- [ ] 用户反馈
-- [ ] Bug 报告数量
-- [ ] 功能请求
-- [ ] 性能问题反馈
-
-## 📝 备注
-
-- 所有测试必须在真实环境中进行，不能仅依赖模拟
-- 发现问题立即修复，重新运行完整测试
-- 保留旧版本安装包以便回滚
-- 准备好快速修复流程应对紧急问题
+> 周期性发版用。以 v1.4.4 为基线整理，每次发版把「本次变更」小节换成当次内容，其余直接复用。
 
 ---
 
-**检查清单完成后，方可发布正式版本。**
+## 0. 优先排查：目录完整性标签
+
+**动手前先跑这条。** 本机反复出现过「双击 exe 没反应 / 退出码 `-2147483645` / 0xC0000005 / 同一份 exe 拷到别的目录就能跑」——根因是目录被打上 `Low Mandatory Level` 完整性标签，Electron 沙箱子进程启动即被杀。
+
+```powershell
+icacls "D:\ssh-workbench" | Select-String "Mandatory"
+icacls "D:\ssh-workbench\dist-v11" | Select-String "Mandatory"
+```
+
+命中 `Low Mandatory Level` 就修：
+
+```powershell
+icacls "D:\ssh-workbench" /setintegritylevel "(OI)(CI)Medium" /T
+```
+
+> 修完不需要重启机器。判定标准是 `Mandatory Label\Medium Mandatory Level`。
+
+---
+
+## 1. 本次变更（v1.4.4）
+
+### 修复：分组字段选不了其他分组（严重）
+- [x] 定位根因：原生 `<datalist>` 按输入框当前值做子串过滤，预填「默认」时只剩 1 条候选，浏览器无关闭开关
+- [x] 新增 `Combobox`（`src/renderer/src/components/ui/index.tsx`）
+- [x] `CommandEditor` 分组字段接入并移除 datalist
+- [x] `ConnectionEditor` 分组字段接入并移除 datalist
+- [x] `DiagSectionEditor` 分类字段接入并移除 datalist
+- [x] 验证：打开即全量候选、点选生效、打字过滤、Esc 不连带关弹窗、下方空间不足上翻
+
+### 修复：命令名 / 命令文本撑出卡片
+- [x] `CommandPanel` 名称行与命令行补 `w-full min-w-0`
+- [x] `CommandCenter` 名称行补 `w-full`
+- [x] 实测 129 张卡：命令行溢出 82→0、名称行 92→0
+
+### 全量溢出复查
+- [x] CDP 逐屏打开 12 个视图/面板扫描右边界溢出 → 0 处
+
+---
+
+## 2. 通用检查流程
+
+### 2.1 类型检查
+
+```bash
+npm run typecheck   # 必须 EXIT=0
+```
+
+### 2.2 压测
+
+```bash
+node scripts/stress-test.js
+```
+
+- [ ] 全部通过
+- [ ] `stress-test-results/` 已更新（summary.txt + 4 个 json）
+- [ ] 内存占用 < 100MB（2000 连接场景）
+
+### 2.3 版本号与日志
+
+- [ ] `package.json:3` 的 `version` 已 bump
+- [ ] `CHANGELOG.md` 顶部新增本版条目（Fixed / Added / Changed 分类）
+- [ ] `README.md` 与 `README.zh-CN.md` 的「当前版本 / 最近更新」已同步
+- [ ] `RELEASE_NOTES.md` 已按本版重写
+- [ ] `DESIGN.md` 头部阶段行 + §7.0 版本更新记录已补
+
+### 2.4 构建
+
+```bash
+# 换输出目录前先确认 electron-builder.yml 的 directories.output
+npx electron-vite build
+npx electron-builder --win --config electron-builder.yml
+```
+
+- [ ] `out/main/index.js`、`out/preload/index.js`、`out/renderer/` 均生成
+- [ ] rcedit 阶段没报 `Fatal error: Unable to commit changes`（报了说明旧 exe 还在跑，先杀进程）
+- [ ] 产物齐全：`Setup <ver>.exe` + `.blockmap` + `portable.exe` + `win.zip` + `latest.yml`
+
+### 2.5 打包产物冒烟（不能只测源码态）
+
+源码态过了不代表产物能过——asar 打包、资源路径、原生层图标都可能变。
+
+```powershell
+# 注意：shell 里若存在 ELECTRON_RUN_AS_NODE，Electron 会被当纯 Node 跑，冒烟必挂
+Remove-Item Env:ELECTRON_RUN_AS_NODE -EA SilentlyContinue
+Start-Process "dist-v11\win-unpacked\SSH Workbench.exe" -ArgumentList '--remote-debugging-port=9337'
+```
+
+- [ ] 进程存活，`title=SSH Workbench`
+- [ ] 通过 CDP 验证本次改动的关键交互
+- [ ] 全视图溢出扫描 0 处
+
+> 冒烟脚本注意：点选后**不要**在同一个 `Runtime.evaluate` 里同步读 `input.value`，React 还没重渲染会误判 FAIL。改成 click → 等 300~500ms → 另起一次 evaluate 读值。
+> 另一个坑：上一轮测试残留的弹窗/浮层会污染下一轮，每轮开头先关掉所有 `[role="dialog"]`，必要时重启应用。
+
+### 2.6 提交与发布
+
+```bash
+git add <具体文件>          # 不要 git add .
+git commit -m "fix(scope): 简述"
+git tag -a v<ver> -m "v<ver>"
+git -c http.proxy=http://127.0.0.1:7897 push origin main
+git -c http.proxy=http://127.0.0.1:7897 push origin v<ver>
+```
+
+- [ ] commit 信息能说清「改了什么 + 为什么」
+- [ ] tag 与 `package.json` 版本一致
+- [ ] push 走本地代理（直连 GitHub 不可达）
+
+### 2.7 GitHub Release
+
+- [ ] 创建 Release，tag 选中刚推的
+- [ ] 正文用 `RELEASE_NOTES.md` 内容
+- [ ] **只上传 Setup 安装包**：三个包解出来的 `win-unpacked` 完全一致，多传只是白费 200+ MB 带宽
+- [ ] asset `state=uploaded`，体积与本地一致
+
+> 凭证：`git credential fill` 可取到系统凭证管理器里的 token（用户 `yanxici`，scope 含 `repo`）。上传走 `https://uploads.github.com`；`NODE_TLS_REJECT_UNAUTHORIZED=0` 只在本地网络有 TLS 中间人时需要。
+
+### 2.8 发布后验证
+
+- [ ] Release 页面可访问，asset 可下载
+- [ ] `git status` 干净（临时脚本、日志都已清理）
+- [ ] 杀掉所有残留的 `SSH Workbench` / `electron` 进程
+
+---
+
+## 3. 退出条件
+
+全部页面测试项通过 + 冒烟在**打包产物**上通过 + Release asset 完整，才算发布完成。
+
+保留上一版安装包以便回滚。
