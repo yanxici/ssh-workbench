@@ -1,26 +1,26 @@
 [
   {
     "iterations": 100,
-    "totalTime": 9,
-    "avgTime": "0.090",
-    "throughput": "11111"
+    "totalTime": 1,
+    "avgTime": "0.010",
+    "throughput": "100000"
   },
   {
     "iterations": 500,
-    "totalTime": 8,
-    "avgTime": "0.016",
-    "throughput": "62500"
+    "totalTime": 1,
+    "avgTime": "0.002",
+    "throughput": "500000"
   },
   {
     "iterations": 1000,
-    "totalTime": 8,
-    "avgTime": "0.008",
-    "throughput": "125000"
+    "totalTime": 3,
+    "avgTime": "0.003",
+    "throughput": "333333"
   },
   {
     "iterations": 5000,
-    "totalTime": 51,
-    "avgTime": "0.010",
-    "throughput": "98039"
+    "totalTime": 12,
+    "avgTime": "0.002",
+    "throughput": "416667"
   }
 ]

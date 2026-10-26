@@ -1,8 +1,8 @@
 [
   {
     "sessionCount": 1,
-    "saveTime": 1,
-    "restoreTime": 0,
+    "saveTime": 0,
+    "restoreTime": 1,
     "dataSize": 76
   },
   {
@@ -20,7 +20,7 @@
   {
     "sessionCount": 20,
     "saveTime": 0,
-    "restoreTime": 1,
+    "restoreTime": 0,
     "dataSize": 1122
   }
 ]

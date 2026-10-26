@@ -1,70 +1,70 @@
 {
-  "timestamp": "2026-10-25T08:40:23.420Z",
-  "platform": "linux",
-  "arch": "arm64",
-  "nodeVersion": "v18.19.1",
+  "timestamp": "2026-10-26T02:40:42.471Z",
+  "platform": "win32",
+  "arch": "x64",
+  "nodeVersion": "v24.21.0",
   "tests": {
     "massiveConnections": [
       {
         "size": 100,
-        "generateTime": 1,
+        "generateTime": 0,
         "batchTagTime": 0,
-        "totalTime": 1,
-        "memoryUsed": 3.6128387451171875
+        "totalTime": 0,
+        "memoryUsed": 4.794410705566406
       },
       {
         "size": 500,
         "generateTime": 1,
         "batchTagTime": 0,
         "totalTime": 1,
-        "memoryUsed": 4.284820556640625
+        "memoryUsed": 5.292503356933594
       },
       {
         "size": 1000,
-        "generateTime": 2,
+        "generateTime": 0,
         "batchTagTime": 1,
-        "totalTime": 3,
-        "memoryUsed": 5.115348815917969
+        "totalTime": 1,
+        "memoryUsed": 5.181610107421875
       },
       {
         "size": 2000,
-        "generateTime": 4,
-        "batchTagTime": 3,
-        "totalTime": 7,
-        "memoryUsed": 5.473777770996094
+        "generateTime": 1,
+        "batchTagTime": 1,
+        "totalTime": 2,
+        "memoryUsed": 6.3394775390625
       }
     ],
     "shortcutConflicts": [
       {
         "iterations": 100,
-        "totalTime": 9,
-        "avgTime": "0.090",
-        "throughput": "11111"
+        "totalTime": 1,
+        "avgTime": "0.010",
+        "throughput": "100000"
       },
       {
         "iterations": 500,
-        "totalTime": 8,
-        "avgTime": "0.016",
-        "throughput": "62500"
+        "totalTime": 1,
+        "avgTime": "0.002",
+        "throughput": "500000"
       },
       {
         "iterations": 1000,
-        "totalTime": 8,
-        "avgTime": "0.008",
-        "throughput": "125000"
+        "totalTime": 3,
+        "avgTime": "0.003",
+        "throughput": "333333"
       },
       {
         "iterations": 5000,
-        "totalTime": 51,
-        "avgTime": "0.010",
-        "throughput": "98039"
+        "totalTime": 12,
+        "avgTime": "0.002",
+        "throughput": "416667"
       }
     ],
     "sessionRestore": [
       {
         "sessionCount": 1,
-        "saveTime": 1,
-        "restoreTime": 0,
+        "saveTime": 0,
+        "restoreTime": 1,
         "dataSize": 76
       },
       {
@@ -82,10 +82,10 @@
       {
         "sessionCount": 20,
         "saveTime": 0,
-        "restoreTime": 1,
+        "restoreTime": 0,
         "dataSize": 1122
       }
     ]
   },
-  "totalTime": 130
+  "totalTime": 32
 }

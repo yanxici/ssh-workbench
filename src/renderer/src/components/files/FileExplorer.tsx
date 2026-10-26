@@ -1,15 +1,18 @@
 import { useCallback, useEffect, useState } from 'react'
 import {
   ChevronRight,
+  Download,
   Folder,
   File as FileIcon,
   FileText,
   FolderOpen,
+  FolderPlus,
   FolderTree,
   HardDrive,
   Home,
   LayoutGrid,
   Loader2,
+  Pencil,
   Plus,
   RefreshCw,
   Terminal,
@@ -23,6 +26,13 @@ import { call } from '@/lib/ipc'
 import { cn, formatBytes, remoteDirname, remoteJoin } from '@/lib/utils'
 import { normalizeRemoteDir, rememberUploadDir, resolveUploadDir } from '@/lib/uploadDir'
 import { UploadTargetDialog } from './UploadTargetDialog'
+import {
+  ConfirmDialog,
+  ContextMenu,
+  PromptDialog,
+  useContextMenu,
+  type MenuEntry
+} from '@/components/ui'
 
 /**
  * 侧栏文件面板：工作区 / 文件系统 两个 Tab。
@@ -76,6 +86,11 @@ export function FileExplorer({
   const version = useSftpStore((s) => s.treeVersion)
   const bumpTree = useSftpStore((s) => s.bumpTree)
   const openEditor = useSftpStore((s) => s.openEditor)
+  /* 右键目标：命中某一行 → 该行；点在空白处 → 当前目录（菜单里下载/新建/上传都落在它上面） */
+  const { menu, openMenu, closeMenu } = useContextMenu<RemoteFile | null>()
+  const [dialog, setDialog] = useState<null | 'mkdir' | 'rename'>(null)
+  const [menuTarget, setMenuTarget] = useState<RemoteFile | null>(null)
+  const [pendingDelete, setPendingDelete] = useState<RemoteFile | null>(null)
 
   const sessionId = session?.id ?? null
   const connected = session?.status === 'connected'
@@ -203,6 +218,133 @@ export function FileExplorer({
       setUploadBusy(false)
       setUploadOpen(false)
     }
+  }
+
+  /* ---------- 右键菜单动作 ---------- */
+
+  /** 上传到指定目录（右键「上传文件到此处」与空白处右键共用） */
+  const openUploadTo = async (dir: string): Promise<void> => {
+    if (!sessionId) return
+    const target = await resolveUploadDir(sessionId, dir)
+    setUploadDefault(target)
+    setUploadOpen(true)
+  }
+
+  /**
+   * 下载：文件与目录走同一个 IPC。
+   * 目录的递归遍历在主进程（sftpManager.transferDownloadDir），渲染层不需要展开。
+   */
+  const downloadTo = async (paths: string[], localDir?: string): Promise<void> => {
+    if (!sessionId || paths.length === 0) return
+    if (localDir) {
+      const ids = await call(window.api.sftp.download(sessionId, paths, localDir), {
+        errorTitle: '下载失败'
+      })
+      if (ids) {
+        useToastStore.getState().push({
+          kind: 'info',
+          title: `已加入 ${ids.length} 个下载任务`,
+          detail: `目标：${localDir}`
+        })
+      }
+      return
+    }
+    // 没有默认目录：弹系统对话框让用户挑保存位置（目录下载会整棵建在所选目录下）
+    const res = await call(window.api.sftp.downloadDialog(sessionId, paths), {
+      errorTitle: '下载失败'
+    })
+    if (res && !res.canceled) {
+      useToastStore.getState().push({
+        kind: 'info',
+        title: `已加入 ${res.count} 个下载任务`
+      })
+    }
+  }
+
+  /** 一键下载到本机「下载」文件夹，不弹对话框 */
+  const downloadToDefault = async (paths: string[]): Promise<void> => {
+    if (!sessionId || paths.length === 0) return
+    const dir = await call(window.api.sftp.downloadsDir(), { silent: true })
+    await downloadTo(paths, dir || undefined)
+  }
+
+  const mkdirAt = async (parent: string, name: string): Promise<void> => {
+    if (!sessionId) return
+    const done = await call(window.api.sftp.mkdir(sessionId, remoteJoin(parent, name)), {
+      errorTitle: '新建文件夹失败'
+    })
+    if (done !== null) bumpTree()
+  }
+
+  const renameTo = async (target: RemoteFile, name: string): Promise<void> => {
+    if (!sessionId) return
+    const done = await call(
+      window.api.sftp.rename(sessionId, target.path, remoteJoin(remoteDirname(target.path), name)),
+      { errorTitle: '重命名失败' }
+    )
+    if (done !== null) bumpTree()
+  }
+
+  const removeAt = async (target: RemoteFile): Promise<void> => {
+    if (!sessionId) return
+    const ok = await call(window.api.sftp.remove(sessionId, target.path), {
+      errorTitle: '删除失败'
+    })
+    if (ok !== null) {
+      useToastStore.getState().push({ kind: 'success', title: `已删除「${target.name}」` })
+      bumpTree()
+    }
+  }
+
+  /** 当前右键的目标集合：行 → 该行；空白处 → 当前目录 */
+  const menuItems = (target: RemoteFile | null): MenuEntry[] => {
+    const dir = target ? (target.type === 'directory' ? target.path : currentDir) : currentDir
+    return [
+      ...(target && target.type !== 'directory'
+        ? [
+            {
+              label: '编辑',
+              icon: <Pencil size={12} />,
+              onClick: () => void openEditor(target.path)
+            }
+          ]
+        : []),
+      {
+        label: target ? (target.type === 'directory' ? '下载此目录' : '下载') : '下载当前目录',
+        icon: <Download size={12} />,
+        disabled: !target && !currentDir,
+        onClick: () => void downloadTo([target ? target.path : currentDir])
+      },
+      {
+        label: '下载到「下载」文件夹',
+        icon: <Download size={12} />,
+        disabled: !target && !currentDir,
+        onClick: () => void downloadToDefault([target ? target.path : currentDir])
+      },
+      {
+        label: target?.type === 'directory' ? '上传文件到此处' : '上传文件到此目录',
+        icon: <Upload size={12} />,
+        separatorBefore: true,
+        disabled: !dir,
+        onClick: () => void openUploadTo(dir)
+      },
+      {
+        label: '新建文件夹',
+        icon: <FolderPlus size={12} />,
+        disabled: !dir,
+        onClick: () => setDialog('mkdir')
+      },
+      ...(target
+        ? [
+            { label: '重命名', separatorBefore: true, onClick: () => setDialog('rename') },
+            {
+              label: target.type === 'directory' ? '删除目录' : '删除',
+              danger: true,
+              onClick: () => setPendingDelete(target)
+            }
+          ]
+        : [])
+    ]
   }
 
   /* ---------- 面包屑：把路径拆成可点的段 ---------- */
@@ -336,8 +478,15 @@ export function FileExplorer({
         </div>
       )}
 
-      {/* 目录树 */}
-      <div className="scroll-thin min-h-0 flex-1 overflow-auto py-1">
+      {/* 目录树：空白处右键也出菜单（目标=当前目录），这样侧栏任何位置都能直接下载整目录 */}
+      <div
+        className="scroll-thin min-h-0 flex-1 overflow-auto py-1"
+        onContextMenu={(e) => {
+          // 行自己会 stopPropagation，走到这里的都是空白区域
+          setMenuTarget(null)
+          openMenu(e, null)
+        }}
+      >
         {loading && rows === null ? (
           <div className="flex items-center justify-center gap-2 py-6 text-2xs text-ink-3">
             <Loader2 size={12} className="animate-spin" />
@@ -365,6 +514,12 @@ export function FileExplorer({
                 )}
                 style={{ paddingLeft: 6 + depth * 12 }}
                 onClick={() => setSelected(file.path)}
+                onContextMenu={(e) => {
+                  // 先选中再开菜单：菜单项读的是同一个 target，避免右键后视觉选中不跟手
+                  setSelected(file.path)
+                  setMenuTarget(file)
+                  openMenu(e, file)
+                }}
                 onDoubleClick={() => {
                   if (isDir) {
                     setCurrentDir(file.path)
@@ -419,6 +574,59 @@ export function FileExplorer({
           </button>
         )}
       </div>
+
+      {/* 右键菜单：行 → 该文件/目录；空白 → 当前目录 */}
+      {menu && (
+        <ContextMenu x={menu.x} y={menu.y} items={menuItems(menu.target)} onClose={closeMenu} />
+      )}
+
+      <PromptDialog
+        open={dialog !== null}
+        title={dialog === 'rename' ? '重命名' : '新建文件夹'}
+        label={dialog === 'rename' ? '新名称' : '文件夹名称'}
+        defaultValue={dialog === 'rename' ? (menuTarget?.name ?? '') : ''}
+        onCancel={() => setDialog(null)}
+        onConfirm={(value) => {
+          const kind = dialog
+          setDialog(null)
+          if (kind === 'rename' && menuTarget) {
+            void renameTo(menuTarget, value)
+          } else if (kind === 'mkdir') {
+            const parent = menuTarget?.type === 'directory' ? menuTarget.path : currentDir
+            if (parent) void mkdirAt(parent, value)
+          }
+        }}
+      />
+
+      <ConfirmDialog
+        open={pendingDelete !== null}
+        title="删除远程文件"
+        danger
+        confirmText="删除"
+        message={
+          pendingDelete ? (
+            <>
+              确定删除远端
+              {pendingDelete.type === 'directory' ? '目录' : '文件'}
+              <span className="font-medium text-ink">「{pendingDelete.name}」</span>吗？
+              <div className="mt-2 selectable break-all font-mono text-2xs text-ink-3">
+                {pendingDelete.path}
+              </div>
+              {pendingDelete.type === 'directory' && (
+                <div className="mt-1 text-2xs text-danger">目录将被递归删除，不可恢复。</div>
+              )}
+            </>
+          ) : (
+            ''
+          )
+        }
+        onCancel={() => setPendingDelete(null)}
+        onConfirm={() => {
+          const target = pendingDelete
+          setPendingDelete(null)
+          if (target) void removeAt(target)
+        }}
+      />
 
       {/* 上传目标目录（选完目录才弹本地文件选择框） */}
       <UploadTargetDialog

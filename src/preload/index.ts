@@ -257,6 +257,7 @@ export const api = {
       remotePaths: string[]
     ): Promise<IpcResult<{ canceled: boolean; count: number }>> =>
       invoke(IPC.SFTP_DOWNLOAD_DIALOG, sessionId, remotePaths),
+    downloadsDir: (): Promise<IpcResult<string>> => invoke(IPC.SFTP_DOWNLOADS_DIR),
     pauseTransfer: (taskId: string): Promise<IpcResult<boolean>> =>
       invoke(IPC.SFTP_TRANSFER_PAUSE, taskId),
     resumeTransfer: (taskId: string): Promise<IpcResult<boolean>> =>

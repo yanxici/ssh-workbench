@@ -5,6 +5,17 @@ All notable changes to SSH Workbench will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.2] - 2026-10-26
+
+### Added
+
+#### 侧栏文件面板右键菜单（含下载）
+- `FileExplorer` 现在支持右键菜单：行上右键作用于该文件/目录，空白处右键作用于当前目录
+- 菜单项：编辑、下载此目录/下载、下载到「下载」文件夹、上传文件到此处、新建文件夹、重命名、删除
+- 目录下载由主进程 `sftpManager.transferDownloadDir` 递归展开，渲染层无需自己遍历
+- 新增 IPC `sftp:downloads-dir` + `window.api.sftp.downloadsDir()`，一键下载落到本机「下载」文件夹（不存在时自动创建）
+- 删除目录前弹确认框，明确提示递归删除不可恢复
+
 ## [1.3.0] - 2024-01-XX
 
 ### Added

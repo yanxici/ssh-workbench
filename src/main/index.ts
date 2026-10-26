@@ -493,11 +493,20 @@ function registerIpc(): void {
     const res = await dialog.showOpenDialog(win as BrowserWindow, {
       title: '选择保存目录',
       buttonLabel: '下载到此处',
+      defaultPath: app.getPath('downloads'),
       properties: ['openDirectory', 'createDirectory']
     })
     if (res.canceled || res.filePaths.length === 0) return { canceled: true, count: 0 }
     const ids = sftpManager.download(sessionId, remotePaths, res.filePaths[0])
     return { canceled: false, count: ids.length }
+  })
+
+  // 一键下载的落点：本机「下载」文件夹。系统可能没有该目录（精简版 Windows），
+  // 这里按需建出来，免得后续每个文件都写失败。
+  handle(IPC.SFTP_DOWNLOADS_DIR, () => {
+    const dir = app.getPath('downloads')
+    mkdirSync(dir, { recursive: true })
+    return dir
   })
 
   /* ---------------- ZMODEM 文件传输（sz / rz） ---------------- */
