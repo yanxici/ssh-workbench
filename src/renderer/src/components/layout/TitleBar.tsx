@@ -3,6 +3,7 @@ import { useLayoutStore } from '@/stores/layoutStore'
 import { useUiStore } from '@/stores/uiStore'
 import { cn } from '@/lib/utils'
 import { TabBar } from './TabBar'
+import { UpdateBadge } from './UpdateBadge'
 
 /**
  * 顶部标题栏（44px，品牌绿底）。
@@ -55,6 +56,9 @@ export function TitleBar(): JSX.Element {
         >
           <Settings size={14} />
         </button>
+
+        {/* 更新入口：有新版时在设置与窗口控制之间亮出「更新」 */}
+        <UpdateBadge />
 
         <span className="mx-1 h-4 w-px bg-on-brand/25" />
 

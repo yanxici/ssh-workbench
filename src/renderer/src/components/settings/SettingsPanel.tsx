@@ -23,6 +23,7 @@ import { call } from '@/lib/ipc'
 import { cn } from '@/lib/utils'
 import { Modal, Toggle } from '@/components/ui'
 import { ErrorLogSection } from './ErrorLogSection'
+import { UpdateSection } from './UpdateSection'
 
 interface KnownHost {
   host: string
@@ -716,6 +717,10 @@ export function SettingsPanel({
         hint="运行期异常自动收集，可搜索、复制、导出给同事排查"
       >
         <ErrorLogSection />
+      </Section>
+
+      <Section id="update" title="软件更新" hint="检查更新 / 自动下载 / 更新代理">
+        <UpdateSection />
       </Section>
 
       <Section id="datadir" title="数据目录">

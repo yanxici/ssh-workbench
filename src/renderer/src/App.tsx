@@ -31,6 +31,7 @@ import { useMetricsStore } from '@/stores/metricsStore'
 import { useFirmwareStore } from '@/stores/firmwareStore'
 import { useDiscoveryStore } from '@/stores/discoveryStore'
 import { useBackupStore } from '@/stores/backupStore'
+import { useUpdateStore } from '@/stores/updateStore'
 import { useUiStore } from '@/stores/uiStore'
 import { matchShortcut, resolveShortcuts } from '@/lib/shortcuts'
 import { isCommandDrag, readDraggedCommandId, stripDragPayload } from '@/lib/commandDrag'
@@ -147,6 +148,15 @@ export function App(): JSX.Element {
     void useTunnelStore.getState().load()
     // 渲染层重载后主进程可能仍在采样：对齐监控状态
     void useMetricsStore.getState().syncStates()
+    /*
+     * 更新状态对齐。
+     *
+     * 事件订阅是「订阅之后才收得到」，而主进程的初始化与首轮检查
+     * 可能发生在渲染层订阅之前（窗口建好后主进程立刻 initUpdater）。
+     * 少了这一步，最快的一次检测结果就白丢了 —— 表现为「明明有新版，
+     * 标题栏却一直是空的，得等下次检查」。
+     */
+    void useUpdateStore.getState().sync()
   }, [loadSettings, loadConnections, loadCommands])
 
   /* ---------- 会话恢复：启动时自动打开上次退出时的连接 ---------- */
@@ -244,6 +254,10 @@ export function App(): JSX.Element {
     const offTransfer = window.api.on.transferProgress((e) => {
       useSftpStore.getState().applyProgress(e)
     })
+    // 应用更新状态：主进程每次推全量快照，这里直接覆盖
+    const offUpdate = window.api.on.updateStatus((e) => {
+      useUpdateStore.getState().applyEvent(e)
+    })
     return () => {
       offData()
       offStatus()
@@ -256,6 +270,7 @@ export function App(): JSX.Element {
       offFwLog()
       offDiscover()
       offTransfer()
+      offUpdate()
     }
   }, [])
 

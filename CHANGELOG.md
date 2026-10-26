@@ -5,6 +5,33 @@ All notable changes to SSH Workbench will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.0] - 2026-10-26
+
+### Added
+
+#### 应用内自动更新（打开就能看到「更新」并一键装好）
+- 标题栏右侧新增更新入口（`UpdateBadge`）。启动约 8 秒后静默检查一次，发现新版本时在设置按钮与窗口控制之间亮出一个绿色小 chip「更新」，点开是版本对比、更新说明和「立即更新」按钮，全程不跳浏览器
+- 状态机由主进程单点维护（`src/main/updater.ts`，基于 `electron-updater`），渲染层只做展示，不重复推导版本高低
+  - `checking` → 转圈「检查中」
+  - `available` → 箭头「更新」，面板里显示 `1.5.0 → 1.6.0` 与新版本说明
+  - `downloading` → 百分比 + 进度条 + 速率/剩余时间
+  - `downloaded` → 「重启并安装」（装完自动拉起新版）
+  - `error` → 面板里给出可读原因，不弹窗打断当前会话
+- 设置面板新增「软件更新」分区：立即检查 / 启动时自动检查 / 自动下载 / 更新专用代理 / 打开发布页，任意一项改完立即生效，不用重启
+- 更新专用代理走 updater 自己的 Electron net session 分区，与 SSH 连接代理完全隔离；留空则跟随系统代理
+
+#### 差量更新
+- `electron-builder.yml` 补 `publish` 段（provider: github / owner / repo），打包时自动生成 `resources/app-update.yml`；配合 `.blockmap` 走差量下载，78MB 的完整包通常只需传几 MB
+
+### Changed
+
+- 默认值：**自动检查开、自动下载关**。现场网络按流量计费，几十兆的包应当在用户点头之后才下；查到更新只亮按钮，不偷偷拉
+- `autoInstallOnAppQuit` 保持开启：用户点了重启却临时取消时，下次正常退出顺手装上，不用再点一次
+
+### Notes
+
+- 自动更新只对**用 NSIS 安装包安装**的版本生效（`SSH Workbench Setup x.y.z.exe`）。portable 版与解压即用的 zip 版没有安装上下文，无法自我替换，更新入口不显示，请继续用安装包覆盖升级
+
 ## [1.4.4] - 2026-10-26
 
 ### Fixed

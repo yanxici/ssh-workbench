@@ -256,6 +256,15 @@ export interface AppSettings {
   restoreSessions?: boolean
   /** 上次退出时打开的连接ID列表 */
   lastOpenSessions?: Array<{ connectionId: string; connectionName: string }>
+  /** 应用内自动更新的偏好（检查频率 / 自动下载 / 更新专用代理） */
+  update?: UpdatePrefs
+  /**
+   * 用户选择「跳过」的版本号。
+   *
+   * 存版本号而不是布尔：跳过的只该是「那一个版本」，下次发新版还得提醒，
+   * 否则等于永久关掉了更新提示。
+   */
+  updateSkippedVersion?: string
   /**
    * 外观外壳版本号。
    *
@@ -279,6 +288,25 @@ export interface LayoutSizes {
   commandRail?: number
   /** 左侧面板栏宽度 */
   sidebar?: number
+}
+
+/**
+ * 自动更新的偏好。
+ *
+ * 为什么不复用 `ProxyConfig`：那个是「SSH 连接自己的代理」（socks5/http 到跳板），
+ * 而更新包是主进程用 Electron net 去拉的，走的完全是另一条链路 ——
+ * 国内直连 GitHub 基本拉不动，必须让用户能单独给更新配一个 HTTP 代理。
+ */
+export interface UpdatePrefs {
+  /** 启动后自动检查更新（默认开） */
+  autoCheck?: boolean
+  /** 检查到更新时自动开始下载（默认关：现场网络贵，让用户自己点） */
+  autoDownload?: boolean
+  /**
+   * 更新专用代理，形如 http://127.0.0.1:7897。
+   * 留空则跟随系统代理（Windows 的「Internet 选项」设置）。
+   */
+  proxyUrl?: string
 }
 
 /** 可自定义的快捷键动作 */
@@ -893,4 +921,56 @@ export interface SessionDataEvent {
    * 而 data 是经 StringDecoder 解码的文本，不能用于协议解析。
    */
   raw?: string
+}
+
+/* ------------------------------------------------------------------ *
+ *  应用内更新（electron-updater）
+ * ------------------------------------------------------------------ */
+
+/**
+ * 更新状态机的阶段。
+ *
+ * 刻意做成单值枚举而不是多个布尔（如 `isChecking` / `isDownloading`）：
+ * 这些阶段天然互斥，用多个布尔会出现「既在检查又在下载」这种不可能状态，
+ * 渲染层还得自己拼 if 链才能决定显示什么。
+ */
+export type UpdatePhase =
+  /** 空闲：没检查过，或检查完确认是最新 */
+  | 'idle'
+  /** 正在向发布源查询 latest.yml */
+  | 'checking'
+  /** 查到新版本，等用户点「更新」 */
+  | 'available'
+  /** 正在下载安装包 */
+  | 'downloading'
+  /** 下载完成，等用户点「重启安装」 */
+  | 'downloaded'
+  /** 出错（网络不通 / 发布源缺文件 / 校验失败） */
+  | 'error'
+
+/** 主进程推给渲染层的更新状态快照（每次都推全量，渲染层无需自己合并） */
+export interface UpdateStatus {
+  phase: UpdatePhase
+  /** 当前运行版本，如 1.4.4 */
+  currentVersion: string
+  /** 发布源上的最新版本，未检查到时为 undefined */
+  latestVersion?: string
+  /** 下载进度百分比 0-100；phase=downloading 时有效 */
+  percent?: number
+  /** 已下载字节 / 总字节，用于「12.3 MB / 78.6 MB」这类文案 */
+  transferred?: number
+  total?: number
+  /** 每秒字节数，用于显示剩余时间 */
+  bytesPerSecond?: number
+  /** phase=error 时的用户可读原因 */
+  error?: string
+  /** 更新说明（Release notes / CHANGELOG 片段），可能为空 */
+  releaseNotes?: string
+  /** 发布页地址，供「打开发布页」使用 */
+  releaseUrl?: string
+  /**
+   * 本次会话里用户是否点过「稍后」。
+   * 点过后标题栏收起成一个小圆点，不再强提示；重启应用会重置。
+   */
+  dismissed?: boolean
 }

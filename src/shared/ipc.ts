@@ -188,7 +188,21 @@ export const IPC = {
   WIN_TOGGLE_MAX: 'win:toggle-max',
   WIN_CLOSE: 'win:close',
 
+  /* ---------------- 应用内更新 ---------------- */
+  /** 读取当前更新状态（渲染层首帧对齐用，不会错过启动时的那一次检测） */
+  UPDATE_STATE: 'update:state',
+  /** 主动检查更新 */
+  UPDATE_CHECK: 'update:check',
+  /** 下载已发现的更新包 */
+  UPDATE_DOWNLOAD: 'update:download',
+  /** 退出并安装（silent=false 走安装向导，便于用户看到进度） */
+  UPDATE_INSTALL: 'update:install',
+  /** 打开发布页（用户想手动下载/看更新说明时） */
+  UPDATE_OPEN_RELEASE: 'update:open-release',
+
   /* ---------------- 主进程 -> 渲染进程 事件 ---------------- */
+  /** 更新状态机变化（检查中/有新版/下载进度/待重启安装/失败） */
+  EVT_UPDATE_STATUS: 'evt:update-status',
   EVT_SESSION_DATA: 'evt:session-data',
   EVT_SESSION_STATUS: 'evt:session-status',
   EVT_SESSION_LATENCY: 'evt:session-latency',

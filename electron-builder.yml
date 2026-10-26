@@ -1,5 +1,20 @@
 appId: com.sshworkbench.app
 productName: SSH Workbench
+# 发布目标：GitHub Releases。
+#
+# 这段是应用内自动更新的元数据来源 —— electron-builder 会据此在打包时生成
+# resources/app-update.yml（provider/owner/repo），electron-updater 启动后
+# 就靠它拼出 releases/latest/download/latest.yml 去比对版本。少了这一段，
+# 产出的 app-update.yml 里没有 provider，更新检查第一次请求就抛
+# "Cannot find channel" —— 用户看到的就是「检查更新失败」。
+#
+# 注意：这里只描述「从哪查、从哪下」，不代表打包会自动上传。
+# 默认 electron-builder 在非 CI 环境是 --publish never，Release 仍走手工上传。
+publish:
+  provider: github
+  owner: yanxici
+  repo: ssh-workbench
+  releaseType: release
 directories:
   buildResources: build
   # 每次发版换一个输出目录，旧产物留着做对照（dist-v8…v10 → 本次 dist-v11）。
@@ -52,9 +67,18 @@ nsis:
   oneClick: false
   allowToChangeInstallationDirectory: true
   createDesktopShortcut: true
+  # 文件名里绝对不能有空格。
+  #
+  # 这条是自动更新的硬要求：electron-builder 生成 latest.yml 时会把文件名里的
+  # 空格替换成 `-`（SSH-Workbench-Setup-1.5.0.exe），而 GitHub 上传时会把空格
+  # 替换成 `.`（SSH.Workbench.Setup.1.5.0.exe）。两边规则不同 → latest.yml 里
+  # 的下载地址恒 404，更新检查能查到新版本、点下载却永远失败。
+  # 变量用 ${name}（package.json 的 name，无空格）而不是 ${productName}。
+  artifactName: ${name}-Setup-${version}.${ext}
 # 免安装版：单个 exe，双击即用，不写注册表、不建开始菜单项
 portable:
-  artifactName: ${productName}-${version}-portable.${ext}
+  # 同样不带空格，理由见 nsis.artifactName
+  artifactName: ${name}-${version}-portable.${ext}
   requestExecutionLevel: user
 mac:
   target:

@@ -148,7 +148,20 @@ export const DEFAULT_SETTINGS: AppSettings = {
   strictHostKey: true,
   // 现场设备网络抖动频繁，默认开启自动重连；仍可在设置里关掉
   autoReconnect: true,
-  autoReconnectMax: 5
+  autoReconnectMax: 5,
+  /*
+   * 更新默认值。
+   *
+   * autoCheck 开、autoDownload 关 —— 这是现场网络下的最优组合：
+   * 启动几秒后静默查一次（代价只是几 KB 的 latest.yml），有新版本仅在
+   * 标题栏亮一个「更新」小按钮；78MB 的安装包等用户自己点才下。
+   * 反过来（自动下载）会在用户毫无预期时吃掉几百兆流量，漫游卡尤其致命。
+   */
+  update: {
+    autoCheck: true,
+    autoDownload: false,
+    proxyUrl: ''
+  }
 }
 
 /* ------------------------------------------------------------------ *

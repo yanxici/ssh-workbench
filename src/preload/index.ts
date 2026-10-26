@@ -54,7 +54,8 @@ import type {
   TransferProgressEvent,
   TunnelConfig,
   TunnelInput,
-  TunnelRuntimeInfo
+  TunnelRuntimeInfo,
+  UpdateStatus
 } from '@shared/types'
 
 /**
@@ -449,6 +450,27 @@ export const api = {
     close: (): Promise<void> => ipcRenderer.invoke(IPC.WIN_CLOSE) as Promise<void>
   },
 
+  /**
+   * 应用内更新。
+   *
+   * 全部走统一的 IpcResult 包装（与其它模块一致），失败原因由主进程
+   * 翻成人话，渲染层直接展示，不需要自己解析 electron-updater 的错误码。
+   */
+  update: {
+    /** 拉当前状态（渲染层首帧对齐，避免错过启动时的检测结果） */
+    state: (): Promise<IpcResult<UpdateStatus>> => invoke(IPC.UPDATE_STATE),
+    /** 检查更新；force=true 时忽略「已是最新」的结论重查 */
+    check: (force?: boolean): Promise<IpcResult<UpdateStatus>> => invoke(IPC.UPDATE_CHECK, force),
+    /** 下载已发现的更新包 */
+    download: (): Promise<IpcResult<UpdateStatus>> => invoke(IPC.UPDATE_DOWNLOAD),
+    /** 退出并安装 */
+    install: (): Promise<IpcResult<UpdateStatus>> => invoke(IPC.UPDATE_INSTALL),
+    /** 「稍后」：本会话内收起提示，不安装 */
+    later: (): Promise<IpcResult<UpdateStatus>> => invoke(IPC.UPDATE_INSTALL, { later: true }),
+    /** 打开发布页（想手动下载时） */
+    openRelease: (): Promise<IpcResult<void>> => invoke(IPC.UPDATE_OPEN_RELEASE)
+  },
+
   on: {
     sessionData: (cb: (e: SessionDataEvent) => void): (() => void) =>
       subscribe(IPC.EVT_SESSION_DATA, cb),
@@ -469,7 +491,9 @@ export const api = {
     metrics: (cb: (e: MetricsEvent) => void): (() => void) => subscribe(IPC.EVT_METRICS, cb),
     fwLog: (cb: (e: FirmwareLogEvent) => void): (() => void) => subscribe(IPC.EVT_FW_LOG, cb),
     discoverProgress: (cb: (e: DiscoverProgressEvent) => void): (() => void) =>
-      subscribe(IPC.EVT_DISCOVER_PROGRESS, cb)
+      subscribe(IPC.EVT_DISCOVER_PROGRESS, cb),
+    updateStatus: (cb: (e: UpdateStatus) => void): (() => void) =>
+      subscribe(IPC.EVT_UPDATE_STATUS, cb)
   }
 }
 

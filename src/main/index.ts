@@ -96,6 +96,16 @@ import {
   recordError
 } from './store/errorLog'
 import { parseSshCommand } from './util/parseSshCommand'
+import {
+  applyUpdatePrefs,
+  checkForUpdates,
+  dismiss as dismissUpdate,
+  downloadUpdate,
+  getUpdateStatus,
+  initUpdater,
+  openReleasePage,
+  quitAndInstall as quitAndInstallUpdate
+} from './updater'
 import { sessionManager } from './ssh/sessionManager'
 import { sftpManager } from './ssh/sftpManager'
 import { tunnelManager } from './ssh/portForward'
@@ -432,7 +442,18 @@ function registerIpc(): void {
 
   /* ---------------- 设置 / 存储 ---------------- */
   handle(IPC.SETTINGS_GET, () => getSettings())
-  handle(IPC.SETTINGS_SET, (patch: Parameters<typeof setSettings>[0]) => setSettings(patch))
+  handle(IPC.SETTINGS_SET, async (patch: Parameters<typeof setSettings>[0]) => {
+    const next = await setSettings(patch)
+    // 更新相关偏好改完立刻生效，不用重启应用（含代理、自动检查、自动下载）
+    if (patch.update) {
+      applyUpdatePrefs({
+        autoCheck: patch.update.autoCheck,
+        autoDownload: patch.update.autoDownload,
+        proxyUrl: patch.update.proxyUrl
+      })
+    }
+    return next
+  })
   handle(IPC.STORE_PATHS, () => ({
     dataDir: dataDir(),
     userData: app.getPath('userData')
@@ -756,6 +777,23 @@ function registerIpc(): void {
   })
   ipcMain.handle(IPC.WIN_CLOSE, (event) => {
     BrowserWindow.fromWebContents(event.sender)?.close()
+  })
+
+  /* ---------------- 应用内更新 ---------------- */
+  handle(IPC.UPDATE_STATE, () => getUpdateStatus())
+  handle(IPC.UPDATE_CHECK, (force?: boolean) => checkForUpdates(force === true))
+  handle(IPC.UPDATE_DOWNLOAD, () => downloadUpdate())
+  handle(
+    IPC.UPDATE_INSTALL,
+    (options?: { later?: boolean }) => {
+      // later=true 表示「稍后」：本会话内收起提示，不安装
+      if (options?.later) return dismissUpdate()
+      quitAndInstallUpdate()
+      return getUpdateStatus()
+    }
+  )
+  handle(IPC.UPDATE_OPEN_RELEASE, async () => {
+    await openReleasePage()
   })
 }
 
@@ -2066,6 +2104,32 @@ if (!gotLock) {
     createWindow()
     log('window created')
     bootLog('window created')
+
+    /*
+     * 应用内更新。
+     *
+     * 放在 createWindow 之后：更新状态要用 mainWindow.webContents.send 推送，
+     * 窗口还没建时 broadcast 全是空操作。而首轮检查本身又延后若干秒
+     * （见 initUpdater 的 initialDelayMs），等渲染层订阅完再推，不会丢事件。
+     *
+     * 配置全部读用户设置，读失败就按默认值走 —— 更新不该成为启动的阻塞项。
+     */
+    try {
+      const settings = await getSettings()
+      initUpdater({
+        log,
+        broadcast: (status) => {
+          mainWindow?.webContents.send(IPC.EVT_UPDATE_STATUS, status)
+        },
+        autoCheck: settings.update?.autoCheck !== false,
+        autoDownload: settings.update?.autoDownload === true,
+        proxyUrl: settings.update?.proxyUrl
+      })
+      bootLog('updater initialized')
+    } catch (err) {
+      log('[updater] init failed:', err instanceof Error ? err.message : String(err))
+      bootLog('updater init failed')
+    }
 
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow()

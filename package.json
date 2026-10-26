@@ -1,9 +1,14 @@
 {
   "name": "ssh-workbench",
-  "version": "1.4.4",
+  "version": "1.5.0",
   "private": true,
   "description": "轻量级 SSH 客户端 + 嵌入式技术支持工作台",
   "author": "ssh-workbench",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yanxici/ssh-workbench.git"
+  },
+  "homepage": "https://github.com/yanxici/ssh-workbench",
   "main": "./out/main/index.js",
   "scripts": {
     "dev": "electron-vite dev",
@@ -20,6 +25,7 @@
     "build:linux": "electron-vite build && electron-builder --linux --config electron-builder.yml"
   },
   "dependencies": {
+    "electron-updater": "^6.8.11",
     "ssh2": "^1.17.0",
     "zmodem.js": "0.1.10"
   },
