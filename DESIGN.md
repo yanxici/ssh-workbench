@@ -1,7 +1,7 @@
 # SSH Workbench — 整体方案与设计文档
 
 > 轻量级 SSH 客户端 + 嵌入式技术支持工作台
-> 更新时间：2026-10-27 ｜ 阶段：v1.5.1，P0–P4 已实现，v1.1-v1.5 新增连接分组管理、大规模连接性能优化、断线自动重连、命令中心范围筛选、侧栏文件面板右键下载、分组 Combobox、命令卡文本溢出修复、应用内自动更新、SFTP 批量目录读取、文件面板跟随终端 cwd
+> 更新时间：2026-10-27 ｜ 阶段：v1.5.2，P0–P4 已实现，v1.1-v1.5 新增连接分组管理、大规模连接性能优化、断线自动重连、命令中心范围筛选、侧栏文件面板右键下载、分组 Combobox、命令卡文本溢出修复、应用内自动更新、SFTP 批量目录读取、文件面板跟随终端 cwd（v1.5.2 修掉「开了跟随却看不到」）
 
 ---
 
@@ -381,6 +381,15 @@ IPC：`update:state / check / download / install / open-release` + `evt:update-s
 
 ### 7.0 版本更新记录
 
+#### v1.5.2（2026-10-27）
+
+| 分类 | 内容 |
+|---|---|
+| **缺陷修复（cwd 跟随）** | **「开了跟随，`cd` 之后文件没跟过来」**：解析与事件链路本是对的（`verify-shellcwd` 82 项 + `verify-cwdstore` 19 项全过），病根在展示层 —— `FileExplorer` 默认停在「工作区」Tab，那是一列常用位置快捷入口，不是目录树；叠加面板首次挂载把 `followedSeq` 一次性对齐到当前序号，**挂载之前**发生的 `cd` 被静默吞掉（面板常驻挂载、靠 `display` 切换，事件都在隐藏时到达） |
+| **重构** | 把「什么时候跳 / 跳哪儿 / 要不要替用户切 Tab」从 `FileExplorer` 抽成零依赖纯函数 `src/renderer/src/lib/cwdFollow.ts`：`decideInitial` 在「有已知 cwd + 开着跟随」时连 Tab 一起定到 `fs`（此前只改 `currentDir` 不改 Tab），没有已知 cwd 则保留用户原选 Tab（此前硬编码 `'workspace'`，会把正停在目录树里的用户踢回快捷入口）；`decideFollow` 显式区分「新事件 / 旧事件 / 空路径 / 关开关 / 断线 / 序号回退」六种分支，空路径不推进游标以免事件被永久跳过。另加「手动重开跟随 → 立刻补跳一次」 |
+| **回归** | 新增 `scripts/verify-cwdfollow.cjs`（19 项，esbuild 打 CJS 直跑），并入 `npm run test:cwdfollow`。这套逻辑用 DOM 测试打不到 —— 面板常驻挂载、`cd` 事件都在隐藏时到达 |
+| **构建** | 产物目录切到 `dist-v13`；`scripts/release.ps1` / `build-release.sh` / `build-release.bat` 同步；本次一并发出 v1.5.1 之后未进包的完整性标签硬锁修复（`WRITE_OWNER` + 两级扫描，25.9s → 5.8s） |
+
 #### v1.5.1（2026-10-27）
 
 | 分类 | 内容 |
@@ -480,7 +489,7 @@ npm run dev          # 开发模式（热更新）
 npm run typecheck    # 主进程 + 渲染层类型检查
 npm run smoke        # 冒烟自检（注意：本机 ELECTRON_RUN_AS_NODE=1 会让它崩，见下表）
 npm run build        # electron-vite build → out/（不是 npx vite build，后者找不到 index.html）
-npm run build:win    # 先跑完整性检查，再打包 Windows 安装包 + 免安装版（output: dist-v12）
+npm run build:win    # 先跑完整性检查，再打包 Windows 安装包 + 免安装版（output: dist-v13）
 npm run build:win:portable  # 只打免安装版：ssh-workbench-<version>-portable.exe（不写注册表、不建开始菜单）
 npm run check:integrity     # 只查完整性标签，命中 Low 退出码 1（v1.5.1）
 npm run fix:integrity       # 查并修（改 SACL 需管理员令牌）

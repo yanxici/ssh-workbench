@@ -5,7 +5,7 @@ All notable changes to SSH Workbench will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.5.2] - 2026-10-27
 
 ### Fixed
 
@@ -13,6 +13,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - 抽出纯函数 `src/renderer/src/lib/cwdFollow.ts`：`decideInitial` 在「有已知 cwd + 开着跟随」时连 Tab 一起定到「文件系统」；`decideFollow` 显式区分「新事件 / 旧事件 / 空路径 / 关开关 / 断线 / 序号回退」六种分支，空路径不推进游标以免事件被永久跳过
   - 新增「手动把跟随重新打开 → 立刻补跳一次」，免去「关掉再打开还是不动」的困惑
   - 新增 `scripts/verify-cwdfollow.cjs`（19 项，零依赖纯函数用例），并入 `npm run test:cwdfollow`
+
+### Build
+
+- 产物目录切到 `dist-v13`（每版一个目录，旧产物留作对照）；`scripts/release.ps1` / `build-release.sh` / `build-release.bat` 同步指向新目录
+- 本次发布带上了此前未随包发出的完整性标签硬锁修复（`WRITE_OWNER` 硬锁 + 两级扫描，全仓扫描 25.9s → 5.8s）：`npm run build:win` 与 `release.ps1` 上传前各拦一道，带 `Low` IL 的包不再出门
 
 ## [1.5.1] - 2026-10-27
 

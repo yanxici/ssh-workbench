@@ -3,7 +3,7 @@ REM SSH Workbench 构建和发布脚本 (Windows)
 setlocal enabledelayedexpansion
 
 REM 产物目录：与 electron-builder.yml 的 directories.output 保持一致
-set "OUTPUT_DIR=dist-v12"
+set "OUTPUT_DIR=dist-v13"
 
 echo =========================================
 echo   SSH Workbench 构建脚本

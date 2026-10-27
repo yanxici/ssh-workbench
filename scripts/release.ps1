@@ -30,7 +30,7 @@ if (-not $env:GH_TOKEN) {
 }
 
 $root = Split-Path -Parent $PSScriptRoot
-$dist = Join-Path $root "dist-v12"
+$dist = Join-Path $root "dist-v13"
 $tag = "v$Version"
 
 # ---- 上传清单：只传安装包 + 自动更新元数据 ----
@@ -60,7 +60,7 @@ if ($files.Count -eq 0) {
 }
 
 if ($files.Count -eq 0) {
-  Write-Host "dist-v12 里没有 $Version 的产物，先执行打包" -ForegroundColor Red
+  Write-Host "dist-v13 里没有 $Version 的产物，先执行打包" -ForegroundColor Red
   exit 1
 }
 

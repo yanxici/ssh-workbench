@@ -1,6 +1,6 @@
 # SSH Workbench 优化功能 - 使用指南
 
-> 适用版本：**v1.5.1**（2026-10-27）。本文只写「怎么用」，实现细节见 [DESIGN.md](./DESIGN.md)，逐版变更见 [CHANGELOG.md](./CHANGELOG.md)。
+> 适用版本：**v1.5.2**（2026-10-27）。本文只写「怎么用」，实现细节见 [DESIGN.md](./DESIGN.md)，逐版变更见 [CHANGELOG.md](./CHANGELOG.md)。
 
 ## 快速开始
 
@@ -54,9 +54,11 @@ scripts\build-release.bat
 - 更新失败不会弹窗打断你正在跑的会话，原因写在面板里
 - 点了重启又临时取消也没关系：下次正常退出时会顺手把已下载的包装上
 
-### 侧栏文件面板跟随终端目录（v1.5.1）
+### 侧栏文件面板跟随终端目录（v1.5.1，v1.5.2 修掉「像没开」）
 
 在终端里敲 `cd /var/log/nginx`，左侧「文件」面板会自己跳到那个目录，并把父目录逐级展开。
+
+> **v1.5.2 修的是什么**：v1.5.1 里跟随其实一直在工作，但面板默认停在「工作区」Tab —— 那一栏是「主目录 / 根目录 / 临时目录…」这样一列快捷入口，不是目录树。你 `cd` 完点开文件面板，看到的仍是快捷入口，自然觉得没跟。现在开着跟随时，面板会直接切到「文件系统」Tab，目录树第一眼就停在你终端所在的目录。另外，以前在面板**打开之前**就 `cd` 过的目录会被漏掉，现在也不会了。
 
 **怎么关：**
 
@@ -217,16 +219,16 @@ Ctrl+N 被分配给：新建连接、下一个标签
 
 **查看包体积：**
 
-产物目录由 `electron-builder.yml` 的 `directories.output` 决定（当前 `dist-v12`，每版换一个目录，旧产物留着对照）：
+产物目录由 `electron-builder.yml` 的 `directories.output` 决定（当前 `dist-v13`，每版换一个目录，旧产物留着对照）：
 
 ```bash
 # Linux/macOS
-ls -lh dist-v12/*.AppImage
-ls -lh dist-v12/*.dmg
-ls -lh dist-v12/*.exe
+ls -lh dist-v13/*.AppImage
+ls -lh dist-v13/*.dmg
+ls -lh dist-v13/*.exe
 
 # Windows
-dir dist-v12\*.exe
+dir dist-v13\*.exe
 ```
 
 **对比优化前后：**
@@ -346,7 +348,7 @@ cat stress-test-results/summary.txt
 
 **解决方案**：
 1. 确认 electron-builder.yml 中 ASAR 配置已生效
-2. 清除旧的构建产物：`rm -rf dist-v12 out`
+2. 清除旧的构建产物：`rm -rf dist-v13 out`
 3. 重新构建：`npm run build && npm run build:linux`
 
 ### 看不到「更新」按钮

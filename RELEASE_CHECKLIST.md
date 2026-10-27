@@ -1,6 +1,6 @@
 # SSH Workbench 发布前检查清单
 
-> 周期性发版用。以 v1.5.1 为基线整理，每次发版把「本次变更」小节换成当次内容，其余直接复用。
+> 周期性发版用。以 v1.5.2 为基线整理，每次发版把「本次变更」小节换成当次内容，其余直接复用。
 
 ---
 
@@ -62,11 +62,31 @@ npm run unguard:integrity    # 摘锁
 
 ---
 
-## 1. 本次变更（v1.5.1）
+## 1. 本次变更（v1.5.2）
 
-> 上一版 v1.5.0 的内容（应用内自动更新）保留在 §1 末尾的「上一版对照」，需要回看时用。
+> 上一版 v1.5.1 的内容（目录批量读取 / cd 跟随 / 发布脚本代理探测）保留在 §1 末尾的「上一版对照」，需要回看时用。
 
-### 新增：侧栏文件面板跟随终端 cwd
+### 修复：「跟随终端目录」开了却像没开
+- [x] 根因不在解析层（`verify-shellcwd` 82 项 + `verify-cwdstore` 19 项全过），在展示层：`FileExplorer` 默认停在「工作区」Tab（一列快捷入口，不是目录树）
+- [x] 第二个坑：面板常驻挂载、靠 `display` 切换，`cd` 事件都在隐藏时到达；首次挂载把 `followedSeq` 一次性对齐到当前序号，**挂载前**的 `cd` 被静默吞掉
+- [x] 抽出零依赖纯函数 `src/renderer/src/lib/cwdFollow.ts`：`decideInitial` / `decideFollow`
+- [x] `decideInitial`：有已知 cwd + 开着跟随 → `currentDir` 与 Tab **一起**定到 `fs`；无已知 cwd → 保留用户原选 Tab（此前硬编码 `'workspace'`）
+- [x] `decideFollow`：显式区分「新事件 / 旧事件 / 空路径 / 关开关 / 断线 / 序号回退」六种分支；空路径不推进游标
+- [x] 新增「手动重开跟随 → 立刻补跳一次」
+- [x] 回归：新增 `scripts/verify-cwdfollow.cjs`（19 项，esbuild 打 CJS 直跑），并入 `npm run test:cwdfollow`
+
+### 构建：产物目录切到 `dist-v13`
+- [x] `electron-builder.yml` 的 `directories.output`
+- [x] `scripts/release.ps1:33`、`scripts/build-release.sh:7`、`scripts/build-release.bat:6` 同步
+
+### 随包发出：Low 完整性标签硬锁（v1.5.1 后未进包的部分）
+- [x] `scripts/check-integrity.ps1` 重写：新增 `-Guard` / `-Unguard` / `-Skip` / `-Roots` / `-GuardRoots`
+- [x] 硬锁 `npm run guard:integrity`：根目录加 `Everyone:(OI)(CI)(DENY)(WO)`，`SetNamedSecurityInfoW` 写 SACL 需要 `WRITE_OWNER`，锁掉后任何工具都打不上 Low
+- [x] 两级扫描：每棵树一次 `icacls <dir> /T /C` 判有无 Low，命中才下钻，8 路并行；**25.9s → 5.8s**
+- [x] 根因订正：打 Low 的是 DSH 自带 `@deepseek-ai/dsh-sandbox-windows-acl`（`buildLowLabelAcl` / `restrictTokenIntegrity`），不是 Codex
+
+### 上一版对照：v1.5.1 目录批量读取 + cd 跟随（已发布）
+
 - [x] 纯逻辑模块 `src/renderer/src/lib/shellCwd.ts`（零依赖，不 import store / IPC，便于 esbuild 打 CJS 单测）
 - [x] 解析 `cd` / `pushd`，支持 `~`、相对路径、`..`、带空格与引号的路径、bracketed paste（`\x1b[200~` / `\x1b[201~`）
 - [x] `Ctrl-U` / `Ctrl-W` / 方向键等编辑后保守丢弃整行；单行缓冲上限 `MAX_LINE = 4096`
@@ -75,8 +95,6 @@ npm run unguard:integrity    # 摘锁
 - [x] 两处开关：`FileExplorer` 标题栏链状图标、设置 → 行为 →「跟随终端目录」
 - [x] 配置项 `filesFollowTerminalCwd`（`src/shared/types.ts`），**缺省按开启**（判断写 `!== false`，老配置无需迁移）
 - [x] 回归：`node scripts/verify-shellcwd.cjs`、`node scripts/verify-cwdstore.cjs`
-
-### 优化：SFTP 目录批量读取
 - [x] 新增 IPC `SFTP_LIST_MANY`（`src/shared/ipc.ts` → `src/main/ssh/sftpManager.ts`），主进程内 `LIST_MANY_CONCURRENCY = 8`
 - [x] 新增 IPC `SFTP_BOOTSTRAP`：首次打开面板一次往返拿回 `home + 目录内容`
 - [x] 新增 `src/renderer/src/lib/dirLoader.ts`：同帧请求合并成 1 条批量 IPC（`setTimeout(0)` flush，**不用 rAF**——窗口不可见时会被节流挂起），按 `sessionId` 分段，切会话旧批次整批丢弃
@@ -84,23 +102,8 @@ npm run unguard:integrity    # 摘锁
 - [x] `FileExplorer` 加载 effect 改为「只加载缺失目录」，不再因 `version` 自增重读整棵已展开树
 - [x] 实测：64 目录 1 条 IPC / 15.0ms，256 目录 1 条 / 1.1ms（旧路径 64 / 256 条）；真实 Electron 30 次连续读取中位 17.1ms、p95 30.0ms、61.5 FPS
 - [x] 回归：`node scripts/verify-dirloader.cjs`、`node scripts/verify-dircache.cjs`、`node scripts/stress-cwd.cjs`、`npm run test:stress:e2e`
-
-### 修复：`currentDir` 跨会话串路径
-- [x] 根因：cwd 存的是单个模块级变量，切会话不重置（跟随功能让它变得可见）
-- [x] 改按 `sessionId` 分键，会话关闭时清理
-
-### 修复：`scripts/release.ps1` 换网络即整条发布链路失败
-- [x] 根因：脚本硬写代理 `127.0.0.1:7897`，端口不通时上传直接超时
-- [x] 改为启动时探测端口，不可达自动直连
-
-### 加固：发出前拦住 Low 完整性标签的产物
-- [x] 新增 `scripts/check-integrity.ps1` + `npm run check:integrity` / `fix:integrity`
-- [x] `npm run build:win` 前置该检查；`scripts/release.ps1` 上传前再拦一道 —— 带 Low IL 的 Setup.exe 在用户机器上双击毫无反应（字节一致、拷到别的目录就能跑）
-- [x] 验证：故意对一个 `dist*` 下的 exe 打完 Low IL，`check:integrity` 退出码为 1，`fix:integrity` 后恢复 0
-- [x] **v1.5.1 提速重写**：旧版对每个对象单跑一次 `icacls`（45 个对象实测 25.9s）。新版两级扫描——每棵树一次 `icacls <dir> /T /C` 判有无 Low，命中才下钻定位；并 8 路并行。全仓（含两个 `dist*`、1.7 万文件）**25.9s → 5.8s**
-- [x] 修正一处错误扫描范围：仓根不再直接跑 `icacls /T`（会递归进 `node_modules`，实测 >120s 不返回），改为「根目录单点检查 + 每个顶层子目录一棵树」；`Get-ChildPathsSkipping` 用显式栈递归并跳过 `node_modules` / `.git` / `_piai_probe` 等
-- [x] 新增 `npm run guard:integrity` / `unguard:integrity`（治本，见 §0.1）
-- [x] 验证矩阵：装锁后 `setintegritylevel Low` 被拒、常规读写/复制/删除/重命名正常、`/remove:d` 可摘锁、`read-only` 沙箱可用、`workspace-write` 沙箱 fail-closed、打包 exe 正常启动
+- [x] 修复 `currentDir` 跨会话串路径（cwd 存单个模块级变量 → 改按 `sessionId` 分键）
+- [x] 修复 `scripts/release.ps1` 硬写代理 `127.0.0.1:7897`，改为启动探测、不通自动直连
 
 ### 评估后搁置：Gitee 作为更新源
 - [x] 结论（用户 2026-10-26：「先暂时不搞」）：`electron-updater` 的 `providerFactory.js` 无 gitee 分支，写 `publish.provider: gitee` 打包期直接抛 `Unsupported provider: gitee`
@@ -156,7 +159,7 @@ npm run test:stress:e2e    # 真实 Electron：30 次连续目录读取
 ```bash
 npm run check:integrity   # 必须先过（见 §0）；build:win 内已前置一次
 npx electron-vite build
-npx electron-builder --win --config electron-builder.yml   # 输出目录由 directories.output 决定，当前 dist-v12
+npx electron-builder --win --config electron-builder.yml   # 输出目录由 directories.output 决定，当前 dist-v13
 ```
 
 - [ ] `out/main/index.js`、`out/preload/index.js`、`out/renderer/` 均生成
@@ -176,18 +179,25 @@ npx electron-builder --win --config electron-builder.yml   # 输出目录由 dir
 ```powershell
 # 注意：shell 里若存在 ELECTRON_RUN_AS_NODE，Electron 会被当纯 Node 跑，冒烟必挂
 Remove-Item Env:ELECTRON_RUN_AS_NODE -EA SilentlyContinue
-Start-Process "dist-v12\win-unpacked\SSH Workbench.exe" -ArgumentList '--remote-debugging-port=9337'
+Start-Process "dist-v13\win-unpacked\SSH Workbench.exe" -ArgumentList '--remote-debugging-port=9337'
 ```
 
 - [ ] 进程存活，`title=SSH Workbench`
 - [ ] 通过 CDP 验证本次改动的关键交互
 - [ ] 全视图溢出扫描 0 处
-- [ ] v1.5.1 专项：
-  - [ ] 终端敲 `cd /tmp` → 文件面板跳到 `/tmp`
-  - [ ] 展开一棵 3 层以上的目录树 → DevTools Network 里 `SFTP_LIST_MANY` 次数远少于目录数（不是一目录一条）
-  - [ ] 折叠再展开同一目录 → 第二次直接命中缓存（无请求）
-  - [ ] 切标签再切回来 → 面板还在各自会话的目录，不串台
-  - [ ] 关掉跟随开关后再 `cd` → 面板不动
+- [ ] v1.5.2 专项：
+  - [ ] 开着跟随、启动后**第一次**打开文件面板 → 直接停在「文件系统」Tab（不是「工作区」快捷入口）
+  - [ ] 面板还**没打开**时先 `cd /tmp`，再打开面板 → 直接跳到 `/tmp`（挂载前的 `cd` 不再被吞）
+  - [ ] 面板正停在目录树里，切走再切回 → 仍停在目录树，不被踢回「工作区」
+  - [ ] 关掉跟随开关再 `cd` → 面板不动；重新打开开关 → 立刻补跳一次
+  - [ ] 断线重连后 → 面板不跳到上一台机的旧路径
+
+### 上一版专项对照：v1.5.1
+  - [x] 终端敲 `cd /tmp` → 文件面板跳到 `/tmp`
+  - [x] 展开一棵 3 层以上的目录树 → DevTools Network 里 `SFTP_LIST_MANY` 次数远少于目录数（不是一目录一条）
+  - [x] 折叠再展开同一目录 → 第二次直接命中缓存（无请求）
+  - [x] 切标签再切回来 → 面板还在各自会话的目录，不串台
+  - [x] 关掉跟随开关后再 `cd` → 面板不动
 
 > 冒烟脚本注意：点选后**不要**在同一个 `Runtime.evaluate` 里同步读 `input.value`，React 还没重渲染会误判 FAIL。改成 click → 等 300~500ms → 另起一次 evaluate 读值。
 > 另一个坑：上一轮测试残留的弹窗/浮层会污染下一轮，每轮开头先关掉所有 `[role="dialog"]`，必要时重启应用。
@@ -214,7 +224,7 @@ git -c http.proxy=http://127.0.0.1:7897 push origin v<ver>
 - [ ] **只上传 Setup 安装包，其余安装版本一律不上传**（用户 2026-10-26 定的规则）
   - 传：`ssh-workbench-Setup-<ver>.exe`、其 `.blockmap`、`latest.yml` —— 后两个是自动更新元数据，不是"另一个版本"，缺了客户端查不到更新 / 无法差量下载
   - 不传：`portable.exe`、`win.zip` —— 与 Setup 解出来的 `win-unpacked` 完全一致，多传只是白费 200+ MB 带宽
-  - 本地 `dist-v12` 照样出三件套，这条**只约束远端上传**
+  - 本地 `dist-v13` 照样出三件套，这条**只约束远端上传**
 - [ ] asset `state=uploaded`，体积与本地一致
 - [ ] 回读 release 的 `assets` 数组：恰好 3 个文件，无 portable / zip
 - [ ] 上传前跑过 `check-integrity.ps1`（`scripts/release.ps1` 会替你拦一道）

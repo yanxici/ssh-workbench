@@ -4,7 +4,7 @@
 set -e
 
 # 产物目录：与 electron-builder.yml 的 directories.output 保持一致
-OUTPUT_DIR="dist-v12"
+OUTPUT_DIR="dist-v13"
 
 echo "========================================="
 echo "  SSH Workbench 构建脚本"

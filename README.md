@@ -88,9 +88,10 @@ Architecture, directory layout and roadmap (Chinese): [DESIGN.md](./DESIGN.md)
 
 ## Version
 
-Current: **v1.5.1**
+Current: **v1.5.2**
 
 Recent updates:
+- Fixed the file panel not following `cd`: the panel opened on the "Workspace" tab (a list of shortcuts, not a directory tree), so the follow result was invisible — and a mounted panel silently swallowed the `cd` events that happened before it appeared
 - Sidebar file panel: opening a remote directory no longer stalls — batched `readdir` over a single IPC round trip (`SFTP_LIST_MANY` / `SFTP_BOOTSTRAP`), per-frame request coalescing and a TTL cache. 256 directories now cost 1 IPC call instead of 256
 - The file panel follows the terminal: type `cd /var/log` and the sidebar jumps there (input tracking plus OSC 7, toggleable)
 - In-app auto update: the title bar advertises new versions and installs them in one click

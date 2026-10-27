@@ -2,7 +2,7 @@
 
 > 历史文档：记录 v1.3.0 那一批优化（ASAR / 批量标签 / 虚拟滚动 / 会话恢复 / 快捷键冲突检测）的落地过程。
 > 当前版本的功能与用法请看 [README.zh-CN.md](./README.zh-CN.md) 与 [USAGE_GUIDE.md](./USAGE_GUIDE.md)，逐版变更见 [CHANGELOG.md](./CHANGELOG.md)。
-> 文中 `dist-v11` 若出现，均为当时的产物目录；现在由 `electron-builder.yml` 的 `directories.output` 决定（当前 `dist-v12`）。
+> 文中 `dist-v11` 若出现，均为当时的产物目录；现在由 `electron-builder.yml` 的 `directories.output` 决定（当前 `dist-v13`）。
 
 ## ✅ 已完成的 5 项优化
 
@@ -130,8 +130,8 @@ npm run build
 # 6. 打包 Linux 版本
 npm run build:linux
 
-# 7. 查看包体积（产物目录见 electron-builder.yml 的 directories.output，当前 dist-v12）
-ls -lh dist-v12/*.AppImage
+# 7. 查看包体积（产物目录见 electron-builder.yml 的 directories.output，当前 dist-v13）
+ls -lh dist-v13/*.AppImage
 ```
 
 ### Windows 一键构建
@@ -184,7 +184,7 @@ chmod +x scripts/build-release.sh
 
 3. **验证包体积**
    ```bash
-   ls -lh dist-v12/
+   ls -lh dist-v13/
    ```
 
 4. **创建 GitHub Release**
