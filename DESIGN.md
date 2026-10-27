@@ -309,7 +309,17 @@ SSH 协议本身不告诉客户端交互 shell 的 cwd。可取的三条正规�
 
 性能：200,000 行（1/3 含 `cd`）解析 143.5ms ≈ **139 万行/秒**，每行 1.3µs，打字无感。
 
-回归：`node scripts/verify-shellcwd.cjs`、`node scripts/verify-cwdstore.cjs`（`npm run test:cwdfollow`）。
+回归：`node scripts/verify-shellcwd.cjs`、`node scripts/verify-cwdstore.cjs`、`node scripts/verify-cwdfollow.cjs`（`npm run test:cwdfollow`）。
+
+**v1.5.1 发布后修掉的一个「看起来没生效」**：解析和事件传递一直是对的（82 项 shellCwd 用例 + 19 项 cwdStore 用例都过），错在**面板没把结果展示出来**——`FileExplorer` 默认停在「工作区」Tab，那一栏是一列常用位置快捷入口（主目录 / 根目录 / 临时目录…），不是目录树。用户 `cd` 完点开文件面板，看到的是快捷入口，自然判定「没跟」。同源的第二个坑：面板首次挂载时把 `followedSeq` 一次对齐到当前序号，于是**挂载之前**发生的 `cd` 全被静默吞掉。
+
+修法是把「什么时候跳、跳哪儿、要不要替用户切 Tab」从组件里抽成纯函数 `src/renderer/src/lib/cwdFollow.ts`：
+
+- `decideInitial({ knownCwd, follow, tab })` —— 挂载 / 切会话时：有已知 cwd 且开着跟随，返回 `{ dir, tab: 'fs' }`，让目录树第一眼就是终端所在目录；没有已知 cwd 则保留用户原来选的 Tab（此前硬编码 `'workspace'`，会把正停在目录树里的用户踢回快捷入口）。
+- `decideFollow({ seq, followedSeq, path, currentDir, connected, follow })` —— 每次 `cd`：只消费**新序号**，路径为空则**不推进游标**（否则这一事件被永久跳过）；关掉跟随或断线时游标照样前进（重新打开不该补跳历史目录）；序号回退不回退游标。
+- 组件侧另加一段「用户手动把跟随重新打开 → 立刻补跳一次」，免去「关掉再打开还是不动」的困惑。
+
+这套逻辑靠 DOM 测试很难覆盖（面板常驻挂载、靠 `display` 切换，`cd` 事件都在隐藏时到达），所以抽成零依赖纯函数，由 esbuild 打成 CJS 直接在 node 里跑，19 项用例覆盖上面每一条分支。
 
 ### 5.12 应用内自动更新（v1.5.0）
 
@@ -457,6 +467,7 @@ IPC：`update:state / check / download / install / open-release` + `evt:update-s
 | 压测报告出现 `avgFrameMs: 0`（看起来完美，实际没测） | 采样器靠 `requestAnimationFrame`，窗口被别的实例遮挡时 Chromium 把 rAF 降到 0Hz，一帧都收不到 | 采样前 `win.show()` + `win.focus()`；并加 `stressProbe.valid = frames >= 30` 硬判据 —— 不能只看 `avgFrameMs`，没采到帧时它是 0 |
 | 打包版压测 `actions: 45 / errors: 45`（等于没跑） | 压测用 `window.__lazy_test.stores` 驱动，而 `ZM_TEST` 只在验证构建里注入，生产构建没有这个钩子 | 改用真实输入：`pressKey('K', ['control'])` 敲 Ctrl+K、`document.querySelector('[data-activity=...]').click()` 点活动栏，走的就是用户的路 |
 | `currentDir` 带着上一个会话的路径进新会话（v1.5.1 跟随功能的副产品） | cwd 状态存的是单个模块级变量，切会话时不重置；跟随功能让它变得可见 | cwd 按 `sessionId` 分键存进 `src/renderer/src/stores/cwdStore.ts`，会话关闭 `forgetCwd(id)` |
+| 「开了跟随，`cd` 之后文件没跟过来」（v1.5.1 发布后用户首个反馈） | 解析与事件传递全对（82 + 19 项用例都过）。真正原因是**展示层**：文件面板默认停在「工作区」Tab —— 那是一列快捷位置（主目录/根目录/临时目录…），不是目录树，用户看到快捷入口就判定「没跟」。叠加第二个坑：面板首次挂载把 `followedSeq` 一次性对齐到当前序号，**挂载之前**发生的 `cd` 被静默吞掉 | 抽出 `src/renderer/src/lib/cwdFollow.ts`：`decideInitial` 在「有已知 cwd + 开着跟随」时把 Tab 一并定到 `fs`（此前只改 `currentDir` 不改 Tab）；`decideFollow` 显式区分「新事件 / 旧事件 / 空路径 / 关开关 / 断线 / 序号回退」六种分支，空路径不推进游标以免事件被永久跳过；另加「手动重开跟随立刻补跳」。19 项用例见 `scripts/verify-cwdfollow.cjs`。**教训：状态对了不等于用户看得见，「面板当前停在哪个 Tab」也是跟随链路的一环** |
 | `scripts/release.ps1` 换网络环境即整条发布链路失败 | 脚本硬写代理 `127.0.0.1:7897`，该端口不通时上传直接超时 | 启动时先探端口，不可达自动改直连 |
 | 发出去的 `Setup.exe` 在用户机器上双击毫无反应 | 产物目录被打上 `Low` 完整性标签（Codex 沙箱服务给「信任工作目录」打 IL，`d:\ssh-workbench` 在信任列表里），Electron 沙箱子进程启动即被杀。**字节一致、拷到别的目录就能跑** | `scripts/check-integrity.ps1`：扫仓根 + 所有 `dist*` + 其中 `*.exe`/`*.dll`，命中 Low 退出码 1；`npm run check:integrity` / `fix:integrity`（改 SACL 需管理员）。`npm run build:win` 前置该检查，`scripts/release.ps1` 上传前再拦一道 —— 带 Low IL 的包装完打不开，宁可不出门 |
 
@@ -559,6 +570,7 @@ node scripts/verify-theme.cjs            # 配色主题（P4-a）
 node scripts/verify-transfer-progress.cjs # SFTP 进度 / 暂停续传 / 取消（P4-b）
 node scripts/verify-shellcwd.cjs         # cd / pushd / ~ / 引号 / bracketed paste / 编辑丢弃 + OSC 7（v1.5.1）
 node scripts/verify-cwdstore.cjs         # cwd 按 sessionId 隔离、会话关闭清理（v1.5.1）
+node scripts/verify-cwdfollow.cjs        # 跟随决策：初始 Tab / 序号消费 / 关开关与断线 / 重开补跳（v1.5.1 修复）
 node scripts/verify-dirloader.cjs        # 同帧请求合并、按会话分段、切会话丢弃（v1.5.1）
 node scripts/verify-dircache.cjs         # TTL 缓存 / stale-while-revalidate / 写操作失效（v1.5.1）
 for f in scripts/verify-zmodem*.cjs; do node "$f"; done  # ZMODEM 协议 / 解码 / 渲染层 / 端到端（P4-c，4 个脚本）

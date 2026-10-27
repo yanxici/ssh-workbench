@@ -31,6 +31,7 @@ import { invalidateDir, loadDir as loadDirCached, loadDirs, peekDir, writeDir } 
 import { requestDirs } from '@/lib/dirLoader'
 import { cachedHome, rememberHome } from '@/lib/remoteHome'
 import { useCwdStore, seedCwdFromHome } from '@/stores/cwdStore'
+import { decideFollow, decideInitial } from '@/lib/cwdFollow'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { UploadTargetDialog } from './UploadTargetDialog'
 import {
@@ -124,6 +125,13 @@ export function FileExplorer({
   const followPref = useSettingsStore((s) => s.settings.filesFollowTerminalCwd)
   const updateSettings = useSettingsStore((s) => s.update)
   const follow = followPref !== false
+  /* 跟随开关也留一份 ref：会话切换的 effect 只依赖 sessionId，
+     读 ref 才不会因为用户中途开关开关而重跑整段初始化 */
+  const followRef = useRef(follow)
+  followRef.current = follow
+  /* 同理留一份 Tab 的 ref：换会话且没有已知 cwd 时，不该把用户选的 Tab 也重置 */
+  const tabRef = useRef(tab)
+  tabRef.current = tab
 
   /* 终端 cwd 的「事件序号」与路径：序号变一次 = 用户又 cd 了一次（哪怕路径没变） */
   const cwdSeq = useCwdStore((s) => (sessionId ? (s.seq[sessionId] ?? 0) : 0))
@@ -141,10 +149,23 @@ export function FileExplorer({
    *
    * 清空后立刻用本会话已知的终端 cwd 兜底：用户先 `cd` 再第一次打开文件面板时，
    * 面板应该直接落在他刚去的地方，而不是弹回 home 让他再点一遍。
+   *
+   * 但只把 currentDir 设对**不够**（这正是 v1.5.1 的跟随「看起来没生效」的原因）：
+   * 面板默认停在「工作区」Tab，那是一列常用位置快捷入口，不是目录树。用户 cd
+   * 完点开文件面板，看到的仍然是「主目录 / 根目录 / 临时目录…」，自然觉得没跟。
+   * 所以这时要连 Tab 一起定到「文件系统」—— 见 `decideInitial`。
    */
   useEffect(() => {
     const knownCwd = sessionId ? normalizeRemoteDir(useCwdStore.getState().path[sessionId] ?? '') : ''
-    setCurrentDir(knownCwd)
+    const init = decideInitial({
+      knownCwd,
+      follow: followRef.current,
+      // 用 ref 而不是硬编码 'workspace'：切会话时用户可能正停在目录树里，
+      // 新会话没有已知 cwd 就把人家踢回快捷入口，反而更烦。
+      tab: tabRef.current
+    })
+    setCurrentDir(init.dir)
+    setTab(init.tab)
     setHome('')
     setOpenDirs(new Set())
     setSelected(null)
@@ -206,28 +227,48 @@ export function FileExplorer({
    * `cd /opt`，路径完全没变，但用户的意图是「回到 /opt 去」。只比字符串会把
    * 这次命令当成无变化而漏掉，序号就一定不会漏。
    *
-   * 三条约束：
-   * - 只消费**本次会话新发生的事件**：切会话时先把序号对齐（见上一个 effect），
-   *   否则切回来会被上个会话残留的 cwd 强行拽走；
-   * - 用户关掉开关就不跟（见 follow）；
-   * - 目标不在这里做存在性校验：readdir 失败会照常显示「读取失败」，
-   *   比悄悄不动更容易让人明白发生了什么。
+   * 判定本身在 `decideFollow` 里（纯函数、可单测）。这里只管把结果落到 UI：
+   * 换目录 = 上一棵树的展开状态作废（与 goto() 一致），并确保 Tab 停在目录树 ——
+   * 否则用户会停在「工作区」快捷入口那一列，看着像没跟。
    */
   useEffect(() => {
-    if (!sessionId || !connected) return
-    if (!follow) return
-    if (cwdSeq <= followedSeqRef.current) return
-    followedSeqRef.current = cwdSeq
-    if (!cwdPath) return
+    const decision = decideFollow({
+      seq: cwdSeq,
+      followedSeq: followedSeqRef.current,
+      path: cwdPath,
+      currentDir: currentDirRef.current,
+      connected,
+      follow
+    })
+    if (decision.followedSeq !== followedSeqRef.current) {
+      followedSeqRef.current = decision.followedSeq
+    }
+    if (!decision.jump) return
+    setOpenDirs(new Set())
+    setSelected(null)
+    setCurrentDir(decision.jump)
+    setTab('fs')
+  }, [sessionId, connected, follow, cwdSeq, cwdPath])
+
+  /**
+   * 用户手动把「跟随」重新打开时，立刻补跳一次到终端当前目录。
+   *
+   * 少了这一步的体感是：用户发现没跟 → 去设置里关掉再打开 → 还是没动 →
+   * 只能手动在侧栏点一遍。既然开关的语义是「跟住终端」，打开的那一瞬就该对齐，
+   * 而不是等用户下一次 cd。
+   */
+  const prevFollowRef = useRef(follow)
+  useEffect(() => {
+    const was = prevFollowRef.current
+    prevFollowRef.current = follow
+    if (was || !follow || !connected || !cwdPath) return
     const target = normalizeRemoteDir(cwdPath)
-    if (!target) return
-    if (currentDirRef.current === target) return
-    // 换目录 = 上一棵树的展开状态作废（与 goto() 一致）
+    if (!target || currentDirRef.current === target) return
     setOpenDirs(new Set())
     setSelected(null)
     setCurrentDir(target)
     setTab('fs')
-  }, [sessionId, connected, follow, cwdSeq, cwdPath])
+  }, [follow, connected, cwdPath])
 
   /* ---------- 拉取某个目录的直接子项（带缓存 + 在途去重） ---------- */
   const fetchDir = useCallback(

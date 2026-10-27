@@ -5,6 +5,15 @@ All notable changes to SSH Workbench will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **跟随终端 cwd「看起来没生效」**（v1.5.1 发布后首个反馈）：`cd` 之后侧栏文件面板不动。解析与事件链路本无问题（82 + 19 项用例全过），病根在展示 —— 面板默认停在「工作区」Tab，那是一列常用位置快捷入口（主目录 / 根目录 / 临时目录…）而不是目录树，用户看到快捷入口就判定「没跟」；叠加面板首次挂载把事件游标一次性对齐到当前序号，**挂载前**发生的 `cd` 被静默吞掉。
+  - 抽出纯函数 `src/renderer/src/lib/cwdFollow.ts`：`decideInitial` 在「有已知 cwd + 开着跟随」时连 Tab 一起定到「文件系统」；`decideFollow` 显式区分「新事件 / 旧事件 / 空路径 / 关开关 / 断线 / 序号回退」六种分支，空路径不推进游标以免事件被永久跳过
+  - 新增「手动把跟随重新打开 → 立刻补跳一次」，免去「关掉再打开还是不动」的困惑
+  - 新增 `scripts/verify-cwdfollow.cjs`（19 项，零依赖纯函数用例），并入 `npm run test:cwdfollow`
+
 ## [1.5.1] - 2026-10-27
 
 ### Added
