@@ -1,5 +1,9 @@
 # 优化实现总结
 
+> 历史文档：记录 v1.3.0 那一批优化（批量编辑标签 / 会话恢复 / 虚拟滚动 / 快捷键冲突检测 / ASAR）。
+> 当前版本的功能与用法请看 [README.zh-CN.md](./README.zh-CN.md) 与 [USAGE_GUIDE.md](./USAGE_GUIDE.md)，逐版变更见 [CHANGELOG.md](./CHANGELOG.md)。
+> 下文出现的 `dist-v11` 是当时的产物目录；现在产物目录由 `electron-builder.yml` 的 `directories.output` 决定（当前 `dist-v12`）。
+
 本次实现了以下 5 项优化功能：
 
 ## 1. 批量编辑标签 ✅
@@ -117,7 +121,7 @@
 npm run build:win
 
 # 检查包体积（对比优化前后）
-ls -lh dist-v11/*.exe
+ls -lh dist-v12/*.exe
 
 # 测试安装包和便携版
 ```

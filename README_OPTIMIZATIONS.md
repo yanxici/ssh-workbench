@@ -1,5 +1,9 @@
 # 优化任务完成总结
 
+> 历史文档：记录 v1.3.0 那一批优化（ASAR / 批量标签 / 虚拟滚动 / 会话恢复 / 快捷键冲突检测）的落地过程。
+> 当前版本的功能与用法请看 [README.zh-CN.md](./README.zh-CN.md) 与 [USAGE_GUIDE.md](./USAGE_GUIDE.md)，逐版变更见 [CHANGELOG.md](./CHANGELOG.md)。
+> 文中 `dist-v11` 若出现，均为当时的产物目录；现在由 `electron-builder.yml` 的 `directories.output` 决定（当前 `dist-v12`）。
+
 ## ✅ 已完成的 5 项优化
 
 ### 2. 批量编辑标签 ✅
@@ -126,8 +130,8 @@ npm run build
 # 6. 打包 Linux 版本
 npm run build:linux
 
-# 7. 查看包体积
-ls -lh dist-v11/*.AppImage
+# 7. 查看包体积（产物目录见 electron-builder.yml 的 directories.output，当前 dist-v12）
+ls -lh dist-v12/*.AppImage
 ```
 
 ### Windows 一键构建
@@ -180,11 +184,11 @@ chmod +x scripts/build-release.sh
 
 3. **验证包体积**
    ```bash
-   ls -lh dist-v11/
+   ls -lh dist-v12/
    ```
 
 4. **创建 GitHub Release**
-   - 上传构建产物
+   - 只上传 `Setup.exe` + 其 `.blockmap` + `latest.yml`（自动更新元数据；portable / zip 不上传）
    - 复制 RELEASE_NOTES.md 内容
    - 发布版本
 
@@ -197,9 +201,7 @@ chmod +x scripts/build-release.sh
 - [x] 文档完整详细
 - [x] 测试脚本就绪
 - [x] 构建脚本就绪
-- [ ] **待运行**：类型检查（需要 Node.js 环境）
-- [ ] **待运行**：压力测试（需要 Node.js 环境）
-- [ ] **待运行**：打包构建（需要 Node.js + electron-builder）
+- [x] 类型检查 / 压力测试 / 打包产物冒烟 已在发布流程里跑通（见 [RELEASE_CHECKLIST.md](./RELEASE_CHECKLIST.md) §2）
 
 ---
 

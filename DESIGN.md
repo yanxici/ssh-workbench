@@ -1,7 +1,7 @@
 # SSH Workbench — 整体方案与设计文档
 
 > 轻量级 SSH 客户端 + 嵌入式技术支持工作台
-> 更新时间：2026-10-26 ｜ 阶段：v1.4.4，P0–P4 已实现，v1.1-v1.4 新增连接分组管理、大规模连接性能优化、断线自动重连、命令中心范围筛选、侧栏文件面板右键下载、分组 Combobox、命令卡文本溢出修复
+> 更新时间：2026-10-27 ｜ 阶段：v1.5.1，P0–P4 已实现，v1.1-v1.5 新增连接分组管理、大规模连接性能优化、断线自动重连、命令中心范围筛选、侧栏文件面板右键下载、分组 Combobox、命令卡文本溢出修复、应用内自动更新、SFTP 批量目录读取、文件面板跟随终端 cwd
 
 ---
 
@@ -40,7 +40,7 @@ ssh-workbench/
 ├─ electron.vite.config.ts        # 三端构建配置（main / preload / renderer）
 ├─ electron-builder.yml           # 打包配置（win nsis + portable / mac dmg / linux AppImage）
 ├─ build/ · resources/            # 多尺寸 icon.ico / icon.png（scripts/make-icon.cjs 生成）
-├─ scripts/                       # make-icon.cjs、verify-*.cjs 自检脚本、probe-* 一次性排查脚本
+├─ scripts/                       # make-icon.cjs、verify-*.cjs 自检脚本、check-integrity.ps1、release.ps1、probe-* 一次性排查脚本
 ├─ tailwind.config.js             # 语义色 -> CSS 变量映射
 ├─ src/
 │  ├─ shared/                     # 三端共享（唯一契约来源）
@@ -48,6 +48,7 @@ ssh-workbench/
 │  │  └─ ipc.ts                   #   IPC 通道常量
 │  ├─ main/                       # Electron 主进程（全部系统能力）
 │  │  ├─ index.ts                 #   窗口、IPC 注册、生命周期、--smoke 自检
+│  │  ├─ updater.ts               #   自动更新状态机（electron-updater，主进程单点维护）
 │  │  ├─ store/
 │  │  │  ├─ jsonStore.ts          #   原子写 JSON 存储（临时文件 + rename + 写队列）
 │  │  │  ├─ repository.ts         #   连接/命令/历史/设置/已知主机 CRUD（唯一持久化入口）
@@ -74,18 +75,22 @@ ssh-workbench/
 │        │  ├─ commandSearch.ts   #   命令检索：字段加权 / 中英同义 / 使用热度 / 范围索引
 │        │  ├─ layout.ts          #   栏宽规格表（上下限 / 拖拽换算 / 夹取）
 │        │  ├─ shortcuts.ts       #   快捷键动作表与默认键位
+│        │  ├─ shellCwd.ts        #   终端 cwd 推断：输入行追踪 + cd 解析 + OSC 7（零依赖纯逻辑）
+│        │  ├─ dirLoader.ts       #   同帧目录请求合并成一条 SFTP_LIST_MANY IPC
+│        │  ├─ dirCache.ts        #   目录结果 TTL 缓存（stale-while-revalidate）
 │        │  └─ zmodem.ts          #   ZMODEM 会话（Sentry 接管字节流、分块保存）
-│        ├─ stores/               # zustand：settings/layout/connection/session/command/execution/sftp/toast/ui 等
+│        ├─ stores/               # zustand：settings/layout/connection/session/command/execution/sftp/cwd/toast/ui 等
+│        │                        #   cwdStore 按 sessionId 隔离终端 cwd（不进持久化，会话关闭即清）
 │        └─ components/
-│           ├─ layout/            #   TitleBar / ActivityBar / SideNav / MainWorkspace / CommandRail / TabBar / StatusBar / PaneResizer
+│           ├─ layout/            #   TitleBar / ActivityBar / SideNav / MainWorkspace / CommandRail / TabBar / StatusBar / PaneResizer / UpdateBadge
 │           ├─ connections/       #   ConnectionSidebar / ConnectionEditor
 │           ├─ terminal/          #   TerminalView（xterm 集成）/ ZmodemOverlay
 │           ├─ files/             #   FileExplorer / SessionFileTree / 双栏 Local/RemotePane / TransferProgressDock
 │           ├─ commands/          #   CommandPanel / CommandCenter / CommandEditor / Highlight
 │           ├─ panels/            #   HistoryPanel
-│           ├─ settings/          #   SettingsPanel
+│           ├─ settings/          #   SettingsPanel / UpdateSection（软件更新分区）
 │           ├─ execution/         #   VariablePromptDialog / DangerConfirmDialog
-│           └─ ui/                #   Modal / ConfirmDialog / ContextMenu / Toast / 表单件
+│           └─ ui/                #   Modal / ConfirmDialog / ContextMenu / Toast / Combobox / 表单件
 ```
 
 ## 4. 架构与数据流
@@ -104,6 +109,8 @@ xterm.write  ◀──webContents.send── EVT_SESSION_DATA ◀── shell da
 - **渲染进程零 Node 权限**：所有能力经 `window.api`（`IpcResult<T>` 统一包装，主进程异常永不越过 IPC 边界）；
 - **高频数据合帧**：shell 输出在主进程按 8ms 窗口合并后成批推送，`StringDecoder` 保证跨帧多字节字符不断裂；
 - **输入路径**：xterm `onData` → `session:write` → shell.write；尺寸变化经 `ResizeObserver → fit → session:resize` 同步到远端 PTY。
+- **反向路径（cwd 跟随）**：xterm `onData` 同时喂给 `shellCwd` 追踪器推断回车后的目录；`onData` 里解析出的 OSC 7 与 `sessionManager` 转发的 OSC 7 谁先到算谁，结果写 `cwdStore[sessionId]`，`FileExplorer` 订阅后按需批量拉目录（§5.11）。这条链路只读观察字节流，不向 PTY 注入任何东西。
+- **更新链路**（§5.12）：主进程 `updater.ts` 是唯一状态源 → `EVT_UPDATE_STATUS` 推给渲染层 → `UpdateBadge` / `UpdateSection` 纯展示；命令方向是 `update:check / download / install`。渲染层不自己比版本号。
 
 ## 5. 常用命令执行流水线（重点模块）
 
@@ -274,6 +281,53 @@ xterm.write  ◀──webContents.send── EVT_SESSION_DATA ◀── shell da
 - 接收方向三个曾导致终端卡死的点：Receive 会话必须 `start()` 发首个 ZRINIT；选目录期间远端重发起始帧导致 "Stale ZMODEM session" 时要记住用户选择、下次检测直接接管；协议解析抛错后必须 abort 并复位 Sentry；
 - 回归：`verify-zmodem.cjs` / `verify-zmodem-decode.cjs` / `verify-zmodem-renderer.cjs` / `verify-zmodem-e2e.cjs`。
 
+### 5.10 SFTP 目录批量读取（v1.5.1）
+
+老链路「展开一层目录 = 一串串行往返」，且渲染层每次状态变化都把已展开的整棵树重读一遍（`bumpTree()` 自增 `version`，effect 依赖它）。展开 10 个目录、其中 3 层嵌套，光重复 `readdir` 就有几十次，每次几十到几百毫秒 RTT。
+
+现在四层拆开：
+
+| 层 | 实现 | 作用 |
+|---|---|---|
+| IPC | `SFTP_LIST_MANY`（`src/shared/ipc.ts` → `src/main/ssh/sftpManager.ts`），主进程内 `LIST_MANY_CONCURRENCY = 8` | 一次 IPC 批量 `readdir` 任意多个目录 |
+| IPC | `SFTP_BOOTSTRAP` | 首次打开文件面板一次往返拿回 `home + 目录内容`，省掉 `realpath → readdir` 串行 |
+| 渲染层 | `src/renderer/src/lib/dirLoader.ts` | 同一帧内到达的请求合并成 1 条批量 IPC（`setTimeout(0)` flush，**不用 rAF** —— 窗口不可见时 rAF 会被节流挂起）；按 `sessionId` 分段，切会话旧批次整批丢弃 |
+| 渲染层 | `src/renderer/src/lib/dirCache.ts` | 目录结果 TTL 缓存（stale-while-revalidate：新鲜直接命中，过期先返回旧数据再后台重拉）。模块级单例而非 store —— 缓存是「网络结果副本」不是 UI 状态，进 zustand 会让每次写缓存触发订阅者重渲染 |
+
+`FileExplorer` 加载 effect 重写为「只加载缺失目录」，依赖收敛后展开一次不再全树重走。实测：64 目录同帧请求 1 条 IPC / 15.0ms，256 目录 1 条 / 1.1ms（旧路径 64 / 256 条）；真实 Electron 30 次连续读取中位 17.1ms、p95 30.0ms，文件面板 61.5 FPS。
+
+回归：`node scripts/verify-dirloader.cjs`、`node scripts/verify-dircache.cjs`、`node scripts/stress-cwd.cjs`、`npm run test:stress:e2e`。
+
+### 5.11 文件面板跟随终端 cwd（v1.5.1）
+
+SSH 协议本身不告诉客户端交互 shell 的 cwd。可取的三条正规途径各有代价：shell 上报（OSC 7）要远端配合；反查 `/proc/<pid>/cwd` 在 busybox / macOS 上根本没有；往 pty 注入 hook 会在终端留可见回显、改用户环境。而用户诉求非常具体 ——「**我 cd 的时候**侧栏跟过去」，那这一行本来就看得见（xterm `onData`）。于是两层叠加、谁先到算谁：
+
+1. **输入追踪**（`src/renderer/src/lib/shellCwd.ts`，零依赖纯逻辑，不 import 任何 store / IPC，便于 esbuild 打成 CJS 单测）：回车时解析整行，识别 `cd` / `pushd`，支持 `~`、相对路径、`..`、带空格与引号路径、bracketed paste（`\x1b[200~ / \x1b[201~`）；`Ctrl-U` / `Ctrl-W` / 方向键等编辑操作后**保守丢弃整行**（宁可不动，不跳错）；单行缓冲上限 `MAX_LINE = 4096`，超限判为不可信。
+2. **OSC 7**：远端 shell 上报真实 cwd 时直接采用，覆盖脚本内 `cd`、`pushd` / `popd` 等程序化切换。
+
+状态隔离在 `src/renderer/src/stores/cwdStore.ts`，按 `sessionId` 分键；会话关闭 `forgetCwd(id)` 清 cwd / 输入追踪器 / home 缓存，重连复用同一 id 不会带上上一台机器的路径。开关两处：文件面板标题栏链状图标、设置 → 行为 →「跟随终端目录」；配置项 `filesFollowTerminalCwd`（`src/shared/types.ts`），**缺省按开启**（判断写 `!== false`，老配置无需迁移）。
+
+性能：200,000 行（1/3 含 `cd`）解析 143.5ms ≈ **139 万行/秒**，每行 1.3µs，打字无感。
+
+回归：`node scripts/verify-shellcwd.cjs`、`node scripts/verify-cwdstore.cjs`（`npm run test:cwdfollow`）。
+
+### 5.12 应用内自动更新（v1.5.0）
+
+主进程单点维护状态机（`src/main/updater.ts`，基于 `electron-updater`），渲染层只展示、不重复推导版本高低：
+
+```
+idle → checking → available → downloading → downloaded → (restart & install)
+              ↘ error（面板内可读原因，不弹窗打断当前 SSH 会话）
+```
+
+几个刻意的取舍：`autoDownload` 默认 **false**（现场网络按流量计费，一次检查偷偷拉 78MB 不可接受，查到只亮「更新」按钮）；`autoInstallOnAppQuit` 保持 **true**（用户点了重启又临时取消，下次正常退出顺手装上）；所有异常吞进 `phase='error'`，更新失败绝不影响正在用的会话。
+
+差量更新靠 `electron-builder.yml` 的 `publish` 段（provider: github / owner / repo）在打包时生成 `resources/app-update.yml`，配合 `.blockmap` 只传差异部分。更新专用代理走 updater 自己的 `electron-updater` net session 分区（`NET_SESSION_NAME = 'electron-updater'`），与 SSH 连接代理完全隔离。
+
+IPC：`update:state / check / download / install / open-release` + `evt:update-status`。渲染层视图两处：标题栏 `UpdateBadge`（chip + 下拉面板，启动约 8 秒静默检查一次）、设置 →「软件更新」（`UpdateSection`）。
+
+> 自动更新只对 NSIS 安装版生效；portable 与 zip 没有安装上下文、无法自我替换，更新入口不显示。
+
 ## 6. 安全设计
 
 | 项 | 实现 |
@@ -283,6 +337,8 @@ xterm.write  ◀──webContents.send── EVT_SESSION_DATA ◀── shell da
 | 危险命令 | 命令级标记 + 全局关键词双保险，发送前强制二次确认 |
 | 复制连接 | 刻意不复制凭据 |
 | IPC 边界 | 通道白名单 + 统一错误包装，渲染层无任意 IPC 能力 |
+| 更新包完整性 | 走 `electron-updater` 内建的 sha512 校验（`latest.yml` 里的 hash）+ `allowDowngrade = false` 防降级；更新元数据来自 `resources/app-update.yml` 固定的 owner/repo，不接受运行时传入的任意 URL |
+| 更新链路只读观察 | 目录跟随只解析 xterm 收到的字节流，**不向 PTY 注入 hook**、不改远端环境（否则会在终端留可见回显、污染用户 shell） |
 
 ## 7. 分期路线
 
@@ -305,12 +361,33 @@ xterm.write  ◀──webContents.send── EVT_SESSION_DATA ◀── shell da
 | **P4-b** | **SFTP 传输进度**（实时进度/速度/队列面板）+ **暂停/继续/取消**（分块读写断点续传，§5.8） | ✅ 完成 |
 | **P4-c** | **sz 下载修复**（选择保存目录 + 分块流式写入，§5.9）+ **Windows 免安装版**（portable 单 exe） | ✅ 完成 |
 | **P4-d** | **界面重构**：标题栏 + 活动栏 + 可拖拽侧栏 / 右侧常驻命令栏（§5.5、§5.6）、Ctrl+K 命令中心、任务栏图标修复（多尺寸 ico） | ✅ 完成 |
+| **P4-e**（v1.5.0） | **应用内自动更新**：主进程状态机 + 标题栏 `UpdateBadge` + 设置「软件更新」分区，差量下载（§5.12） | ✅ 完成 |
+| **P4-f**（v1.5.1） | **文件面板响应性**：目录批量读取（`SFTP_LIST_MANY` / `SFTP_BOOTSTRAP` + 同帧合并 + TTL 缓存，§5.10）、**面板跟随终端 cwd**（输入追踪 + OSC 7，§5.11） | ✅ 完成 |
 | **待办** | 插件系统（JS 脚本扩展命令/诊断/报告模板） | ⏳ 未开始 |
-| **已确认不做** | 安全与审计（除已实现的主机指纹/凭据加密/危险命令确认外不再扩展)、工单集成、VNC/RDP 入口、网络诊断工具、命令栏浮动形态 | ⏭️ 用户明确不需要 |
+| **已有独立安装包，暂无自动更新** | macOS（dmg）/ Linux（AppImage）不出更新元数据，`electron-updater` 当前只接了 Windows NSIS | ⏳ 未开始 |
+| **已确认不做** | 安全与审计（除已实现的主机指纹/凭据加密/危险命令确认外不再扩展)、工单集成、VNC/RDP 入口、网络诊断工具、命令栏浮动形态、Gitee 更新源（理由见 §9） | ⏭️ 用户明确不需要 |
 
 > P3-a 附注：新增通用能力 `window.api.exec.run(sessionId, cmd, timeout)`（任意面板可执行一次性命令）；连接编辑器状态上收到 `uiStore`，支持任意面板带预设呼出（设备发现 →「新建连接」即用此能力）。
 
 ### 7.0 版本更新记录
+
+#### v1.5.1（2026-10-27）
+
+| 分类 | 内容 |
+|---|---|
+| **性能（文件面板）** | **侧栏打开远端目录不再串行等待**：新增 IPC `SFTP_LIST_MANY`（`src/shared/ipc.ts` → `src/main/ssh/sftpManager.ts`，主进程内 `LIST_MANY_CONCURRENCY = 8` 并发 `readdir`）与 `SFTP_BOOTSTRAP`（一次往返拿回 `home + 目录内容`，省掉 `realpath → readdir`）。渲染层新增 `src/renderer/src/lib/dirLoader.ts`（同帧请求合并成 1 条批量 IPC、按会话分段、切会话整批丢弃）与 `src/renderer/src/lib/dirCache.ts`（TTL 缓存）。`FileExplorer` 加载 effect 重写为「只加载缺失目录」，不再因 `version` 自增把整棵已展开树重读。实测 256 个目录同帧请求：256 条 IPC → **1 条**，1.1ms；真实 Electron 30 次连续目录读取中位 17.1ms、p95 30.0ms |
+| **新增功能（cwd 跟随）** | **终端 `cd` 之后侧栏文件面板自动跟过去**：新增 `src/renderer/src/lib/shellCwd.ts`（纯逻辑零依赖，`scripts/verify-shellcwd.cjs` 单测）解析回车前整行，识别 `cd` / `pushd`，支持 `~`、相对路径、`..`、带空格引号、bracketed paste；`Ctrl-U` / `Ctrl-W` / 方向键等编辑后保守丢弃整行。OSC 7 序列作为权威来源覆盖脚本内 `cd` / `pushd` / `popd`。新增 `src/renderer/src/stores/cwdStore.ts` 按 `sessionId` 隔离，会话关闭 `forgetCwd(id)` 清 cwd / 追踪器 / home 缓存。文件面板标题栏链状开关 + 设置 → 行为 →「跟随终端目录」双入口；配置项 `filesFollowTerminalCwd`（`src/shared/types.ts`），缺省按开启（`!== false`） |
+| **缺陷修复** | `currentDir` 会带上一会话路径进新会话；`scripts/release.ps1` 硬写代理 `127.0.0.1:7897` 导致换网络即发布失败，改为启动探测端口、不可达自动直连 |
+| **发布链路** | `scripts/release.ps1` 上传前硬性校验产物完整性标签（Low IL 的 Setup.exe 装完打不开），并在 `npm run build:win` 前置 `check-integrity.ps1` |
+
+#### v1.5.0（2026-10-26）
+
+| 分类 | 内容 |
+|---|---|
+| **新增功能（自动更新）** | **应用内自动更新**：标题栏 `UpdateBadge`（`src/renderer/src/components/layout/UpdateBadge.tsx`）启动约 8 秒静默检查一次，`available` 时亮出「更新」chip，点开是版本对比 + 更新说明 + 「立即更新」，全程不跳浏览器。状态机由主进程单点维护（`src/main/updater.ts`，基于 `electron-updater`），渲染层只展示：`checking` → `available` → `downloading`（百分比 + 进度条 + 速率/剩余）→ `downloaded`（重启并安装）→ `error`（面板内可读原因，不弹窗打断会话）。设置面板新增「软件更新」分区（`src/renderer/src/components/settings/UpdateSection.tsx`）：立即检查 / 启动自动检查 / 自动下载 / 更新专用代理 / 打开发布页，改完立即生效 |
+| **差量更新** | `electron-builder.yml` 补 `publish` 段（provider: github / owner / repo），打包时自动生成 `resources/app-update.yml`；配合 `.blockmap` 走差量下载。更新代理走 updater 自己的 `electron-updater` net session 分区，与 SSH 连接代理隔离 |
+| **默认值取舍** | 自动检查**开**、自动下载**关**（现场网络按流量计费，查到只亮按钮）；`autoInstallOnAppQuit` 保持**开**（用户点了重启又临时取消，下次正常退出顺手装上） |
+| **限制** | 仅对 NSIS 安装版生效；portable 与 zip 版没有安装上下文、无法自我替换，更新入口不显示 |
 
 #### v1.4.4（2026-10-26）
 
@@ -379,6 +456,9 @@ xterm.write  ◀──webContents.send── EVT_SESSION_DATA ◀── shell da
 | 压测脚本让整个冒烟只能靠超时收场 | 第一版写成页面内 `setInterval` 自循环，某次 `toggleCommandCenter()` 抛错后 `step++` 走不到，定时器永远跑下去 | 改为「页面只放采样器 + 主进程逐步 `await` 驱动 + 每步 try/catch」，任何一步失败只记 `errors++`，流程继续 |
 | 压测报告出现 `avgFrameMs: 0`（看起来完美，实际没测） | 采样器靠 `requestAnimationFrame`，窗口被别的实例遮挡时 Chromium 把 rAF 降到 0Hz，一帧都收不到 | 采样前 `win.show()` + `win.focus()`；并加 `stressProbe.valid = frames >= 30` 硬判据 —— 不能只看 `avgFrameMs`，没采到帧时它是 0 |
 | 打包版压测 `actions: 45 / errors: 45`（等于没跑） | 压测用 `window.__lazy_test.stores` 驱动，而 `ZM_TEST` 只在验证构建里注入，生产构建没有这个钩子 | 改用真实输入：`pressKey('K', ['control'])` 敲 Ctrl+K、`document.querySelector('[data-activity=...]').click()` 点活动栏，走的就是用户的路 |
+| `currentDir` 带着上一个会话的路径进新会话（v1.5.1 跟随功能的副产品） | cwd 状态存的是单个模块级变量，切会话时不重置；跟随功能让它变得可见 | cwd 按 `sessionId` 分键存进 `src/renderer/src/stores/cwdStore.ts`，会话关闭 `forgetCwd(id)` |
+| `scripts/release.ps1` 换网络环境即整条发布链路失败 | 脚本硬写代理 `127.0.0.1:7897`，该端口不通时上传直接超时 | 启动时先探端口，不可达自动改直连 |
+| 发出去的 `Setup.exe` 在用户机器上双击毫无反应 | 产物目录被打上 `Low` 完整性标签（Codex 沙箱服务给「信任工作目录」打 IL，`d:\ssh-workbench` 在信任列表里），Electron 沙箱子进程启动即被杀。**字节一致、拷到别的目录就能跑** | `scripts/check-integrity.ps1`：扫仓根 + 所有 `dist*` + 其中 `*.exe`/`*.dll`，命中 Low 退出码 1；`npm run check:integrity` / `fix:integrity`（改 SACL 需管理员）。`npm run build:win` 前置该检查，`scripts/release.ps1` 上传前再拦一道 —— 带 Low IL 的包装完打不开，宁可不出门 |
 
 ## 8. 运行与打包
 
@@ -389,9 +469,15 @@ npm run dev          # 开发模式（热更新）
 npm run typecheck    # 主进程 + 渲染层类型检查
 npm run smoke        # 冒烟自检（注意：本机 ELECTRON_RUN_AS_NODE=1 会让它崩，见下表）
 npm run build        # electron-vite build → out/（不是 npx vite build，后者找不到 index.html）
-npm run build:win    # 打包 Windows 安装包 + 免安装版（默认 output dist-final）
-npm run build:win:portable  # 只打免安装版：SSH Workbench-<version>-portable.exe（不写注册表、不建开始菜单）
+npm run build:win    # 先跑完整性检查，再打包 Windows 安装包 + 免安装版（output: dist-v12）
+npm run build:win:portable  # 只打免安装版：ssh-workbench-<version>-portable.exe（不写注册表、不建开始菜单）
+npm run check:integrity     # 只查完整性标签，命中 Low 退出码 1（v1.5.1）
+npm run fix:integrity       # 查并修（改 SACL 需管理员令牌）
 ```
+
+`electron-builder.yml` 的产物命名：`artifactName: ${name}-Setup-${version}.${ext}`（安装包，如 `ssh-workbench-Setup-1.5.1.exe`）、`${name}-${version}-portable.${ext}`（免安装）、zip 目标同名 —— **都不带 `v` 前缀**（v1.4.1 修过一次：带 `v` 会让 GitHub Release 里名字与 `latest.yml` 对不上）。
+
+发布走 `scripts/release.ps1`（v1.5.1 起两条硬性前置）：启动时探测代理端口（不通自动直连，不再硬写 `127.0.0.1:7897`）；上传前调 `check-integrity.ps1`，产物带 Low 完整性标签直接中止 —— Low IL 的 Setup.exe 在用户机器上双击毫无反应，传上去等于发个装完打不开的版本。
 
 本机实际使用的打包命令（产物目录可换，避免覆盖正在运行的版本）：
 
@@ -439,7 +525,7 @@ env -u ELECTRON_RUN_AS_NODE ./node_modules/electron/dist/electron.exe . --smoke 
 | 问题 | 现象 | 处理方式 |
 |---|---|---|
 | **安全软件按路径拦截** | `electron.exe` 从**桌面路径**启动时被静默终止（终端无任何输出），换到其他目录可正常运行 | 把项目放在非桌面目录（如 `D:ssh-workbench`），或将 `node_moduleselectrondist` 加入安全软件排除项 |
-| **目录完整性标签为 Low** | 目录被打上 `Low Mandatory Level` 后，Electron 沙箱子进程启动即崩：退出码恒为 `-2147483645` / `0xC0000005`，双击毫无反应，且**同一份 exe 拷到别的目录就能跑**（字节一致也不影响结论） | 先查 `icacls "<DIR>" \| Select-String "Mandatory"`，命中 Low 就 `icacls "<DIR>" /setintegritylevel "(OI)(CI)Medium" /T`。这是本机反复出现的坑，遇到「双击没反应 / 原地崩 copy 就好」优先查这条，不要先去怀疑 exe 或 asar |
+| **目录完整性标签为 Low** | 目录被打上 `Low Mandatory Level` 后，Electron 沙箱子进程启动即崩：退出码恒为 `-2147483645` / `0xC0000005`，双击毫无反应，且**同一份 exe 拷到别的目录就能跑**（字节一致也不影响结论） | 一条命令：`npm run check:integrity`（只查）/ `npm run fix:integrity`（查+修，需管理员）。`scripts/check-integrity.ps1` 扫仓根 + 所有 `dist*` + 其中的 `*.exe`/`*.dll`，命中 Low 退出码 1。**复发源已定位**：本机 Codex 的 Windows 沙箱服务 `CodexSandboxService.OpenAI.Codex` 会给 `~/.codex/config.toml` 里 `trust_level = "trusted"` 的目录打 Low IL，`d:\ssh-workbench` 正在其中——打完包 / 发布前 / 双击没反应时先跑一次，不要先去怀疑 exe 或 asar |
 | 本机无 VS C++ 编译环境 | `npm install` 在 cpu-features（ssh2 可选原生加速）处卡死 | `npm install --omit=optional`（无功能影响） |
 | 直连 GitHub 不可达 | electron 二进制安装失败 | 项目 `.npmrc` 已固化 `electron_mirror=https://npmmirror.com/mirrors/electron/` |
 
@@ -455,6 +541,10 @@ env -u ELECTRON_RUN_AS_NODE ./node_modules/electron/dist/electron.exe . --smoke 
 - 断线自动重连（v1.3.0）使用指数退避策略（1s / 2s / 4s / 8s / 16s 上限），最多尝试 5 次后需要用户手动重连；错误日志在终端内可见。
 - **`<button>` 里的 column flex 一定要钉宽度**（v1.4.3/v1.4.4 连续踩两次）：浏览器给 `<button>` 的 UA 样式含 `align-items: flex-start`，交叉轴子项宽度由内容决定，`truncate` 的 `overflow: hidden` 拿不到受约束宽度、不参与收缩，长文本直接顶出边界。只加 `min-width: 0` 无效，必须 `w-full min-w-0` 一起上。新增任何「按钮内多行文本」结构都要复查这一条；
 - **分组/枚举类输入不要用原生 `<datalist>`**（v1.4.4）：datalist 会拿输入框当前值做子串过滤，预填默认值时用户几乎看不到其他候选，且无关闭开关。统一用 `Combobox`（`src/renderer/src/components/ui/index.tsx`），浮层走 `fixed` + 实测坐标定位，避免被 modal 的 `overflow-hidden` 裁切。
+- **自动更新只对 NSIS 安装版生效**（v1.5.0）：portable 与 zip 解压版没有安装上下文，`electron-updater` 无法自我替换，`isUpdateVisible()` 直接不显示更新入口，只能靠安装包覆盖升级；
+- **Gitee 作为更新源不可用**（评估后搁置，用户 2026-10-26 定「先暂时不搞」）：`electron-updater` 的 `providerFactory.js` 无 gitee 分支（写 `publish.provider: gitee` 打包期直接抛 `Unsupported provider: gitee`）；Gitee Release 附件 CDN 对 `Range` 返回 **200 全量**而非 206，`isUrlProbablySupportMultiRangeRequests(url) = !url.includes('s3.amazonaws.com')` 会把 gitee URL 判成支持多 Range，导致差分下载必失败并回落全量重下（且无断点续传）；附件下载地址是带 `token` / `ts` 的时效签名，不能固化进 `latest.yml`。唯一干净通道是 Gitee raw 路径（实测 206 + `Accept-Ranges: bytes`），但 82MB exe 进 git 历史不可接受。当前发布链路仍是 `publish.provider: github` / owner `yanxici` / repo `ssh-workbench`；
+- **文件面板跟随有边界**（v1.5.1）：只认单行 `cd` / `pushd` 与 OSC 7；`alias` 改写的 `cd`、环境里带函数的 `cd`、以及远端未配 OSC 7 时的脚本内 `cd` 都跟不到，此时面板停在上一个目录。`Ctrl-U` / `Ctrl-W` / 方向键等编辑后整行被保守丢弃，也是「宁可不动，不跳错」的取舍；
+- **目录缓存的失效时机**（v1.5.1）：TTL 到期、显式 `refresh()`、会话关闭、以及上传/删除/改名/新建等写操作 —— 若是**远端其它人**改了目录内容，面板要等 TTL 到期才看到。
 
 ## 10. 开发自检
 
@@ -467,7 +557,24 @@ node scripts/verify-layout.cjs           # 双栏宽度夹取 / 拖拽换算 / �
 node scripts/verify-group-order.cjs      # 分组顺序与拖拽落点（18 项）
 node scripts/verify-theme.cjs            # 配色主题（P4-a）
 node scripts/verify-transfer-progress.cjs # SFTP 进度 / 暂停续传 / 取消（P4-b）
+node scripts/verify-shellcwd.cjs         # cd / pushd / ~ / 引号 / bracketed paste / 编辑丢弃 + OSC 7（v1.5.1）
+node scripts/verify-cwdstore.cjs         # cwd 按 sessionId 隔离、会话关闭清理（v1.5.1）
+node scripts/verify-dirloader.cjs        # 同帧请求合并、按会话分段、切会话丢弃（v1.5.1）
+node scripts/verify-dircache.cjs         # TTL 缓存 / stale-while-revalidate / 写操作失效（v1.5.1）
 for f in scripts/verify-zmodem*.cjs; do node "$f"; done  # ZMODEM 协议 / 解码 / 渲染层 / 端到端（P4-c，4 个脚本）
+```
+
+耗时类基线（不是断言，用来对比回归）：
+
+```bash
+node scripts/stress-cwd.cjs      # 目录批量请求 IPC 次数 + shellCwd 解析吞吐（139 万行/秒）
+npm run test:stress:e2e          # 真实 Electron：30 次连续目录读取 中位 17.1ms / p95 30.0ms / 61.5 FPS
+```
+
+发版前另有一条硬性检查（Windows 专有，见 §8.1）：
+
+```bash
+npm run check:integrity   # 命中 Low 完整性标签退出码 1，必须先 fix:integrity 再打包 / 发布
 ```
 
 界面与交互用真实 Electron 跑一条脚本化回归（`npm run smoke` 在本机受 `ELECTRON_RUN_AS_NODE` 干扰，用下面的直接调用）：

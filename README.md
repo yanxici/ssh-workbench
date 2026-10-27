@@ -13,6 +13,7 @@ A lightweight desktop SSH client with a built-in workbench for embedded-device t
 - Multi-tab terminal (xterm.js) with search, custom shortcuts and ZMODEM (`rz` / `sz`; `sz` downloads stream in chunks to a folder you pick)
 - Encrypted connection export / import between machines
 - Auto-reconnect on connection drop with visible error logs
+- In-app auto update: a badge in the title bar advertises new versions, with a version diff, the release notes and a one-click install (differential download, usually a few MB)
 
 **Command panel**
 - One-click saved commands with `{{variables}}`, dangerous-command confirmation, groups, drag-and-drop, search, favorites and history
@@ -23,6 +24,8 @@ A lightweight desktop SSH client with a built-in workbench for embedded-device t
 
 **Files & tunnels**
 - SFTP file tree beside the terminal, dual-pane transfer mode, remote edit with automatic `.bak` backup
+- The file tree follows the terminal: type `cd /var/log` and the sidebar jumps there, expanding parents as it goes (input tracking plus OSC 7; toggle from the chain icon in the panel header)
+- Directories load through one batched IPC call plus a TTL cache, so expanding a deep tree no longer pays one serial round trip per level
 - Right-click menu on the sidebar file tree: edit, download file / download directory (expanded recursively), download straight to the local Downloads folder, upload here, new folder, rename, delete
 - Transfer queue with live progress and speed; pause / resume (continues from the transferred offset) / cancel (partial files are cleaned up)
 - Port forwarding: local (`-L`), remote (`-R`) and dynamic SOCKS5 (`-D`)
@@ -65,8 +68,11 @@ npm run dev                   # dev mode with hot reload
 | `npm run dev` | Development mode (F12 opens DevTools) |
 | `npm run typecheck` | Type-check main and renderer processes |
 | `npm run smoke` | Build, launch, take a screenshot, exit |
-| `npm run build:win` | Build the Windows installer (NSIS) and portable exe |
+| `npm run build:win` | Build the Windows installer (NSIS) and portable exe; runs the integrity-label check first |
 | `npm run build:win:portable` | Build only the portable exe (no install, no registry writes) |
+| `npm run check:integrity` / `fix:integrity` | Inspect / repair the directory integrity label (`Low` makes a double-clicked exe silently do nothing) |
+| `npm run test:cwdfollow` | Regressions for terminal-cwd following (`shellCwd` parser + `cwdStore` session isolation) |
+| `npm run test:stress` / `test:stress:e2e` | Scale stress test / real-Electron directory-read stress test |
 | `npm run icon` | Regenerate the multi-size app icon |
 | `npm run build:mac` / `build:linux` | Build for macOS / Linux |
 | `node scripts/verify-*.cjs` | Standalone test scripts for individual modules |

@@ -65,6 +65,31 @@
 - `currentDir` 会带着上一个会话的路径进新会话（跟随功能的副产品，一并修掉）
 - 发布脚本 `scripts/release.ps1` 默认挂死代理 `127.0.0.1:7897`，换网络环境就整个发不出去。现在启动时先探端口，探测不到自动改直连
 
+## 🛡️ 发版加固：不再发出「装完打不开」的安装包
+
+这次排查到一个会让用户彻底失去信任的坑：产物本身字节完好，但目录被打上 **`Low` 完整性标签**后，Electron 的沙箱子进程会在启动瞬间被杀 —— 表现就是**双击 exe 毫无反应**，而把同一个 exe 拷到别的目录又能正常跑。
+
+现在三道闸：
+
+| 闸 | 位置 | 作用 |
+|---|---|---|
+| `npm run check:integrity` | 手动 / CI 均可 | 扫仓根 + 所有 `dist*` + 其中的 `*.exe` / `*.dll`，命中 `Low` 退出码 1 |
+| `npm run fix:integrity` | 手动（需管理员令牌） | 把命中的目录树改回 `Medium` |
+| `build:win` 前置 + `release.ps1` 上传前校验 | 自动 | 带 `Low` IL 的包在打包阶段与发布阶段各拦一次 |
+
+> 复发源是外部程序（Codex 的 Windows 沙箱服务会给「信任工作目录」打 `Low` IL），不是代码问题，所以这条检查要长期留着。
+
+## 🙅 本次没有做的
+
+**Gitee 作为更新源** —— 评估后按你的意思「先暂时不搞」，原因记在这里省得下次重复调研：
+
+- `electron-updater` 的 `providerFactory.js` 里没有 gitee 分支，写 `publish.provider: gitee` 打包期直接抛 `Unsupported provider: gitee`
+- Gitee Release 附件 CDN 对 `Range` 请求返回 **200 全量**而不是 206，而 `isUrlProbablySupportMultiRangeRequests()` 只排除了 `s3.amazonaws.com`，gitee URL 会被判成「支持多 Range」→ 差量下载必失败并回退成全量重下（且没有断点续传）
+- 附件下载地址带 `token` / `ts` 时效签名，没法固化进 `latest.yml`
+- 唯一干净通道是 Gitee raw 路径（实测 206 + `Accept-Ranges: bytes`），但 82MB 的 exe 进 git 历史不可接受
+
+更新源仍是 GitHub（`yanxici/ssh-workbench`）。
+
 ## 🔧 从旧版本升级
 
 1. 下载 `ssh-workbench-Setup-1.5.1.exe` 安装，会覆盖旧版本（已装 1.5.0 的话标题栏会直接提示更新）

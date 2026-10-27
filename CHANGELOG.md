@@ -33,9 +33,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `currentDir` 会带着上一个会话的路径进入新会话
 - `scripts/release.ps1` 默认写死代理 `127.0.0.1:7897`，换网络环境即整条发布链路失败；改为启动时探测端口，不可达自动直连
 
+### Build
+
+- 新增 `scripts/check-integrity.ps1` 与 `npm run check:integrity` / `fix:integrity`：扫仓根 + 所有 `dist*` 目录 + 其中的 `*.exe` / `*.dll`，命中 `Low` 完整性标签退出码 1（该标签会让 Electron 沙箱子进程启动即崩，表现为双击 exe 毫无反应）
+- `npm run build:win` 前置该检查；`scripts/release.ps1` 上传前再拦一道，带 `Low` IL 的安装包不再出门
+- 打包输出目录切到 `dist-v12`（每版一个目录，旧产物留作对照）
+
 ### Notes
 
 - 发布产物规则：GitHub Release 只上传 `Setup.exe` + `.blockmap` + `latest.yml`，portable / zip 留在本地
+- 评估后搁置 Gitee 更新源：`electron-updater` 无 gitee provider（打包期直接抛 `Unsupported provider: gitee`），且 Gitee Release 附件对 `Range` 返回 200 全量而非 206，差量下载必失败。当前仍用 GitHub（owner `yanxici` / repo `ssh-workbench`）
 
 ## [1.5.0] - 2026-10-26
 
