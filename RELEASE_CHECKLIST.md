@@ -26,11 +26,39 @@ icacls "D:\ssh-workbench" /setintegritylevel "(OI)(CI)Medium" /T
 
 > 修完不需要重启机器。判定标准是 `Mandatory Label\Medium Mandatory Level`。
 >
-> **为什么反复复发**：不在代码里。本机装了 Codex 的 Windows 沙箱服务
-> `CodexSandboxService.OpenAI.Codex`（开机自启），它会给「信任的工作目录」打 Low IL，
-> 而 `C:\Users\<user>\.codex\config.toml` 里有 `[projects.'d:\ssh-workbench'] trust_level = "trusted"`。
-> 只要 Codex 还开着并在该目录干活，标签就可能再被打回去。所以**打完包、发布前、以及
-> 每次「双击没反应」时都先跑 `check:integrity`**。
+> **为什么反复复发**：不在应用代码里，是「受限令牌沙箱」这类外部工具干的。本机有两个：
+> - `@deepseek-ai/dsh-sandbox-windows-acl`（随 DSH 安装，见
+>   `D:\dsh\resources\app\dsh\node_modules\@deepseek-ai\dsh-sandbox-windows-acl`）：
+>   `lib\types-*.js` 里的 `buildLowLabelAcl` / `restrictTokenIntegrity` 会给工作区
+>   `setintegritylevel Low`，README 原话是「被降级令牌必须匹配的 Low 完整性标签」
+>   「工作区的安全描述符改动以常驻方式授予——dispose() 保留它们」。
+>   它给 `D:\ssh-workbench` 写的那条就是 `Mandatory Label\Low Mandatory Level:(OI)(CI)(NW)`。
+> - `CodexSandboxService.OpenAI.Codex`（开机自启）：实测**不打完整性标签**，只往目录里加
+>   能力 SID 的允许 ACE 和 `Everyone:(CI)(DENY)(DC)` 删除拒绝。所以它只是「同案犯」，不是真凶。
+
+### 0.1 治本：给目录装硬锁（拒绝 WRITE_OWNER）
+
+打 Low 标签本质是 `SetNamedSecurityInfoW` 写 SACL，需要 `SeSecurityPrivilege` **加上**
+目标对象上的 `WRITE_OWNER`。把这个权限从 Everyone 手里拒掉，任何工具都打不上 Low：
+
+```powershell
+npm run guard:integrity      # 装锁（需管理员）
+npm run unguard:integrity    # 摘锁
+```
+
+实测行为（本机已验）：
+
+| 操作 | 装锁后 |
+| --- | --- |
+| `icacls <dir> /setintegritylevel Low` | **Access is denied**（正是要的效果） |
+| 新建 / 复制 / 删除 / 重命名文件 | 正常 |
+| 改 DACL（`icacls /remove:d`） | 正常（只需 WRITE_DAC） |
+| DSH 的 `read-only` 型 ACL 沙箱 | 正常（不做 grantWrite） |
+| DSH 的 `workspace-write` 型 ACL 沙箱 | **fail-closed**：`SetNamedSecurityInfoW failed (Win32 5): grantWrite(<dir>)` |
+| 打包出的 exe 启动 | 正常（Medium IL，已实测启动到主窗口） |
+
+> 代价就一条：**别让 workspace-write 型沙箱以这棵树当工作区**。只用 `read-only` 或
+> `danger-full-access` 的话完全可以开着硬锁。要用 workspace-write，先 `unguard:integrity`。
 
 ---
 
@@ -69,6 +97,10 @@ icacls "D:\ssh-workbench" /setintegritylevel "(OI)(CI)Medium" /T
 - [x] 新增 `scripts/check-integrity.ps1` + `npm run check:integrity` / `fix:integrity`
 - [x] `npm run build:win` 前置该检查；`scripts/release.ps1` 上传前再拦一道 —— 带 Low IL 的 Setup.exe 在用户机器上双击毫无反应（字节一致、拷到别的目录就能跑）
 - [x] 验证：故意对一个 `dist*` 下的 exe 打完 Low IL，`check:integrity` 退出码为 1，`fix:integrity` 后恢复 0
+- [x] **v1.5.1 提速重写**：旧版对每个对象单跑一次 `icacls`（45 个对象实测 25.9s）。新版两级扫描——每棵树一次 `icacls <dir> /T /C` 判有无 Low，命中才下钻定位；并 8 路并行。全仓（含两个 `dist*`、1.7 万文件）**25.9s → 5.8s**
+- [x] 修正一处错误扫描范围：仓根不再直接跑 `icacls /T`（会递归进 `node_modules`，实测 >120s 不返回），改为「根目录单点检查 + 每个顶层子目录一棵树」；`Get-ChildPathsSkipping` 用显式栈递归并跳过 `node_modules` / `.git` / `_piai_probe` 等
+- [x] 新增 `npm run guard:integrity` / `unguard:integrity`（治本，见 §0.1）
+- [x] 验证矩阵：装锁后 `setintegritylevel Low` 被拒、常规读写/复制/删除/重命名正常、`/remove:d` 可摘锁、`read-only` 沙箱可用、`workspace-write` 沙箱 fail-closed、打包 exe 正常启动
 
 ### 评估后搁置：Gitee 作为更新源
 - [x] 结论（用户 2026-10-26：「先暂时不搞」）：`electron-updater` 的 `providerFactory.js` 无 gitee 分支，写 `publish.provider: gitee` 打包期直接抛 `Unsupported provider: gitee`
