@@ -64,6 +64,22 @@ if ($files.Count -eq 0) {
   exit 1
 }
 
+# ---- 硬性校验：产物所在目录不能带 Low 完整性标签 ----
+# Low IL 的 Setup.exe 在用户机器上双击会毫无反应（Electron 沙箱子进程被拦），
+# 传上去等于发个装完打不开的版本。这里上传前拦一道，别让坏包出门。
+$integrityScript = Join-Path $PSScriptRoot "check-integrity.ps1"
+if (Test-Path $integrityScript) {
+  Write-Host "校验完整性标签..." -ForegroundColor DarkGray
+  $checkOut = & pwsh -NoProfile -File $integrityScript 2>&1
+  if ($LASTEXITCODE -ne 0) {
+    Write-Host "产物带 Low 完整性标签，已中止发布（安装后会打不开）：" -ForegroundColor Red
+    $checkOut | Select-Object -Last 20 | ForEach-Object { Write-Host "  $_" -ForegroundColor Red }
+    Write-Host "修复后重试：npm run fix:integrity（需管理员）" -ForegroundColor Yellow
+    exit 1
+  }
+  Write-Host "  完整性标签正常" -ForegroundColor Green
+}
+
 # ---- 硬性校验：未显式要求时，绝不允许 portable / zip 出现在上传列表 ----
 $banned = $files | Where-Object { $_ -match '(portable\.exe|win\.zip)$' }
 if ($banned -and -not $IncludePortable) {

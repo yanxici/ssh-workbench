@@ -18,12 +18,19 @@
   3. 若为 `Low` → 直接修复，不再往下查别的假设
 - **执行**：
   ```powershell
+  npm run check:integrity   # 只查，命中 Low 退出码 1
+  npm run fix:integrity     # 查并修复（需管理员令牌）
+  ```
+  等价手工命令：
+  ```powershell
   icacls "<DIR>" | Select-String "Mandatory"
   # 命中 Low 就修：
   icacls "<DIR>" /setintegritylevel "(OI)(CI)Medium" /T
   ```
 - **验证方式**：修完立刻重跑程序，看到主窗口 title 与 `[main] renderer page loaded` 即成立；标签复查输出 `Medium`
 - **不适用条件**：报错文本明确是 `Access is denied`（ACL 拒绝）、`ERROR_SHARING_VIOLATION`（文件被占用）、缺 DLL/模块、或崩溃栈里没有沙箱/完整性相关帧时，另行按对应节点排查
+
+> **复发源（2026-10-27 定位）**：不是代码、不是 electron-builder 干的。本机装了 Codex 的 Windows 沙箱服务 `CodexSandboxService.OpenAI.Codex`（`StartMode=Auto`，常驻运行），它会给自己信任的工作目录打 Low 完整性标签；`C:\Users\yuzhu22\.codex\config.toml` 里有 `[projects.'d:\ssh-workbench'] trust_level = "trusted"`。所以只要 Codex 开着并在该目录干活，`D:\ssh-workbench` 及 `dist-v11`/`dist-v12` 就可能**再次**变 Low——这正是用户说「又打不开了」的原因。修复后已加 `scripts/check-integrity.ps1` + `npm run check:integrity` / `fix:integrity`，打完包、发布前、以及每次「双击没反应」都先跑这条。
 
 > **教训来源**：本次「SSH Workbench 打不开」排查中，先后误判为 exe 损坏、asar 损坏、ACL deny、企业 EDR 拦截，绕了很远才定位到 `Mandatory Label\Low`。根因只有一条：**目录被打了 Low 完整性标签**。以后按本条先查，一步到位。
 

@@ -3,6 +3,9 @@
 
 set -e
 
+# 产物目录：与 electron-builder.yml 的 directories.output 保持一致
+OUTPUT_DIR="dist-v12"
+
 echo "========================================="
 echo "  SSH Workbench 构建脚本"
 echo "========================================="
@@ -54,17 +57,17 @@ case "$PLATFORM" in
     Linux*)
         npm run build:linux
         echo "✅ Linux 打包完成"
-        ls -lh dist-v11/*.AppImage 2>/dev/null || echo "未找到 AppImage"
+        ls -lh "$OUTPUT_DIR"/*.AppImage 2>/dev/null || echo "未找到 AppImage"
         ;;
     Darwin*)
         npm run build:mac
         echo "✅ macOS 打包完成"
-        ls -lh dist-v11/*.dmg 2>/dev/null || echo "未找到 DMG"
+        ls -lh "$OUTPUT_DIR"/*.dmg 2>/dev/null || echo "未找到 DMG"
         ;;
     MINGW*|MSYS*|CYGWIN*)
         npm run build:win
         echo "✅ Windows 打包完成"
-        ls -lh dist-v11/*.exe 2>/dev/null || echo "未找到 EXE"
+        ls -lh "$OUTPUT_DIR"/*.exe 2>/dev/null || echo "未找到 EXE"
         ;;
     *)
         echo "❌ 不支持的平台: $PLATFORM"
@@ -77,10 +80,10 @@ echo "========================================="
 echo "  构建完成！"
 echo "========================================="
 echo ""
-echo "📁 输出目录: dist-v11/"
+echo "📁 输出目录: $OUTPUT_DIR/"
 echo "📊 压力测试结果: stress-test-results/"
 echo ""
 echo "包体积统计:"
-du -sh dist-v11/* 2>/dev/null | head -10 || echo "无法读取文件大小"
+du -sh "$OUTPUT_DIR"/* 2>/dev/null | head -10 || echo "无法读取文件大小"
 echo ""
 echo "✅ 所有任务完成"

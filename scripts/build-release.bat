@@ -1,5 +1,9 @@
 @echo off
 REM SSH Workbench 构建和发布脚本 (Windows)
+setlocal enabledelayedexpansion
+
+REM 产物目录：与 electron-builder.yml 的 directories.output 保持一致
+set "OUTPUT_DIR=dist-v12"
 
 echo =========================================
 echo   SSH Workbench 构建脚本
@@ -70,11 +74,11 @@ echo =========================================
 echo   构建完成！
 echo =========================================
 echo.
-echo 📁 输出目录: dist-v11\
+echo 📁 输出目录: %OUTPUT_DIR%\
 echo 📊 压力测试结果: stress-test-results\
 echo.
 echo 包体积统计:
-dir dist-v11\*.exe 2>nul
+dir "%OUTPUT_DIR%\*.exe" 2>nul
 echo.
 echo ✅ 所有任务完成
 pause
