@@ -26,8 +26,18 @@ export interface CachedDir {
   at: number
 }
 
-/** 新鲜期：这段时间内重复展开不重新请求 */
-const FRESH_MS = 5000
+/**
+ * 新鲜期：这段时间内重复展开不重新请求。
+ *
+ * 原来是 5s —— 实际用起来「点开 A、看两眼、点回 B、再点回 A」很容易超过 5s，
+ * 于是每次都重新 readdir，慢链路上就是每次都要等一轮 RTT。这里放宽到 30s：
+ * 过期数据不会直接上屏后就停住（stale-while-revalidate），后台仍会补新；
+ * 任何写操作（上传/删除/改名/新建/刷新按钮）都会显式失效，不受 TTL 影响。
+ */
+const FRESH_MS = 30_000
+
+/** 缓存上限：目录数太多时按写入时间淘汰最旧的，避免长时间浏览把内存吃满 */
+const MAX_DIRS = 300
 
 /** key = sessionId + '\u0000' + path */
 const cache = new Map<string, CachedDir>()
@@ -37,6 +47,18 @@ const inflight = new Map<string, Promise<RemoteFile[] | null>>()
 
 function keyOf(sessionId: string, path: string): string {
   return sessionId + '\u0000' + path
+}
+
+/** 超上限时按写入时间淘汰最旧的一批（Map 保持插入顺序，直接从头删即可） */
+function evictIfNeeded(): void {
+  if (cache.size <= MAX_DIRS) return
+  const overflow = cache.size - MAX_DIRS
+  let n = 0
+  for (const k of cache.keys()) {
+    if (n >= overflow) break
+    cache.delete(k)
+    n++
+  }
 }
 
 export interface DirLookup {
@@ -53,7 +75,11 @@ export function peekDir(sessionId: string, path: string): DirLookup {
 }
 
 export function writeDir(sessionId: string, path: string, files: RemoteFile[]): void {
-  cache.set(keyOf(sessionId, path), { files, at: Date.now() })
+  const k = keyOf(sessionId, path)
+  // 重新插入一次，让它在 Map 里排到最后 —— 淘汰时先丢真正最久没被写过的目录
+  cache.delete(k)
+  cache.set(k, { files, at: Date.now() })
+  evictIfNeeded()
 }
 
 /**
@@ -65,7 +91,7 @@ export function invalidateDir(sessionId: string, path?: string): void {
     const prefix = sessionId + '\u0000'
     for (const k of [...cache.keys()]) {
       if (k.startsWith(prefix)) cache.delete(k)
-      }
+    }
     for (const k of [...inflight.keys()]) {
       if (k.startsWith(prefix)) inflight.delete(k)
     }
@@ -120,4 +146,72 @@ export async function loadDir(
 /** 供测试与诊断读取内部规模 */
 export function cacheStats(): { dirs: number; inflight: number; freshMs: number } {
   return { dirs: cache.size, inflight: inflight.size, freshMs: FRESH_MS }
+}
+
+/**
+ * 批量读目录：一次 IPC 拿回多个目录的结果。
+ *
+ * 为什么要有它：展开目录树时如果是「一个目录一条 IPC」，耗时并不等于 N 条
+ * readdir 的时间之和 —— 客户端 RTT 只有一次，但每条 IPC 都要走一遍
+ * 渲染→主进程→SFTP→主进程→渲染 的调度与序列化，实测在慢链路上这部分
+ * 调度开销比 readdir 本身还大。批量把 N 条压成一条，主进程内部再并发发出去。
+ *
+ * 语义：
+ * - 命新鲜缓存的目录不发请求；命过期缓存的照样发（重新验证），但**先用旧值兜底**；
+ * - 返回值里 `files` 是「能用的最好数据」（可能是过期缓存），`stale` 标记它是否
+ *   还需要后台补新 —— 让调用方决定要不要显示 loading；
+ * - 单个目录失败不影响其它目录（主进程用 errors 单独带回）。
+ */
+export interface DirBatchResult {
+  /** path → 最新可用数据；没有数据（且请求失败）时不含该 key */
+  files: Record<string, RemoteFile[]>
+  /** path → 错误信息 */
+  errors: Record<string, string>
+  /** 仍需后台补新的 path（命了过期缓存，或请求失败但有旧值） */
+  stale: string[]
+}
+
+export async function loadDirs(
+  sessionId: string,
+  dirs: string[],
+  fetcher: (
+    missing: string[]
+  ) => Promise<{ dirs: Record<string, RemoteFile[]>; errors: Record<string, string> } | null>,
+  force = false
+): Promise<DirBatchResult> {
+  const files: Record<string, RemoteFile[]> = {}
+  const errors: Record<string, string> = {}
+  const stale: string[] = []
+  const missing: string[] = []
+
+  for (const dir of new Set(dirs)) {
+    const hit = !force ? cache.get(keyOf(sessionId, dir)) : undefined
+    if (hit) {
+      files[dir] = hit.files
+      if (Date.now() - hit.at >= FRESH_MS) stale.push(dir)
+    } else {
+      missing.push(dir)
+    }
+  }
+
+  if (missing.length === 0) return { files, errors, stale }
+
+  const res = await fetcher(missing).catch(() => null)
+  if (!res) {
+    for (const d of missing) {
+      if (files[d]) stale.push(d)
+      else errors[d] = '读取目录失败'
+    }
+    return { files, errors, stale }
+  }
+
+  for (const [dir, list] of Object.entries(res.dirs)) {
+    writeDir(sessionId, dir, list)
+    files[dir] = list
+  }
+  for (const [dir, msg] of Object.entries(res.errors)) {
+    if (!files[dir]) errors[dir] = msg
+    else stale.push(dir)
+  }
+  return { files, errors, stale }
 }

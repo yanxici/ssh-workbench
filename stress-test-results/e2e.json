@@ -1,0 +1,45 @@
+{
+  "at": "2026-10-27T04:38:18.110Z",
+  "electron": "33.4.11",
+  "chrome": "130.0.6723.191",
+  "platform": "win32 x64",
+  "passed": 7,
+  "failed": 0,
+  "rows": [
+    {
+      "name": "window.api.sftp 暴露 listMany",
+      "ok": true,
+      "detail": "通道：bootstrap, cancelTransfer, chmod, download, downloadDialog, downloadsDir, home, list, listMany, mkdir, pauseTransfer, readText, remove, rename, resumeTransfer, upload, uploadDialog, writeText"
+    },
+    {
+      "name": "listMany 面对坏会话快速失败",
+      "ok": true,
+      "detail": "900µs（单条 list 1.3ms），不挂起"
+    },
+    {
+      "name": "listMany 返回可判读的结果",
+      "ok": true,
+      "detail": "{\"ok\":false,\"error\":\"会话不存在或已断开，请先打开 SSH 连接\"}"
+    },
+    {
+      "name": "本地目录可读",
+      "ok": true,
+      "detail": "C:\\Users\\yuzhu22 → 68 项"
+    },
+    {
+      "name": "30 次连续目录读取",
+      "ok": true,
+      "detail": "中位 17.1ms，p95 30.0ms，最慢 35.2ms，合计 561.4ms"
+    },
+    {
+      "name": "空闲态帧率",
+      "ok": true,
+      "detail": "61.5 FPS（74 帧 / 1204ms），DOM 节点 1,404"
+    },
+    {
+      "name": "首屏渲染（FCP）",
+      "ok": true,
+      "detail": "FCP 812.0ms，domInteractive 542.9ms，domComplete 656.0ms"
+    }
+  ]
+}

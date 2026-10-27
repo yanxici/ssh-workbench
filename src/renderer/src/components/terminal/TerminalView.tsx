@@ -15,6 +15,7 @@ import {
 } from 'lucide-react'
 import type { SessionUi } from '@/stores/sessionStore'
 import { terminalRegistry, useSessionStore } from '@/stores/sessionStore'
+import { applyOsc7, feedTerminalInput } from '@/stores/cwdStore'
 import { resolveDark, useSettingsStore } from '@/stores/settingsStore'
 import { getXtermTheme } from '@/theme/colorThemes'
 import { ContextMenu, useContextMenu, type MenuEntry } from '@/components/ui'
@@ -120,7 +121,22 @@ export function TerminalView({
         if (data === '\r') useSessionStore.getState().reconnect(sessionId)
         return
       }
+      /*
+       * 顺手把用户敲的这一行喂给 cwd 追踪器（见 @/lib/shellCwd）。
+       * 放在发送之前：侧栏跟随的目标以「用户想去的目录」为准，
+       * 不必等远端命令真的执行完 —— 失败了侧栏也停下而已，无害。
+       */
+      feedTerminalInput(sessionId, data)
       void window.api.session.write(sessionId, data)
+    })
+
+    /*
+     * OSC 7：远端 shell 配了 shell-integration 时会上报真实 cwd，
+     * 用来校正上面那层本地解析。没配的机器上永远收不到，也就零成本。
+     */
+    const oscDisposer = term.parser.registerOscHandler(7, (payload) => {
+      applyOsc7(sessionId, payload)
+      return true
     })
 
     // 搜索计数
@@ -175,6 +191,7 @@ export function TerminalView({
       cancelAnimationFrame(fitRaf)
       resizeObserver.disconnect()
       dataDisposer.dispose()
+      oscDisposer.dispose()
       searchResultDisposer.dispose()
       term.dispose()
     }

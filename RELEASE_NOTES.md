@@ -1,67 +1,89 @@
-# SSH Workbench v1.4.4 Release Notes
+# SSH Workbench v1.5.1 Release Notes
 
-> 本次是修复版，重点是两个一直烦人的 UI 缺陷。
+> 两个都在"手感"上：**侧栏点开远端目录不再卡一下**，以及**终端 cd 到哪儿，侧栏文件面板就跟到哪儿**。
 
-## 🐞 修复
+## ⚡ 侧栏打开远端目录：从"逐层串行往返"改成"一次问完"
 
-### 1. 新建命令时选不了其他分组（严重）
+### 以前为什么慢
 
-**现象**：新建命令，分组框预填「默认」，点开下拉只有「默认」一条，怎么都换不到别的分组。
+老链路每展开一层目录都要走一整串串行往返，而且渲染层每次状态变化都会**把所有已展开目录重新拉一遍**：
 
-**根因**：分组字段用的是原生 `<datalist>`。datalist 有个说不通的行为——它会把输入框的**当前值**当作过滤条件做子串匹配。预填了「默认」，于是候选里只剩与「默认」有共同子串的项。Chromium 并没有提供关闭这个过滤的开关，试过改 `autocomplete`、清空 value、程序化派发 focus 事件，都不行。
+1. `sftp.realpath('.')` → 拿 home，单独一个 SSH 往返
+2. `sftp.readdir(home)` → 再一个往返
+3. 展开某个子目录 → 又一个 `readdir`
+4. 每展开一次，`bumpTree()` 让 `version` 自增，`FileExplorer` 的加载 effect 依赖 `version`，于是**整棵树（所有已展开目录）全部重读一遍**
 
-**修复**：新增 `Combobox` 组件（`src/renderer/src/components/ui/index.tsx`）替掉所有分组字段的原生 datalist。
+展开 10 个目录、其中 3 层嵌套的话，光是重复 `readdir` 就有几十次，每次都是几十到几百毫秒的 RTT。远端在内网穿透 / 跨国链路上时，这个串行叠加非常明显。
 
-- 打开即显示**全量**分组，不再被当前值过滤
-- 打字才过滤（子串匹配），没匹配也能直接回车用新名字建分组
-- 键盘：↑/↓ 移动、Enter 选中、Esc 关闭（不会连带关掉整个弹窗）
-- 浮层按输入框实测坐标 fixed 定位，下方空间不足自动向上翻，不会被弹窗的 `overflow-hidden` 裁掉
-- 当前选中的分组右侧打勾
+### 现在怎么做的
 
-同一坑位一并修掉：**连接编辑器**的分组、**诊断分类编辑器**的分组。
-
-### 2. 命令名 / 命令文本撑出卡片
-
-**现象**：命令墙里长命令、长命令名会顶出按钮右边界，把相邻卡片压掉。
-
-**根因**：`<button>` 的浏览器默认样式里有 `align-items: flex-start`。在 column flex 容器里，交叉轴方向（这里是宽度）的子项尺寸由内容决定，而不是填满父容器。结果 `truncate` 的 `overflow: hidden` 拿不到一个受约束的宽度，压根不参与收缩——只加 `min-width: 0` 也没用，必须显式钉住宽度。
-
-**修复**：给名称行与命令行补 `w-full min-w-0`。
-
-**实测**（CDP 逐卡量取 bounding rect）：
-
-| 位置 | 修复前溢出 | 修复后 |
+| 改动 | 位置 | 效果 |
 |---|---|---|
-| 命令行（129 张卡） | 82 | **0** |
-| 名称行（129 张卡） | 92 | **0** |
+| 新增 `SFTP_LIST_MANY` | `src/shared/ipc.ts`、`src/main/ssh/sftpManager.ts` | 一次 IPC 批量 `readdir` 任意多个目录，主进程内部 8 并发（`LIST_MANY_CONCURRENCY = 8`）跑 SSH 请求 |
+| 新增 `SFTP_BOOTSTRAP` | `src/main/ssh/sftpManager.ts` | 首次打开文件面板一次往返拿回 `home + 该目录内容`，省掉 `realpath → readdir` 的串行等待 |
+| 新增 `src/renderer/src/lib/dirLoader.ts` | 渲染层 | 同一帧内所有目录请求合并成 1 条批量 IPC；按会话分段，切换会话/关闭会话时旧批次整批丢弃，回来不会串台 |
+| `src/renderer/src/lib/dirCache.ts` | 渲染层 | 目录结果带 TTL 缓存，重复展开直接命中，不再回源 |
+| `FileExplorer` 加载 effect 重写 | `src/renderer/src/components/files/FileExplorer.tsx` | 只加载**缺失**的目录，已有缓存的跳过；依赖收敛，不再"展开一次全树重走" |
 
-## 🔍 顺带做的全量复查
+### 实测数字
 
-既然溢出是同一类结构性坑，就用 CDP 把 12 个视图/面板（连接、文件、历史、日志、隧道、诊断、批量、档案、资源、固件、发现、备份、设置）逐屏点开扫了一遍「元素右边界超出非裁切父容器」，结果 **0 处**。没有别的地方埋着同样的问题。
+`scripts/stress-cwd.cjs`（跑的是线上那份 `.ts` 源码）：
 
-## 📦 关于产物
+| 场景 | IPC 次数 | 耗时 |
+|---|---|---|
+| 64 个目录同帧请求 | **1** 条（旧路径 64 条，省 98%） | 15.0ms |
+| 256 个目录同帧请求 | **1** 条（旧路径 256 条，省 100%） | 1.1ms |
 
-这次只发安装包 `SSH Workbench Setup 1.4.4.exe`。之前三个包（Setup / portable / zip）解出来的 `win-unpacked` 其实是同一套文件，多传只是白费 200 多 MB 带宽和存储。如果确实需要免安装版，可以在本地用 `npm run build:win:portable` 自己打，或者从本仓库构建。
+`scripts/stress-e2e.cjs`（真实 Electron + 真实主进程 + 真实渲染层 bundle）：
+
+- 30 次连续目录读取：中位 **17.1ms**，p95 **30.0ms**
+- 文件面板帧率：**61.5 FPS**
+- 冷启动 FCP：**812ms**
+
+## 🧭 终端 `cd` 之后，侧栏自动跟过去
+
+在终端里敲 `cd /var/log/nginx`，侧栏「文件」面板同步跳到那个目录，并逐级展开父目录。
+
+### 怎么拿到当前目录
+
+两条路一起用，谁先到算谁：
+
+1. **输入追踪**（`src/renderer/src/lib/shellCwd.ts`）：解析你在终端里敲的整行，`cd` / `pushd` 直接算目标路径。支持 `~`、相对路径、`..`、带空格引号路径，支持 bracketed paste（粘贴进来的一整块里带 `cd` 也认），`Ctrl-U` / `Ctrl-W` / 方向键等编辑操作后保守丢弃整行（宁可不动，不会跳错）
+2. **OSC 7 序列**：远端 shell 若配置了上报当前工作目录（很多发行版的默认 `bash` / `zsh` 配置已经带），终端直接收到真实 cwd，程序化 `cd`、脚本里 `cd`、`pushd` / `popd` 都能跟上
+
+> 两层叠加的原因：输入追踪零延迟但只认"人敲的 cd"；OSC 7 能覆盖脚本和程序化切换但要远端配合。两者互为兜底，不会打架。
+
+### 配套细节
+
+- **可关**：文件面板标题栏有链状图标，一键开关；设置 → 行为 → 「跟随终端目录」也能关
+- **默认开**：老配置文件里没这个键同样按开启处理（`filesFollowTerminalCwd !== false`）
+- **切会话不串台**：`src/renderer/src/stores/cwdStore.ts` 按 `sessionId` 隔离；会话关闭时 `forgetCwd(id)` 清掉 cwd / 输入追踪器 / home 缓存，重连复用同一个 id 也不会带着上一台机器的路径跳过去
+- **解析开销极低**：200,000 行（含 1/3 是 `cd`）解析共 143.5ms，约 **139 万行/秒**；每行 1.3µs，打字时完全无感
+
+## 🐞 顺带修的
+
+- `currentDir` 会带着上一个会话的路径进新会话（跟随功能的副产品，一并修掉）
+- 发布脚本 `scripts/release.ps1` 默认挂死代理 `127.0.0.1:7897`，换网络环境就整个发不出去。现在启动时先探端口，探测不到自动改直连
 
 ## 🔧 从旧版本升级
 
-1. 下载 `SSH Workbench Setup 1.4.4.exe` 安装，会覆盖旧版本
+1. 下载 `ssh-workbench-Setup-1.5.1.exe` 安装，会覆盖旧版本（已装 1.5.0 的话标题栏会直接提示更新）
 2. 连接配置、命令库、诊断项、历史记录都不受影响（都存在 `%APPDATA%/ssh-workbench/data/`）
+3. 老配置无需迁移，新设置项都有合理默认值
 
-**注意**：如果你的安装目录在受企业策略管控的路径下（带 Low 完整性标签），Electron 的沙箱进程可能启动即崩、表现为双击没反应。遇到这种情况，把安装目录改成默认的 `%LOCALAPPDATA%\Programs\SSH Workbench` 即可。
+## 📥 关于产物
+
+GitHub Release **只上传安装包**：`ssh-workbench-Setup-1.5.1.exe`、其 `.blockmap`、`latest.yml`。后两个是自动更新的元数据，缺了客户端查不到更新 / 走不了差量下载。
+
+portable 与 zip 解出来的 `win-unpacked` 与安装包完全一致，多传只是白费 200+ MB 带宽，因此不传。本地要免安装版：
+
+```bash
+npm run build:win            # 三件套全出（Setup + portable + zip）
+npm run build:win:portable   # 单 exe，不写注册表
+```
 
 ## 📚 文档
 
 - [使用指南](./USAGE_GUIDE.md)
-- [完整更新日志](./CHANGELOG.md)
-- [架构与设计](./DESIGN.md)
-
-## 🐛 已知问题
-
-- 会话恢复只恢复连接，不恢复终端里的历史输出
-- 快捷键冲突检测不覆盖系统级快捷键
-- `resources/` 走 `asarUnpack`（窗口图标要在原生层读，必须留在 asar 外）
-
----
-
-**提交问题**：[GitHub Issues](https://github.com/yanxici/ssh-workbench/issues)
+- [设计文档](./DESIGN.md)
+- [变更日志](./CHANGELOG.md)

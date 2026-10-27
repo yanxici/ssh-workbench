@@ -146,6 +146,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
     'kill -9 1'
   ],
   strictHostKey: true,
+  // 终端 cd 之后侧栏文件面板跟过去 —— 这是「我以为它本来就会这样」的行为，
+  // 所以默认开。注意渲染层用 `!== false` 判定，老配置（没有这个键）同样是开。
+  filesFollowTerminalCwd: true,
   // 现场设备网络抖动频繁，默认开启自动重连；仍可在设置里关掉
   autoReconnect: true,
   autoReconnectMax: 5,

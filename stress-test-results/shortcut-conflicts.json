@@ -13,14 +13,14 @@
   },
   {
     "iterations": 1000,
-    "totalTime": 3,
-    "avgTime": "0.003",
-    "throughput": "333333"
+    "totalTime": 4,
+    "avgTime": "0.004",
+    "throughput": "250000"
   },
   {
     "iterations": 5000,
-    "totalTime": 13,
-    "avgTime": "0.003",
-    "throughput": "384615"
+    "totalTime": 12,
+    "avgTime": "0.002",
+    "throughput": "416667"
   }
 ]

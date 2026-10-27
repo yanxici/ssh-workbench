@@ -81,13 +81,15 @@ Architecture, directory layout and roadmap (Chinese): [DESIGN.md](./DESIGN.md)
 
 ## Version
 
-Current: **v1.4.4**
+Current: **v1.5.1**
 
 Recent updates:
+- Sidebar file panel: opening a remote directory no longer stalls — batched `readdir` over a single IPC round trip (`SFTP_LIST_MANY` / `SFTP_BOOTSTRAP`), per-frame request coalescing and a TTL cache. 256 directories now cost 1 IPC call instead of 256
+- The file panel follows the terminal: type `cd /var/log` and the sidebar jumps there (input tracking plus OSC 7, toggleable)
+- In-app auto update: the title bar advertises new versions and installs them in one click
 - Command group selection fixed: the group field no longer locks to the default group (replaced native `datalist` with a proper combobox)
 - Command name and command text now truncate instead of overflowing the card
 - Sidebar file panel right-click menu, including download file / download directory
 - Auto-reconnect on connection drop
 - Performance optimization for large connection lists (2900+ connections tested)
 - Connection group management (create, rename, delete, drag-to-reorder)
-- SFTP directory open performance improvement

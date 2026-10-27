@@ -29,6 +29,13 @@ const CHUNK_INFLIGHT = 6
 const MAX_CONCURRENT_TRANSFERS = 3
 
 /**
+ * 批量列目录的并发度。
+ * SFTP 协议允许一个通道上有多个 outstanding request，但嵌入式设备的 sftp-server
+ * 往往只有很小的请求队列；8 是「明显快于串行、又不会把老设备打挂」的经验值。
+ */
+const LIST_MANY_CONCURRENCY = 8
+
+/**
  * 传输控制块：暂停/继续/取消都作用在这里。
  *
  * ssh2 的 fastGet/fastPut 是一次性调用、无法中断，所以文件传输改成
@@ -95,6 +102,37 @@ function formatMode(mode: number): string {
     `${m & 4 ? 'r' : '-'}${m & 2 ? 'w' : '-'}${m & 1 ? 'x' : '-'}`
   const type = mode & 0o40000 ? 'd' : mode & 0o120000 ? 'l' : '-'
   return type + perm((mode >> 6) & 7) + perm((mode >> 3) & 7) + perm(mode & 7)
+}
+
+/** readdir 原始结果 → 渲染层用的 RemoteFile[]（目录在前，再按名称排序） */
+function toRemoteFiles(
+  dir: string,
+  entries: Array<{ filename: string; attrs: Stats }>
+): RemoteFile[] {
+  const files: RemoteFile[] = entries.map((e) => {
+    const attrs = e.attrs
+    const isDir = attrs.isDirectory()
+    const isLink = attrs.isSymbolicLink()
+    return {
+      name: e.filename,
+      path: joinRemote(dir, e.filename),
+      type: isDir ? 'directory' : isLink ? 'symlink' : 'file',
+      size: attrs.size ?? 0,
+      mode: attrs.mode ?? 0,
+      modeStr: formatMode(attrs.mode ?? 0),
+      uid: attrs.uid ?? 0,
+      gid: attrs.gid ?? 0,
+      mtime: (attrs.mtime ?? 0) * 1000,
+      isLink
+    }
+  })
+  files.sort((a, b) => {
+    const aDir = a.type === 'directory'
+    const bDir = b.type === 'directory'
+    if (aDir !== bDir) return aDir ? -1 : 1
+    return a.name.localeCompare(b.name, 'zh-CN')
+  })
+  return files
 }
 
 function pStat(sftp: SFTPWrapper, path: string): Promise<Stats> {
@@ -408,34 +446,74 @@ export class SftpManager {
   async list(sessionId: string, dir: string): Promise<RemoteFile[]> {
     const sftp = await this.getSftp(sessionId)
     try {
-      const entries = await pReaddir(sftp, dir)
-      const files: RemoteFile[] = entries.map((e) => {
-        const attrs = e.attrs
-        const isDir = attrs.isDirectory()
-        const isLink = attrs.isSymbolicLink()
-        return {
-          name: e.filename,
-          path: joinRemote(dir, e.filename),
-          type: isDir ? 'directory' : isLink ? 'symlink' : 'file',
-          size: attrs.size ?? 0,
-          mode: attrs.mode ?? 0,
-          modeStr: formatMode(attrs.mode ?? 0),
-          uid: attrs.uid ?? 0,
-          gid: attrs.gid ?? 0,
-          mtime: (attrs.mtime ?? 0) * 1000,
-          isLink
-        }
-      })
-      // 目录在前，再按名称排序
-      files.sort((a, b) => {
-        const aDir = a.type === 'directory'
-        const bDir = b.type === 'directory'
-        if (aDir !== bDir) return aDir ? -1 : 1
-        return a.name.localeCompare(b.name, 'zh-CN')
-      })
-      return files
+      return toRemoteFiles(dir, await pReaddir(sftp, dir))
     } catch (err) {
       this.invalidate(sessionId)
+      throw new Error(`读取目录失败：${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
+
+  /**
+   * 批量列多个目录（一次 IPC）。
+   *
+   * 为什么要这个：目录树展开时渲染层原本是「一个目录一条 IPC」，主进程这边
+   * 每个请求都要 getSftp → 排队到 Electron IPC 的微任务队列里，再单发一条
+   * readdir。N 个目录就是 N 次串行的「渲染→主进程→远端→渲染」调度往返，
+   * 而 SFTP 通道本身是可以并行多个 outstanding request 的 —— 卡在调度，不是卡在带宽。
+   *
+   * 这里在同一个 wrapper 上把 N 条 readdir 一起发出去（并发上限
+   * LIST_MANY_CONCURRENCY，避免打爆老设备的 sftp 请求队列），单条失败不拖垮整批，
+   * 用 errors 把失败的目录单独带回去让渲染层显示「读取失败」而不是整棵树空白。
+   */
+  async listMany(
+    sessionId: string,
+    dirs: string[]
+  ): Promise<{ dirs: Record<string, RemoteFile[]>; errors: Record<string, string> }> {
+    const sftp = await this.getSftp(sessionId)
+    const dirsOut: Record<string, RemoteFile[]> = {}
+    const errors: Record<string, string> = {}
+    const queue = [...new Set(dirs)]
+    let hadError = false
+
+    const worker = async (): Promise<void> => {
+      for (;;) {
+        const dir = queue.shift()
+        if (dir === undefined) return
+        try {
+          dirsOut[dir] = toRemoteFiles(dir, await pReaddir(sftp, dir))
+        } catch (err) {
+          hadError = true
+          errors[dir] = err instanceof Error ? err.message : String(err)
+        }
+      }
+    }
+
+    await Promise.all(
+      Array.from({ length: Math.min(LIST_MANY_CONCURRENCY, queue.length) }, () => worker())
+    )
+    // 只有「整个通道挂了」才使缓存失效；单个目录没权限不该把 SFTP 拆掉重连
+    if (hadError && Object.keys(dirsOut).length === 0) {
+      this.invalidate(sessionId)
+    }
+    return { dirs: dirsOut, errors }
+  }
+
+  /**
+   * 首次打开文件面板的「一次往返」引导。
+   *
+   * 旧链路是三步串行：sftp.home() 等 realpath → 渲染层 setState → 下一轮 effect
+   * 再发 sftp.list()。等于用户点开的瞬间要等两个 RTT，而第二个 RTT 完全是
+   * 因为渲染层必须先知道 home 才能发请求 —— 是纯粹的调度等待。
+   *
+   * 这里在主进程里把 realpath 和 readdir 连着做完，一次 IPC 返回，
+   * 渲染层拿到就能直接上屏。
+   */
+  async bootstrap(sessionId: string): Promise<{ home: string; files: RemoteFile[] }> {
+    const sftp = await this.getSftp(sessionId)
+    const home = await this.home(sessionId)
+    try {
+      return { home, files: toRemoteFiles(home, await pReaddir(sftp, home)) }
+    } catch (err) {
       throw new Error(`读取目录失败：${err instanceof Error ? err.message : String(err)}`)
     }
   }

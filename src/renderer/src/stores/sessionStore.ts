@@ -6,6 +6,7 @@ import type { FitAddon } from '@xterm/addon-fit'
 import type { SearchAddon } from '@xterm/addon-search'
 import { uid } from '@/lib/utils'
 import { useToastStore } from './toastStore'
+import { forgetCwd } from './cwdStore'
 
 /**
  * 终端实例注册表：TerminalView 挂载时注册，卸载时注销。
@@ -227,6 +228,9 @@ export const useSessionStore = create<SessionState>()((set, get) => ({
       nextActive = next[Math.min(idx, next.length - 1)]?.id ?? null
     }
     set({ sessions: next, activeId: nextActive })
+    // 会话用完即弃：cwd / 输入追踪器 / home 缓存都跟着走，否则 id 复用
+    // （重连沿用同一个 id）时会带着上一台机器的目录跳过去。
+    forgetCwd(id)
   },
 
   closeOthers: (id) => {

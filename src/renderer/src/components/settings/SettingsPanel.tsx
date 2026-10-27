@@ -543,7 +543,7 @@ export function SettingsPanel({
         </Row>
       </Section>
 
-      <Section id="behavior" title="行为" hint="延迟探测 / 自动录像 / 指纹校验 / 面板位置">
+      <Section id="behavior" title="行为" hint="延迟探测 / 自动录像 / 跟随终端 / 指纹校验 / 面板位置">
         <Row label="延迟探测" hint="每 5 秒向设备发送一次轻量探测，用于状态栏延迟显示">
           <Toggle
             checked={settings.latencyProbe}
@@ -580,6 +580,15 @@ export function SettingsPanel({
             />
           </Row>
         )}
+        <Row
+          label="跟随终端目录"
+          hint="在终端里 cd 到某个目录时，侧栏「文件」面板自动跳到该位置；面板标题栏的链状图标也能一键开关"
+        >
+          <Toggle
+            checked={settings.filesFollowTerminalCwd !== false}
+            onChange={(v) => void update({ filesFollowTerminalCwd: v })}
+          />
+        </Row>
         <Row
           label="严格主机指纹校验"
           hint="首次连接记录指纹；指纹变化（如重装系统/换固件）时拒绝连接并告警"

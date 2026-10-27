@@ -225,6 +225,17 @@ export const api = {
   sftp: {
     list: (sessionId: string, path: string): Promise<IpcResult<RemoteFile[]>> =>
       invoke(IPC.SFTP_LIST, sessionId, path),
+    /** 批量列多个目录：一次 IPC 拿回整批（展开目录树时省掉 N 次调度往返） */
+    listMany: (
+      sessionId: string,
+      dirs: string[]
+    ): Promise<IpcResult<{ dirs: Record<string, RemoteFile[]>; errors: Record<string, string> }>> =>
+      invoke(IPC.SFTP_LIST_MANY, sessionId, dirs),
+    /** 首次打开文件面板：一次往返拿回 home + 该目录内容 */
+    bootstrap: (
+      sessionId: string
+    ): Promise<IpcResult<{ home: string; files: RemoteFile[] }>> =>
+      invoke(IPC.SFTP_BOOTSTRAP, sessionId),
     home: (sessionId: string): Promise<IpcResult<string>> => invoke(IPC.SFTP_HOME, sessionId),
     mkdir: (sessionId: string, path: string): Promise<IpcResult<void>> =>
       invoke(IPC.SFTP_MKDIR, sessionId, path),

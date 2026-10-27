@@ -79,7 +79,7 @@ npx electron-builder --win --config electron-builder.yml
 
 - [ ] `out/main/index.js`、`out/preload/index.js`、`out/renderer/` 均生成
 - [ ] rcedit 阶段没报 `Fatal error: Unable to commit changes`（报了说明旧 exe 还在跑，先杀进程）
-- [ ] 产物齐全：`Setup <ver>.exe` + `.blockmap` + `portable.exe` + `win.zip` + `latest.yml`
+- [ ] 产物齐全（**本地仍出三件套**，只是远端不全传）：`Setup <ver>.exe` + `Setup <ver>.exe.blockmap` + `portable.exe` + `win.zip` + `latest.yml`
 
 ### 2.5 打包产物冒烟（不能只测源码态）
 
@@ -116,8 +116,12 @@ git -c http.proxy=http://127.0.0.1:7897 push origin v<ver>
 
 - [ ] 创建 Release，tag 选中刚推的
 - [ ] 正文用 `RELEASE_NOTES.md` 内容
-- [ ] **只上传 Setup 安装包**：三个包解出来的 `win-unpacked` 完全一致，多传只是白费 200+ MB 带宽
+- [ ] **只上传 Setup 安装包，其余安装版本一律不上传**（用户 2026-10-26 定的规则）
+  - 传：`Setup <ver>.exe`、`Setup <ver>.exe.blockmap`、`latest.yml` —— 后两个是自动更新元数据，不是"另一个版本"，缺了客户端查不到更新 / 无法差量下载
+  - 不传：`portable.exe`、`win.zip` —— 与 Setup 解出来的 `win-unpacked` 完全一致，多传只是白费 200+ MB 带宽
+  - 本地 `dist-v11` 照样出三件套，这条**只约束远端上传**
 - [ ] asset `state=uploaded`，体积与本地一致
+- [ ] 回读 release 的 `assets` 数组：恰好 3 个文件，无 portable / zip
 
 > 凭证：`git credential fill` 可取到系统凭证管理器里的 token（用户 `yanxici`，scope 含 `repo`）。上传走 `https://uploads.github.com`；`NODE_TLS_REJECT_UNAUTHORIZED=0` 只在本地网络有 TLS 中间人时需要。
 

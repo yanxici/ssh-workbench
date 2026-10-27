@@ -256,6 +256,14 @@ export interface AppSettings {
   restoreSessions?: boolean
   /** 上次退出时打开的连接ID列表 */
   lastOpenSessions?: Array<{ connectionId: string; connectionName: string }>
+  /**
+   * 侧栏文件面板是否跟随终端的 `cd`。
+   *
+   * 缺省（undefined）按开启处理：这是「终端里 cd 一下、侧栏就跳过去」的直觉行为，
+   * 绝大多数人第一次用就期待它生效。不想被跟随的人（习惯在侧栏独立浏览）可以
+   * 在文件面板头部一键关掉，也可以到设置里关。
+   */
+  filesFollowTerminalCwd?: boolean
   /** 应用内自动更新的偏好（检查频率 / 自动下载 / 更新专用代理） */
   update?: UpdatePrefs
   /**

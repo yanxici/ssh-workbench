@@ -65,6 +65,10 @@ export const IPC = {
 
   /* ---------------- SFTP 文件管理 ---------------- */
   SFTP_LIST: 'sftp:list',
+  /** 一次 IPC 批量列多个目录（展开目录树时省掉 N 个往返的调度开销） */
+  SFTP_LIST_MANY: 'sftp:list-many',
+  /** 首次打开文件面板：一次往返拿回 home + 该目录内容（省掉 realpath → readdir 的串行） */
+  SFTP_BOOTSTRAP: 'sftp:bootstrap',
   SFTP_HOME: 'sftp:home',
   SFTP_MKDIR: 'sftp:mkdir',
   SFTP_DELETE: 'sftp:delete',

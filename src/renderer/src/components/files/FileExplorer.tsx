@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ChevronRight,
   Download,
@@ -12,6 +12,8 @@ import {
   Home,
   LayoutGrid,
   Loader2,
+  Link2,
+  Link2Off,
   Pencil,
   Plus,
   RefreshCw,
@@ -25,6 +27,11 @@ import { useToastStore } from '@/stores/toastStore'
 import { call } from '@/lib/ipc'
 import { cn, formatBytes, remoteDirname, remoteJoin } from '@/lib/utils'
 import { normalizeRemoteDir, rememberUploadDir, resolveUploadDir } from '@/lib/uploadDir'
+import { invalidateDir, loadDir as loadDirCached, loadDirs, peekDir, writeDir } from '@/lib/dirCache'
+import { requestDirs } from '@/lib/dirLoader'
+import { cachedHome, rememberHome } from '@/lib/remoteHome'
+import { useCwdStore, seedCwdFromHome } from '@/stores/cwdStore'
+import { useSettingsStore } from '@/stores/settingsStore'
 import { UploadTargetDialog } from './UploadTargetDialog'
 import {
   ConfirmDialog,
@@ -46,6 +53,15 @@ import {
  * 数据仍走同一套 sftp IPC，功能不缩减（双击目录=进入、双击文件=打开编辑器）。
  */
 
+/**
+ * 空闲预取的目录上限。
+ *
+ * 取 6 是因为典型目录里用户下一步最可能点的是前几个子目录（列表已按
+ * 目录优先+名称排序，用户视线也落在上半屏）。再多就是拿链路带宽赌命中率：
+ * 每条预取在慢链路上都要占一个 SFTP 通道槽位，反而拖慢用户真正点开的那一个。
+ */
+const PREFETCH_DIRS = 6
+
 const WORKSPACE_SPOTS: Array<{ label: string; get: (home: string) => string; icon: JSX.Element }> =
   [
     { label: '主目录', get: (h) => h || '/', icon: <Home size={13} /> },
@@ -58,6 +74,8 @@ const WORKSPACE_SPOTS: Array<{ label: string; get: (home: string) => string; ico
 interface TreeNode {
   file: RemoteFile
   depth: number
+  /** 展开失败时在该目录下显示的一行提示（file 是占位，不可点） */
+  error?: string
 }
 
 export function FileExplorer({
@@ -72,11 +90,9 @@ export function FileExplorer({
   const [tab, setTab] = useState<'workspace' | 'fs'>('workspace')
   const [home, setHome] = useState<string>('')
   const [currentDir, setCurrentDir] = useState<string>('')
-  const [rows, setRows] = useState<TreeNode[] | null>(null)
   const [openDirs, setOpenDirs] = useState<Set<string>>(new Set())
   const [selected, setSelected] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
   /* 上传前先确认目标目录：以前这里直接把 currentDir 塞进系统文件对话框，
      currentDir 为空时就是 '' → joinRemote('' , name) → '/name'，落根目录。 */
   const [uploadOpen, setUploadOpen] = useState(false)
@@ -86,6 +102,12 @@ export function FileExplorer({
   const version = useSftpStore((s) => s.treeVersion)
   const bumpTree = useSftpStore((s) => s.bumpTree)
   const openEditor = useSftpStore((s) => s.openEditor)
+  /* 展开状态在 effect 里也要读（不想因为它变化就整条 effect 重跑） */
+  const openDirsRef = useRef(openDirs)
+  openDirsRef.current = openDirs
+  /* 当前目录同理：跟随终端的 effect 不该因为「用户自己换了目录」而重跑一遍 */
+  const currentDirRef = useRef(currentDir)
+  currentDirRef.current = currentDir
   /* 右键目标：命中某一行 → 该行；点在空白处 → 当前目录（菜单里下载/新建/上传都落在它上面） */
   const { menu, openMenu, closeMenu } = useContextMenu<RemoteFile | null>()
   const [dialog, setDialog] = useState<null | 'mkdir' | 'rename'>(null)
@@ -95,72 +117,203 @@ export function FileExplorer({
   const sessionId = session?.id ?? null
   const connected = session?.status === 'connected'
 
+  /*
+   * 「跟随终端 cd」开关。缺省按开处理（`!== false`）：老配置里没有这个键，
+   * 而绝大多数人第一次用就期待它生效；不想被跟随的人可以一键关掉。
+   */
+  const followPref = useSettingsStore((s) => s.settings.filesFollowTerminalCwd)
+  const updateSettings = useSettingsStore((s) => s.update)
+  const follow = followPref !== false
+
+  /* 终端 cwd 的「事件序号」与路径：序号变一次 = 用户又 cd 了一次（哪怕路径没变） */
+  const cwdSeq = useCwdStore((s) => (sessionId ? (s.seq[sessionId] ?? 0) : 0))
+  const cwdPath = useCwdStore((s) => (sessionId ? (s.path[sessionId] ?? '') : ''))
+  /** 已经跟随过的序号：避免同一事件被重渲染重复消费 */
+  const followedSeqRef = useRef(0)
+
   /* ---------- 取 home（决定「主目录」快捷入口与初始路径） ---------- */
+  /**
+   * 换会话先把面板状态清干净。
+   *
+   * 之前这段缺失：currentDir 会带着上个会话的路径留在新会话里，而下面的
+   * home effect 用的是 `normalizeRemoteDir(cur) || h` —— cur 非空就保留，
+   * 于是新会话打开就停在**上一个机器**的目录上（对端根本没有这个路径）。
+   *
+   * 清空后立刻用本会话已知的终端 cwd 兜底：用户先 `cd` 再第一次打开文件面板时，
+   * 面板应该直接落在他刚去的地方，而不是弹回 home 让他再点一遍。
+   */
+  useEffect(() => {
+    const knownCwd = sessionId ? normalizeRemoteDir(useCwdStore.getState().path[sessionId] ?? '') : ''
+    setCurrentDir(knownCwd)
+    setHome('')
+    setOpenDirs(new Set())
+    setSelected(null)
+  }, [sessionId])
+
   useEffect(() => {
     if (!sessionId || !connected) {
       setHome('')
       setCurrentDir('')
       return
     }
+    // 渲染层缓存命中时同步拿到 home：本轮就发 readdir，少一个 IPC 往返的等待
+    const known = cachedHome(sessionId)
+    if (known) {
+      setHome(known)
+      setCurrentDir((cur) => normalizeRemoteDir(cur) || known)
+      seedCwdFromHome(sessionId, known)
+      return
+    }
     let cancelled = false
-    void call(window.api.sftp.home(sessionId), { silent: true }).then((dir) => {
+    // bootstrap：主进程里把 realpath(home) 和 home 的 readdir 连着做完，
+    // 一次 IPC 返回。旧链路是先 home() 再等渲染层 setState 后发 list()，
+    // 用户点开的瞬间要白等两个 RTT（第二个纯粹是调度）。
+    void call(window.api.sftp.bootstrap(sessionId), { silent: true }).then((res) => {
       if (cancelled) return
-      // home 拿不到时不假装是根目录：currentDir 保持空，上传按钮会先让用户选目录，
-      // 而不是像以前那样静默传到 '/'。
-      const h = normalizeRemoteDir(dir)
+      if (!res) {
+        // bootstrap 失败（老服务器不支持、或目录不可读）：退回原来的两步走
+        void call(window.api.sftp.home(sessionId), { silent: true }).then((dir) => {
+          if (cancelled) return
+          const h = normalizeRemoteDir(dir)
+          rememberHome(sessionId, h)
+          setHome(h)
+          setCurrentDir((cur) => normalizeRemoteDir(cur) || h)
+          seedCwdFromHome(sessionId, h)
+        })
+        return
+      }
+      const h = normalizeRemoteDir(res.home)
+      rememberHome(sessionId, h)
+      writeDir(sessionId, h, res.files)
       setHome(h)
       setCurrentDir((cur) => normalizeRemoteDir(cur) || h)
+      seedCwdFromHome(sessionId, h)
     })
     return () => {
       cancelled = true
     }
   }, [sessionId, connected])
 
-  /* ---------- 拉取某个目录的直接子项，并展开进 rows ---------- */
-  const loadDir = useCallback(
-    async (dir: string): Promise<RemoteFile[] | null> => {
+  /** 会话切走时把序号对齐，避免「切回来被上一次的 cwd 拽走」 */
+  useEffect(() => {
+    followedSeqRef.current = useCwdStore.getState().seq[sessionId ?? ''] ?? 0
+  }, [sessionId])
+
+  /**
+   * 跟随终端的 `cd`：cwd 的**事件序号**一变，就把面板切过去。
+   *
+   * 为什么看序号而不是比较路径串：`cd /opt` → 手动在侧栏逛到 /etc → 再
+   * `cd /opt`，路径完全没变，但用户的意图是「回到 /opt 去」。只比字符串会把
+   * 这次命令当成无变化而漏掉，序号就一定不会漏。
+   *
+   * 三条约束：
+   * - 只消费**本次会话新发生的事件**：切会话时先把序号对齐（见上一个 effect），
+   *   否则切回来会被上个会话残留的 cwd 强行拽走；
+   * - 用户关掉开关就不跟（见 follow）；
+   * - 目标不在这里做存在性校验：readdir 失败会照常显示「读取失败」，
+   *   比悄悄不动更容易让人明白发生了什么。
+   */
+  useEffect(() => {
+    if (!sessionId || !connected) return
+    if (!follow) return
+    if (cwdSeq <= followedSeqRef.current) return
+    followedSeqRef.current = cwdSeq
+    if (!cwdPath) return
+    const target = normalizeRemoteDir(cwdPath)
+    if (!target) return
+    if (currentDirRef.current === target) return
+    // 换目录 = 上一棵树的展开状态作废（与 goto() 一致）
+    setOpenDirs(new Set())
+    setSelected(null)
+    setCurrentDir(target)
+    setTab('fs')
+  }, [sessionId, connected, follow, cwdSeq, cwdPath])
+
+  /* ---------- 拉取某个目录的直接子项（带缓存 + 在途去重） ---------- */
+  const fetchDir = useCallback(
+    async (dir: string, force = false): Promise<RemoteFile[] | null> => {
       if (!sessionId) return null
-      const list = await call(window.api.sftp.list(sessionId, dir), { silent: true })
-      return list ?? null
+      return loadDirCached(
+        sessionId,
+        dir,
+        () => call(window.api.sftp.list(sessionId, dir), { silent: true }),
+        force
+      )
     },
     [sessionId]
   )
 
-  /* ---------- 按 openDirs 递归展开成扁平行（渲染简单、无需嵌套组件） ---------- */
+  /* ---------- 目录树数据：根目录一份 + 每个展开目录一份，按需加载 ---------- */
+  /**
+   * 旧逻辑的病根（就是「打开特别慢」的来源）：
+   *
+   *   useEffect(..., [currentDir, openDirs, version]) 里做 `walk()`，而 walk 是
+   *   `await walk(child)` 的串行 DFS。于是每展开一层目录，整个 effect 重跑，
+   *   从 currentDir 起把**所有已加载过的父目录再 readdir 一遍**。展开到第 N 层
+   *   就是 N 次串行往返；每次展开都重新付一遍。RTT 100ms 的机器上，展开三层
+   *   就已经是一秒多的卡顿，而且越展开越慢。
+   *
+   * 现在拆成两件事：
+   *   1) 数据：根目录一个 effect，已展开目录一个 effect（并发补齐、命中缓存就
+   *      不请求），互不牵连 —— 展开第 N 层只发第 N 层那一条 readdir；
+   *   2) 渲染：`rows` 由 useMemo 在内存里拼出来，纯计算，不发请求。
+   *
+   * 另外所有读取都走 `@/lib/dirCache`：切目录、折叠再展开、切走再切回都是
+   * 内存命中；根目录用 stale-while-revalidate，过期也先上屏不空等。
+   */
+  const [roots, setRoots] = useState<{ dir: string; files: RemoteFile[] } | null>(null)
+  const [rootError, setRootError] = useState<string | null>(null)
+  const [subDirs, setSubDirs] = useState<Map<string, RemoteFile[]>>(new Map())
+  /** 子目录读取失败的原因：失败目录在树里显示一行错误，而不是永远转圈 */
+  const [dirErrors, setDirErrors] = useState<Map<string, string>>(new Map())
+  /** 在途的目录集合：避免同一目录被两轮 effect 同时请求 */
+  const pendingRef = useRef<Set<string>>(new Set())
+  /** 上一次的「目录\0版本」签名：用来区分「换了目录」和「用户按了刷新」 */
+  const lastSigRef = useRef<string>('')
+  /** 会话引用：迟到的响应不能写进新会话的树 */
+  const sessionRef = useRef<string | null>(sessionId)
+  sessionRef.current = sessionId
+
   useEffect(() => {
     if (!sessionId || !connected || !currentDir) return
     let cancelled = false
-    setLoading(true)
-    setError(null)
 
-    const walk = async (dir: string, depth: number): Promise<TreeNode[]> => {
-      const children = await loadDir(dir)
-      if (!children) return []
-      // 目录在前、文件在后，各自按名称排序（与 VS Code 一致）
-      const sorted = [...children].sort((a, b) => {
-        if (a.type !== b.type) return a.type === 'directory' ? -1 : 1
-        return a.name.localeCompare(b.name, 'en')
-      })
-      const out: TreeNode[] = []
-      for (const f of sorted) {
-        out.push({ file: f, depth })
-        if (f.type === 'directory' && openDirs.has(f.path)) {
-          out.push(...(await walk(f.path, depth + 1)))
-        }
-      }
-      return out
+    const sig = `${currentDir}\u0000${version}`
+    const prevSig = lastSigRef.current
+    lastSigRef.current = sig
+    /* 同目录但版本号变了 = 上传/删除/改名/点刷新 → 强制重拉（绕过 5s 新鲜期） */
+    const forced = prevSig.startsWith(`${currentDir}\u0000`) && prevSig !== sig
+    /* 换目录 / 换会话 → 上一层留下的展开数据全部作废 */
+    if (!prevSig.startsWith(`${currentDir}\u0000`)) {
+      pendingRef.current.clear()
+      setSubDirs((prev) => (prev.size === 0 ? prev : new Map()))
+      setDirErrors((prev) => (prev.size === 0 ? prev : new Map()))
+    }
+    if (forced) {
+      for (const d of openDirsRef.current) invalidateDir(sessionId, d)
+      pendingRef.current.clear()
+      setSubDirs((prev) => (prev.size === 0 ? prev : new Map()))
+      setDirErrors((prev) => (prev.size === 0 ? prev : new Map()))
     }
 
-    void walk(currentDir, 0)
-      .then((list) => {
-        if (cancelled) return
-        setRows(list)
+    const hit = peekDir(sessionId, currentDir)
+    if (hit.cached) {
+      // 有缓存就立刻上屏（过期也先给，界面不空着等往返）
+      setRoots({ dir: currentDir, files: hit.cached.files })
+      setRootError(null)
+      if (!forced && hit.fresh) return
+    }
+
+    setLoading(!hit.cached)
+    void fetchDir(currentDir, forced)
+      .then((files) => {
+        if (cancelled || sessionRef.current !== sessionId) return
+        setRoots({ dir: currentDir, files: files ?? [] })
       })
       .catch(() => {
-        if (!cancelled) {
-          setRows([])
-          setError('读取目录失败')
-        }
+        if (cancelled || sessionRef.current !== sessionId) return
+        setRoots({ dir: currentDir, files: [] })
+        setRootError('读取目录失败')
       })
       .finally(() => {
         if (!cancelled) setLoading(false)
@@ -169,7 +322,132 @@ export function FileExplorer({
     return () => {
       cancelled = true
     }
-  }, [sessionId, connected, currentDir, openDirs, version, loadDir])
+    // openDirs 不进依赖：展开/折叠不该触发根目录重拉
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionId, connected, currentDir, version, fetchDir])
+
+  /**
+   * 已展开但还没数据的目录：**一轮批量补齐**。
+   *
+   * 旧版是串行 DFS（每展开一层，整个 effect 重跑、把所有父目录再 readdir 一遍）；
+   * 上一版改成了 Promise.all 并发，但仍是「一个目录一条 IPC」——N 个目录就是
+   * N 次渲染↔主进程的调度往返，慢链路上这部分比远端 readdir 本身还贵。
+   *
+   * 现在把这一轮要补的目录一次性交给 `requestDirs`，它在同一帧内合并、压成
+   * 一条 IPC 发出去（主进程内部再并发 8 路 readdir），一次 RTT 拿回整批。
+   * 依赖里带 subDirs：补齐后写回 → 再跑一轮 → 没有待办就立刻 return，自然收敛。
+   */
+  useEffect(() => {
+    if (!sessionId || !connected || !roots) return
+    const sid = sessionId
+
+    const known = new Set<string>([roots.dir, ...subDirs.keys()])
+    const todo = [...openDirs].filter((d) => !known.has(d) && !pendingRef.current.has(d))
+    if (todo.length === 0) return
+
+    for (const d of todo) pendingRef.current.add(d)
+    void loadDirs(sid, todo, (missing) => requestDirs(sid, missing)).then((res) => {
+      for (const d of todo) pendingRef.current.delete(d)
+      if (sessionRef.current !== sid) return
+      setSubDirs((prev) => {
+        const next = new Map(prev)
+        for (const d of todo) {
+          // 读失败也写一个空数组：否则这个目录会一直被当成"待补"反复请求，
+          // 失败目录改成显示一行错误提示（见 dirErrors）
+          next.set(d, res.files[d] ?? [])
+        }
+        return next
+      })
+      setDirErrors((prev) => {
+        const failed = todo.filter((d) => res.errors[d])
+        // 只改本次涉及的目录：别的分支的错误状态不该被这轮顺手清掉
+        const next = new Map(prev)
+        for (const d of failed) next.set(d, res.errors[d])
+        for (const d of todo) if (!res.errors[d]) next.delete(d)
+        if (next.size === prev.size && [...next].every(([k, v]) => prev.get(k) === v)) return prev
+        return next
+      })
+    })
+  }, [sessionId, connected, roots, openDirs, subDirs])
+
+  /**
+   * 空闲预取一层子目录。
+   *
+   * 用户的真实动作是「看一眼目录 → 点开某个子目录」。首屏出来后到用户点击之间
+   * 通常有 300ms~2s 的空档，这段时间链路是闲的 —— 与其等用户点了再付一个 RTT，
+   * 不如在空闲时把当前目录下最可能的几个子目录先批量读回来写进缓存。
+   *
+   * 约束：
+   * - 只预取一层、最多 PREFETCH_DIRS 个，且只读目录不放业务状态；
+   * - 用 requestIdleCallback（不支持时退回 setTimeout），不抢首屏的带宽与主线程；
+   * - 只写 dirCache，不写 subDirs —— 不触发重渲染，展开时由 loadDirs 命中。
+   */
+  useEffect(() => {
+    if (!sessionId || !connected || !roots) return
+    const sid = sessionId
+    const targets = roots.files
+      .filter((f) => f.type === 'directory' || f.type === 'symlink')
+      .slice(0, PREFETCH_DIRS)
+      .map((f) => f.path)
+      .filter((p) => !peekDir(sid, p).cached)
+    if (targets.length === 0) return
+
+    let cancelled = false
+    const run = (): void => {
+      if (cancelled || sessionRef.current !== sid) return
+      void loadDirs(sid, targets, (missing) => requestDirs(sid, missing))
+    }
+    const idle = (
+      window as unknown as {
+        requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number
+      }
+    ).requestIdleCallback
+    if (typeof idle === 'function') {
+      const id = idle(run, { timeout: 1500 })
+      return () => {
+        cancelled = true
+        ;(
+          window as unknown as { cancelIdleCallback?: (id: number) => void }
+        ).cancelIdleCallback?.(id)
+      }
+    }
+    const timer = setTimeout(run, 400)
+    return () => {
+      cancelled = true
+      clearTimeout(timer)
+    }
+  }, [sessionId, connected, roots])
+
+  /** 扁平行：从 roots 起，按 openDirs 递归拼装（纯内存，不发请求） */
+  const rows = useMemo<TreeNode[] | null>(() => {
+    if (!roots) return null
+    const out: TreeNode[] = []
+    const seen = new Set<string>()
+    const walk = (dir: string, depth: number, files: RemoteFile[]): void => {
+      if (seen.has(dir)) return
+      seen.add(dir)
+      // 目录在前、文件在后，各自按名称排序（与 VS Code 一致）
+      const sorted = [...files].sort((a, b) => {
+        if (a.type !== b.type) return a.type === 'directory' ? -1 : 1
+        return a.name.localeCompare(b.name, 'en')
+      })
+      for (const f of sorted) {
+        out.push({ file: f, depth })
+        if (f.type === 'directory' && openDirs.has(f.path)) {
+          const failed = dirErrors.get(f.path)
+          if (failed) out.push({ file: f, depth: depth + 1, error: failed })
+          else {
+            const kids = subDirs.get(f.path)
+            if (kids) walk(f.path, depth + 1, kids)
+          }
+        }
+      }
+    }
+    walk(roots.dir, 0, roots.files)
+    return out
+  }, [roots, subDirs, openDirs, dirErrors])
+
+  const error = rootError
 
   const toggleDir = (path: string): void => {
     setOpenDirs((prev) => {
@@ -400,6 +678,21 @@ export function FileExplorer({
         >
           {session.title}
         </span>
+        <button
+          className="btn-icon h-6 w-6"
+          title={
+            follow
+              ? '已跟随终端：在终端里 cd 会自动跳到此目录（点击关闭跟随）'
+              : '跟随终端已关闭：点击后在终端里 cd 会自动跳到该目录'
+          }
+          onClick={() => void updateSettings({ filesFollowTerminalCwd: !follow })}
+        >
+          {follow ? (
+            <Link2 size={13} className="text-accent" />
+          ) : (
+            <Link2Off size={13} className="text-ink-3" />
+          )}
+        </button>
         <button className="btn-icon h-6 w-6" title="刷新当前目录" onClick={() => bumpTree()}>
           <RefreshCw size={13} />
         </button>
@@ -500,10 +793,25 @@ export function FileExplorer({
             <div className="text-2xs text-ink-3">这个目录是空的</div>
           </div>
         ) : (
-          (rows ?? []).map(({ file, depth }) => {
+          (rows ?? []).map(({ file, depth, error: rowError }) => {
+            /* 展开失败的行：不渲染成可操作的条目，避免用户对着点却没反应 */
+            if (rowError) {
+              return (
+                <div
+                  key={`${file.path}\u0000err`}
+                  className="flex items-center gap-1 py-[3px] pr-2 text-2xs text-danger"
+                  style={{ paddingLeft: 6 + depth * 12 }}
+                  title={rowError}
+                >
+                  <span className="min-w-0 flex-1 truncate">读取失败：{rowError}</span>
+                </div>
+              )
+            }
             const isDir = file.type === 'directory'
             const isOpen = openDirs.has(file.path)
             const isSel = selected === file.path
+            /** 展开中：目录已展开但数据还没回来（批量补齐在途） */
+            const isPending = isDir && isOpen && !subDirs.has(file.path)
             return (
               <div
                 key={file.path}
@@ -530,7 +838,11 @@ export function FileExplorer({
                 }}
                 title={`${file.path}${isDir ? '' : ` · ${formatBytes(file.size)}`}`}
               >
-                {isDir ? (
+                {isPending ? (
+                  <span className="flex h-4 w-4 shrink-0 items-center justify-center">
+                    <Loader2 size={10} className="animate-spin text-ink-3" />
+                  </span>
+                ) : isDir ? (
                   <button
                     className="flex h-4 w-4 shrink-0 items-center justify-center rounded text-ink-3 hover:text-ink"
                     onClick={(e) => {

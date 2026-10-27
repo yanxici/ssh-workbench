@@ -469,6 +469,10 @@ function registerIpc(): void {
 
   /* ---------------- SFTP 文件管理 ---------------- */
   handle(IPC.SFTP_LIST, (sessionId: string, path: string) => sftpManager.list(sessionId, path))
+  handle(IPC.SFTP_LIST_MANY, (sessionId: string, dirs: string[]) =>
+    sftpManager.listMany(sessionId, dirs)
+  )
+  handle(IPC.SFTP_BOOTSTRAP, (sessionId: string) => sftpManager.bootstrap(sessionId))
   handle(IPC.SFTP_HOME, (sessionId: string) => sftpManager.home(sessionId))
   handle(IPC.SFTP_MKDIR, (sessionId: string, path: string) => sftpManager.mkdir(sessionId, path))
   handle(IPC.SFTP_DELETE, (sessionId: string, path: string) => sftpManager.remove(sessionId, path))

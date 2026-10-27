@@ -5,6 +5,38 @@ All notable changes to SSH Workbench will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.1] - 2026-10-27
+
+### Added
+
+#### 终端 `cd` 之后，侧栏文件面板自动跟过去
+- 终端里敲 `cd /var/log/nginx`，侧栏「文件」面板同步跳到该目录并逐级展开父目录
+- 两条来源合并，谁先到算谁：
+  - **输入追踪**（`src/renderer/src/lib/shellCwd.ts`）：解析回车前那一整行，识别 `cd` / `pushd`，支持 `~`、相对路径、`..`、带空格与引号的路径、bracketed paste 粘贴块；`Ctrl-U` / `Ctrl-W` / 方向键等编辑操作后保守丢弃整行
+  - **OSC 7 序列**：远端 shell 上报真实 cwd 时直接采用，覆盖脚本内 `cd`、`pushd` / `popd` 等程序化切换
+- 文件面板标题栏新增链状开关，可一键停止跟随；设置 → 行为 → 「跟随终端目录」同样可关
+- 新增配置项 `filesFollowTerminalCwd`（`src/shared/types.ts`），缺省按开启处理，老配置无需迁移
+- 会话状态按 `sessionId` 隔离（`src/renderer/src/stores/cwdStore.ts`），关闭会话时清理 cwd / 输入追踪器 / home 缓存，重连复用同一 id 不会带上一台机器的路径
+
+### Changed
+
+#### 侧栏打开远端目录：串行往返改为批量
+- 新增 IPC `SFTP_LIST_MANY`（`src/shared/ipc.ts`）：一次 IPC 批量 `readdir` 任意多个目录，主进程内 8 并发（`LIST_MANY_CONCURRENCY = 8`）
+- 新增 IPC `SFTP_BOOTSTRAP`：首次打开文件面板一次往返拿回 `home + 目录内容`，省掉 `realpath → readdir` 的串行等待
+- 新增 `src/renderer/src/lib/dirLoader.ts`：同一帧内的目录请求合并成 1 条批量 IPC，按会话分段，切会话时旧批次整批丢弃
+- `src/renderer/src/lib/dirCache.ts`：目录结果带 TTL 缓存，重复展开直接命中
+- `FileExplorer` 加载 effect 重写：只加载缺失目录，不再因 `version` 自增而把整棵已展开目录树重读一遍
+- 实测：256 个目录同帧请求从 256 条 IPC 降为 **1 条**（省 100%），耗时 1.1ms；真实 Electron 下 30 次连续目录读取中位 17.1ms、p95 30.0ms
+
+### Fixed
+
+- `currentDir` 会带着上一个会话的路径进入新会话
+- `scripts/release.ps1` 默认写死代理 `127.0.0.1:7897`，换网络环境即整条发布链路失败；改为启动时探测端口，不可达自动直连
+
+### Notes
+
+- 发布产物规则：GitHub Release 只上传 `Setup.exe` + `.blockmap` + `latest.yml`，portable / zip 留在本地
+
 ## [1.5.0] - 2026-10-26
 
 ### Added
