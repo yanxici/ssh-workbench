@@ -149,6 +149,9 @@ try {
 }
 
 # ---- 上传（先删同名旧 asset，避免 422 already_exists）----
+# 注意 `${uploadBase}?name=` 的花括号不能省：PowerShell 会把 "$uploadBase?" 里
+# 的 `?` 当成变量名的一部分，变量直接展开成空串，最终 URL 变成 "=latest.yml"，
+# Invoke-RestMethod 抛 "Invalid URI: The hostname could not be parsed."
 $uploadBase = $release.upload_url -replace "\{.*$", ""
 $existing = (Invoke-RestMethod -Uri "https://api.github.com/repos/$Owner/$Repo/releases/$($release.id)/assets" -Headers $headers @proxyArgs)
 foreach ($f in $files) {
@@ -160,7 +163,7 @@ foreach ($f in $files) {
   }
   $sizeMb = [math]::Round((Get-Item $f).Length / 1MB, 2)
   Write-Host "上传 $name ($sizeMb MB)..."
-  $uploadUrl = "$uploadBase?name=$([uri]::EscapeDataString($name))"
+  $uploadUrl = "${uploadBase}?name=$([uri]::EscapeDataString($name))"
   try {
     $r = Invoke-RestMethod -Method Post -Uri $uploadUrl -Headers $headers -ContentType "application/octet-stream" -InFile $f @proxyArgs -TimeoutSec 900
     Write-Host "  OK state=$($r.state) $($r.browser_download_url)" -ForegroundColor Green
