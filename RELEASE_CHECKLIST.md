@@ -180,9 +180,14 @@ npx electron-builder --win --config electron-builder.yml   # 输出目录由 dir
 # 注意：shell 里若存在 ELECTRON_RUN_AS_NODE，Electron 会被当纯 Node 跑，冒烟必挂
 Remove-Item Env:ELECTRON_RUN_AS_NODE -EA SilentlyContinue
 Start-Process "dist-v13\win-unpacked\SSH Workbench.exe" -ArgumentList '--remote-debugging-port=9337'
+npm run smoke:cdp            # 或 node scripts/smoke-cdp.cjs 9337
 ```
 
+> `scripts/smoke-cdp.cjs` 零依赖（Node 22+ 自带 `WebSocket`），11 项：标题 / 渲染挂载 / 活动栏入口 / 五个主视图视觉溢出 / 设置面板可开 / 「跟随终端目录」开关可见 / 无 console.error。
+> **溢出判定用「元素矩形超出视口」，不用 `scrollWidth > clientWidth`** —— 侧栏里大量 `truncate` 文本本来就是 `scrollWidth` 大于 `clientWidth`（这正是省略号的实现方式），按后者判会把每一行截断文本都算成溢出，几百个假报。
+
 - [ ] 进程存活，`title=SSH Workbench`
+- [ ] `npm run smoke:cdp` 11/11 通过
 - [ ] 通过 CDP 验证本次改动的关键交互
 - [ ] 全视图溢出扫描 0 处
 - [ ] v1.5.2 专项：
