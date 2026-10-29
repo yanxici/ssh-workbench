@@ -277,11 +277,35 @@ git -c http.proxy=http://127.0.0.1:7897 push origin v<ver>
 
 ### 2.7 GitHub Release
 
+> #### ⚠️ 先处理自带 CI：`.github/workflows/release.yml`
+>
+> 仓库里有一个 **push tag 即触发**的 workflow，它会在 windows-latest 上跑 `npm run build:win` **自己打包并上传**。v1.6.0~v1.6.3 每次都撞上了，症状：
+>
+> - `gh run list` 四版全是 `failure` —— 挂在最后一步 `create-release`，报 `already_exists: tag_name`（因为我们已经手工建过 Release）
+> - 但它的 `build:win` **在失败之前就跑完了**，产物按 `electron-builder.yml` 输出到 `dist-v13`，**覆盖掉本地刚打好的包**
+> - 结果 Release 里出现两套字节数不同的同名资产；`latest.yml` 指向 CI 那一份，本地那份对不上 —— 自动更新的 `sha512` 校验会失败
+>
+> **选一种处理并写进本次记录**：
+>
+> 1. **以本地构建为准**（推荐，本地跑了完整回归 + 冒烟）：tag 推完等 CI 结束，再用 `gh release upload ... --clobber` 把本地三件套 + `latest.yml` 全部覆盖，并删掉 CI 用短横线命名的那份 zip（`gh release delete-asset`）
+> 2. **以 CI 构建为准**：本地一个资产都不传，等 CI 传完再验
+>
+> **无论哪种，发布后必须核对 `latest.yml` 的 `sha512` 与远端 Setup 的实际哈希一致**，否则用户点「立即更新」会在校验阶段失败：
+>
+> ```bash
+> curl -sL -o /tmp/s.exe "<release>/ssh-workbench-Setup-<ver>.exe"
+> node -e "const c=require('crypto'),f=require('fs');console.log(c.createHash('sha512').update(f.readFileSync(process.argv[2])).digest('base64'))" /tmp/s.exe
+> # 与 latest.yml 里的 sha512 逐字符比对，同时核对 size
+> ```
+>
+> 另注意 GitHub CDN 有缓存：刚 `--clobber` 完 `latest.yml` 读到的可能还是旧内容，等几十秒或加 `?t=<随机数>` 再读。
+
 - [ ] 创建 Release，tag 选中刚推的
 - [ ] 正文用 `RELEASE_NOTES.md` 内容
-- [ ] **只上传 Setup 安装包，其余安装版本一律不上传**（用户 2026-10-26 定的规则）
-  - 传：`ssh-workbench-Setup-<ver>.exe`、其 `.blockmap`、`latest.yml` —— 后两个是自动更新元数据，不是"另一个版本"，缺了客户端查不到更新 / 无法差量下载
-  - 不传：`portable.exe`、`win.zip` —— 与 Setup 解出来的 `win-unpacked` 完全一致，多传只是白费 200+ MB 带宽
+- [ ] **远端资产口径**（用户 2026-10-26 定的规则，v1.6.x 实际执行如下）
+  - **最小口径（规则原文）**：只传 `ssh-workbench-Setup-<ver>.exe` + `.blockmap` + `latest.yml` —— 后两个是自动更新元数据，不是"另一个版本"，缺了客户端查不到更新 / 无法差量下载
+  - **不传**：`portable.exe`、`win.zip` —— 与 Setup 解出来的 `win-unpacked` 一致，多传白费 200+ MB
+  - **v1.6.x 实际做法（偏离了规则，需用户确认）**：三个产物全传了，因为 CI 先传过一套、`--clobber` 覆盖时干脆一起传齐了。**下次发版请按最小口径**，除非用户明确要 zip/portable
   - 本地 `dist-v13` 照样出三件套，这条**只约束远端上传**
 - [ ] asset `state=uploaded`，体积与本地一致
 - [ ] 回读 release 的 `assets` 数组：恰好 3 个文件，无 portable / zip
