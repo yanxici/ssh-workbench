@@ -24,6 +24,7 @@ A lightweight desktop SSH client with a built-in workbench for embedded-device t
 
 **Files & tunnels**
 - SFTP file tree beside the terminal, dual-pane transfer mode, remote edit with automatic `.bak` backup
+- **Upload folders** (files panel, session file tree, dual-pane remote pane): the remote side keeps the local directory name (`target/<folder>/...`), empty folders included. Dragging a folder still flattens its contents into the target — the two are now separate code paths
 - The file tree follows the terminal: type `cd /var/log` and the sidebar jumps there, expanding parents as it goes (input tracking plus OSC 7; toggle from the chain icon in the panel header)
 - Directories load through one batched IPC call plus a TTL cache, so expanding a deep tree no longer pays one serial round trip per level
 - Right-click menu on the sidebar file tree: edit, download file / download directory (expanded recursively), download straight to the local Downloads folder, upload here, new folder, rename, delete
@@ -48,7 +49,7 @@ A lightweight desktop SSH client with a built-in workbench for embedded-device t
 
 **Security**
 - Credentials encrypted with the OS keystore (Electron `safeStorage`)
-- Host key fingerprint verification
+- Host key fingerprint verification (OpenSSH-compatible `SHA256:base64`), with **in-place fingerprint update**: probe what the device presents now, review the old → new diff, confirm, done. Reachable from Settings, from the connection editor ("update and retest"), and from the terminal error overlay ("update and reconnect"). Legacy `SHA256:<hex>` records are still recognised and migrated automatically
 
 ## Getting started
 
@@ -67,12 +68,17 @@ npm run dev                   # dev mode with hot reload
 |---|---|
 | `npm run dev` | Development mode (F12 opens DevTools) |
 | `npm run typecheck` | Type-check main and renderer processes |
+| `npm run lint` / `lint:all` | ESLint (type-aware for main/preload/shared, React Hooks for the renderer) |
+| `npm run check` | `typecheck` + `lint` — run this before committing |
 | `npm run smoke` | Build, launch, take a screenshot, exit |
 | `npm run build:win` | Build the Windows installer (NSIS) and portable exe; runs the integrity-label check first |
 | `npm run build:win:portable` | Build only the portable exe (no install, no registry writes) |
 | `npm run check:integrity` / `fix:integrity` | Inspect / repair the directory integrity label (`Low` makes a double-clicked exe silently do nothing) |
 | `npm run guard:integrity` / `unguard:integrity` | Install / remove a `WRITE_OWNER` deny guard so sandbox tools can no longer re-stamp the tree as `Low` (see `RELEASE_CHECKLIST.md` §0.1) |
 | `npm run test:cwdfollow` | Regressions for terminal-cwd following (`shellCwd` parser + `cwdStore` session isolation) |
+| `npm run test:ipc` | IPC integrity: every channel constant has a registered handler, `ipcMain` count matches, failures wrapped as `{ ok: false }` |
+| `npm run test:repository` | Persistence behaviour: credential semantics, group defaults, history cap, settings merge, timeout clamping |
+| `npm run test:features` | Host-key fingerprint format/legacy compatibility + folder-upload semantics |
 | `npm run test:stress` / `test:stress:e2e` | Scale stress test / real-Electron directory-read stress test |
 | `npm run icon` | Regenerate the multi-size app icon |
 | `npm run build:mac` / `build:linux` | Build for macOS / Linux |
@@ -88,15 +94,17 @@ Architecture, directory layout and roadmap (Chinese): [DESIGN.md](./DESIGN.md)
 
 ## Version
 
-Current: **v1.5.2**
+Current: **v1.6.3**
 
 Recent updates:
-- Fixed the file panel not following `cd`: the panel opened on the "Workspace" tab (a list of shortcuts, not a directory tree), so the follow result was invisible — and a mounted panel silently swallowed the `cd` events that happened before it appeared
-- Sidebar file panel: opening a remote directory no longer stalls — batched `readdir` over a single IPC round trip (`SFTP_LIST_MANY` / `SFTP_BOOTSTRAP`), per-frame request coalescing and a TTL cache. 256 directories now cost 1 IPC call instead of 256
+- **v1.6.3** — split the last two "god files": `repository.ts` 764 → 70 lines (8 domains moved to `store/repo/`), `SettingsPanel.tsx` 959 → 118 (7 section components). Pure code moves, no behaviour change; added `npm run test:repository` which asserts behaviour (48 checks), not line counts
+- **v1.6.2** — added ESLint (type-aware) and fixed the 49 real issues its first run found, e.g. two components whose `?? []` fallback allocated a fresh array each render so `useMemo` never hit cache
+- **v1.6.1** — upload/download logic consolidated into the store (panels became UI-only; duplicated fragments 31 → 2), and `main/index.ts` split by domain (`src/main/ipc/`, 134 handlers across 12 files)
+- **v1.6.0** — folder upload (remote keeps the directory name; the legacy flatten-on-drag behaviour is preserved as a separate path) and host-key fingerprint update with old → new diff confirmation
+- **v1.5.2** — fixed the file panel not following `cd`: the panel opened on the "Workspace" tab (a list of shortcuts, not a directory tree), so the follow result was invisible — and a mounted panel silently swallowed the `cd` events that happened before it appeared
+- **v1.5.1** — sidebar file panel: opening a remote directory no longer stalls — batched `readdir` over a single IPC round trip (`SFTP_LIST_MANY` / `SFTP_BOOTSTRAP`), per-frame request coalescing and a TTL cache. 256 directories now cost 1 IPC call instead of 256
 - The file panel follows the terminal: type `cd /var/log` and the sidebar jumps there (input tracking plus OSC 7, toggleable)
 - In-app auto update: the title bar advertises new versions and installs them in one click
-- Command group selection fixed: the group field no longer locks to the default group (replaced native `datalist` with a proper combobox)
-- Command name and command text now truncate instead of overflowing the card
 - Sidebar file panel right-click menu, including download file / download directory
 - Auto-reconnect on connection drop
 - Performance optimization for large connection lists (2900+ connections tested)

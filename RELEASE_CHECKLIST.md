@@ -1,6 +1,6 @@
 # SSH Workbench 发布前检查清单
 
-> 周期性发版用。以 v1.5.2 为基线整理，每次发版把「本次变更」小节换成当次内容，其余直接复用。
+> 周期性发版用。以 **v1.6.3** 为基线整理，每次发版把「本次变更」小节换成当次内容，其余直接复用。
 
 ---
 
@@ -62,7 +62,41 @@ npm run unguard:integrity    # 摘锁
 
 ---
 
-## 1. 本次变更（v1.5.2）
+## 1. 本次变更（v1.6.3）
+
+> v1.6.0 ~ v1.6.3 是一组连续改动：一个功能版（上传文件夹 + 指纹更新）+ 三版可维护性专项（IPC 拆分、ESLint、上帝文件拆分）。逐版细节见 `CHANGELOG.md`，设计取舍见 `DESIGN.md` §5.13~§5.16。
+
+### v1.6.0 新增功能
+- [x] **上传文件夹**：`TransferControl.keepRoot` 区分「远端保留目录名」与历史「把内容铺进目标目录」两种语义；空目录也会建出来
+- [x] 三条 UI 入口（侧栏文件面板 / 会话文件树 / 双栏远程栏）+ 三处右键菜单
+- [x] 新增 IPC `SFTP_UPLOAD_FOLDER_DIALOG`（系统目录对话框，可多选）、`SFTP_SCAN_FOLDERS`（上传前统计，2 万文件封顶并标 `truncated`）
+- [x] **主机指纹更新**：探测 → 展示「旧 → 新」→ 用户确认 → 写回；三处入口（设置 / 连接编辑器 / 终端报错层）
+- [x] 新增 IPC `KNOWN_HOSTS_PROBE`（只握手、不认证、不写库）、`KNOWN_HOSTS_REFRESH`
+- [x] 修掉一直算错的指纹算法：统一 `SHA256:base64(sha256(公钥))` 去 padding；旧 `SHA256:<hex>` 记录兼容并静默迁移
+- [x] 指纹冲突不再靠 `hostVerifier` 抛异常传递（会打断 ssh2 协议状态机），改为 `hostKeyMismatches` 记录 + 返回 `false`
+- [x] 回归：`verify-upload-folder.cjs`（22）、`verify-hostkey.cjs`（14）、`perf-new-features.cjs`、`probe-packaged-features.cjs`
+
+### v1.6.1 可维护性：拆主进程 + 收敛上传链路
+- [x] `main/index.ts` 2199 → 1432 行；134 个 handler 按域拆到 `src/main/ipc/` 12 个文件
+- [x] 抽出 `ipc/handle.ts`（IPC 包装 + 通道标题）与 `windowRef.ts`（主窗口引用），避免子模块循环 import
+- [x] 上传/下载链路收敛进 `sftpStore`（`uploadFileDialog` / `uploadFolder` / `downloadTo` / `downloadToDefault`）+ `useUploadTarget` hook
+- [x] `FileExplorer` 1082→993 行、`SessionFileTree` 812→729 行，两者 6 行重复片段 31 → 2
+- [x] 删除死通道 `SESSION_RECONNECT_NOW`（常量表里有但从未注册也从未被调用）
+- [x] 回归：`verify-ipc-registration.cjs`（`npm run test:ipc`，141 通道三层对账）、`probe-ipc-domains.cjs`（17 个域）
+
+### v1.6.2 工具链：ESLint
+- [x] 新增 `eslint.config.mjs`（ESLint 9 + typescript-eslint 8；主进程类型感知 / 渲染层加 React Hooks / 脚本单档）
+- [x] 新增 `npm run lint` / `lint:fix` / `lint:scripts` / `lint:all` / `check`（typecheck + lint）
+- [x] 首轮 49 条全部修掉，含两条真 bug：`?? []` 导致 `useMemo` 永不命中、`String(err ?? '')` 输出 `[object Object]`
+- [x] 刻意不开 `semi` / `quotes` / `indent`（既有代码 23537 行不带分号是既定风格）
+
+### v1.6.3 可维护性：最后两个上帝文件
+- [x] `repository.ts` 764 → 70 行，8 个域搬到 `src/main/store/repo/`；保留 re-export barrel，40+ import 点零改动
+- [x] `SettingsPanel.tsx` 959 → 118 行，拆成 `sectionUi.tsx` + 7 个 `*Section.tsx`
+- [x] 回归：`verify-repository-split.cjs`（`npm run test:repository`，48 项行为断言）、`probe-settings-sections.cjs`（10 个分区）
+- [x] 修 `smoke-cdp` 的偶发 FAIL：分区展开状态存 localStorage，改成「看到就停」的循环，脚本现在可重复运行
+
+### 上一版对照：v1.5.2（已发布）
 
 > 上一版 v1.5.1 的内容（目录批量读取 / cd 跟随 / 发布脚本代理探测）保留在 §1 末尾的「上一版对照」，需要回看时用。
 
@@ -150,9 +184,22 @@ npm run test:stress:e2e    # 真实 Electron：30 次连续目录读取
 - [ ] `CHANGELOG.md` 顶部新增本版条目（Fixed / Added / Changed 分类）
 - [ ] `README.md` 与 `README.zh-CN.md` 的「当前版本 / 最近更新」已同步
 - [ ] `RELEASE_NOTES.md` 已按本版重写
-- [ ] `DESIGN.md` 头部阶段行 + §5 对应小节 + §7.0 版本更新记录 + §9 已知限制 已补
+- [ ] `DESIGN.md` 目录结构（§3）+ §5 对应小节 + §6 安全表 + §7 路线表 + §7.0 版本更新记录 + §9 已知限制 + §10 自检脚本清单 已补
 - [ ] `USAGE_GUIDE.md` 新功能的使用说明已补（按用户视角写，不写实现细节）
 - [ ] `RELEASE_CHECKLIST.md` §1「本次变更」已换成当次内容
+
+### 2.3.1 环境准备（v1.6.2 起）
+
+```bash
+npm run check         # typecheck + lint，两者都必须干净
+npm run test:features # 主机指纹 + 上传文件夹（纯 Node，零依赖）
+npm run test:repository  # 数据层 48 项行为断言
+npm run test:ipc      # 需要真实 Electron 主进程（会拉起 ipcMain）
+```
+
+- [ ] `npm run check` 零 error（lint warning 允许，error 不允许）
+- [ ] 新增/修改逻辑配了对应回归脚本，并加进 `package.json` 的 `test:*`
+- [ ] 纯搬家的重构**不能只跑 typecheck** —— 必须补行为断言（参考 `verify-repository-split.cjs`：48 项全打在读写语义上，不是行数）
 
 ### 2.4 构建
 
@@ -190,12 +237,17 @@ npm run smoke:cdp            # 或 node scripts/smoke-cdp.cjs 9337
 - [ ] `npm run smoke:cdp` 11/11 通过
 - [ ] 通过 CDP 验证本次改动的关键交互
 - [ ] 全视图溢出扫描 0 处
-- [ ] v1.5.2 专项：
+- [ ] v1.6.x 专项（都已在 `scripts/probe-*.cjs` 里脚本化，逐个跑）：
+  - [ ] `node scripts/probe-packaged-features.cjs <port>` → 10/10：preload 新 API 真进包、`known:refresh` 拒绝非法指纹、`sftp:scan-folders` 统计正确
+  - [ ] `node scripts/probe-ipc-domains.cjs <port>` → 17/17：每个 IPC 域挑一个代表通道都能调通
+  - [ ] `node scripts/probe-settings-sections.cjs <port>` → 20/20：设置面板 10 个分区逐个展开，渲染出真实控件（不是空壳），主题切换生效
+  - [ ] 上传文件夹：选一个含子目录 + 空目录的文件夹 → 远端出现同名目录树，空目录也在
+  - [ ] 拖拽目录上传 → 仍按老语义铺平（远端不出现目录名那一层）
+  - [ ] 指纹更新：点某条记录的指纹按钮 → 弹「旧 → 新」对比 → 取消后记录不变 → 再确认后记录更新
+- [ ] 上一版专项（v1.5.2，跟随终端目录）：
   - [ ] 开着跟随、启动后**第一次**打开文件面板 → 直接停在「文件系统」Tab（不是「工作区」快捷入口）
   - [ ] 面板还**没打开**时先 `cd /tmp`，再打开面板 → 直接跳到 `/tmp`（挂载前的 `cd` 不再被吞）
   - [ ] 面板正停在目录树里，切走再切回 → 仍停在目录树，不被踢回「工作区」
-  - [ ] 关掉跟随开关再 `cd` → 面板不动；重新打开开关 → 立刻补跳一次
-  - [ ] 断线重连后 → 面板不跳到上一台机的旧路径
 
 ### 上一版专项对照：v1.5.1
   - [x] 终端敲 `cd /tmp` → 文件面板跳到 `/tmp`
@@ -206,6 +258,7 @@ npm run smoke:cdp            # 或 node scripts/smoke-cdp.cjs 9337
 
 > 冒烟脚本注意：点选后**不要**在同一个 `Runtime.evaluate` 里同步读 `input.value`，React 还没重渲染会误判 FAIL。改成 click → 等 300~500ms → 另起一次 evaluate 读值。
 > 另一个坑：上一轮测试残留的弹窗/浮层会污染下一轮，每轮开头先关掉所有 `[role="dialog"]`，必要时重启应用。
+> 第三个坑（v1.6.3 修）：设置分区的展开状态存在 `localStorage`（key `sshwb.settings.sections`），所以**不能假设「点一下就会展开」** —— 上一轮已经展开过的话，再点就是收起。UI 脚本要用「看到就停」的循环（`smoke-cdp.cjs` 已按此改写）。
 > 压测驱动也别用 `window.__lazy_test.stores` —— `ZM_TEST` 只在验证构建里注入，打包产物没有这个钩子，脚本会「45 个动作 45 个错误」假装跑完。改用真实输入：`pressKey('K', ['control'])`、`document.querySelector('[data-activity=...]').click()`。
 
 ### 2.6 提交与发布
@@ -239,8 +292,11 @@ git -c http.proxy=http://127.0.0.1:7897 push origin v<ver>
 ### 2.8 发布后验证
 
 - [ ] Release 页面可访问，asset 可下载
+- [ ] 三个产物 + `latest.yml` 逐个 `curl -r 0-1048575` 验：返回 **206** 且 1MB，文件头 `4d5a`（exe）/ `504b`（zip）
 - [ ] `git status` 干净（临时脚本、日志都已清理）
+- [ ] 用户数据零影响：`connections.json` 条数与 id 哈希在压测/打包前后一致（动过数据层时必须比）
 - [ ] 杀掉所有残留的 `SSH Workbench` / `electron` 进程
+- [ ] 本地旧版本产物已清理（`dist-v13/` 只留本版三件套 + `win-unpacked`），避免几百 MB 历史包堆积
 
 ---
 

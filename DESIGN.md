@@ -1,7 +1,11 @@
 # SSH Workbench — 整体方案与设计文档
 
 > 轻量级 SSH 客户端 + 嵌入式技术支持工作台
-> 更新时间：2026-10-27 ｜ 阶段：v1.5.2，P0–P4 已实现，v1.1-v1.5 新增连接分组管理、大规模连接性能优化、断线自动重连、命令中心范围筛选、侧栏文件面板右键下载、分组 Combobox、命令卡文本溢出修复、应用内自动更新、SFTP 批量目录读取、文件面板跟随终端 cwd（v1.5.2 修掉「开了跟随却看不到」）
+> 更新时间：2026-10-29 ｜ 阶段：**v1.6.3**，P0–P4 已实现。
+>
+> v1.1–v1.5：连接分组管理、大规模连接性能优化、断线自动重连、命令中心范围筛选、侧栏文件面板右键下载、分组 Combobox、命令卡文本溢出修复、应用内自动更新、SFTP 批量目录读取、文件面板跟随终端 cwd。
+>
+> v1.6：上传文件夹（§5.13）、主机指纹更新（§5.14，并修掉一直算错的指纹算法）、IPC 按域拆分（§5.15）、上传/下载链路收敛（§5.16）、引入 ESLint、拆掉 `main/index.ts` / `repository.ts` / `SettingsPanel.tsx` 三个上帝文件。
 
 ---
 
@@ -41,21 +45,47 @@ ssh-workbench/
 ├─ electron-builder.yml           # 打包配置（win nsis + portable / mac dmg / linux AppImage）
 ├─ build/ · resources/            # 多尺寸 icon.ico / icon.png（scripts/make-icon.cjs 生成）
 ├─ scripts/                       # make-icon.cjs、verify-*.cjs 自检脚本、check-integrity.ps1、release.ps1、probe-* 一次性排查脚本
+├─ eslint.config.mjs              # ESLint 扁平配置（三档：主进程类型感知 / 渲染层 + Hooks / 脚本）
 ├─ tailwind.config.js             # 语义色 -> CSS 变量映射
 ├─ src/
 │  ├─ shared/                     # 三端共享（唯一契约来源）
 │  │  ├─ types.ts                 #   全部数据模型 + IPC 请求/响应类型
 │  │  └─ ipc.ts                   #   IPC 通道常量
 │  ├─ main/                       # Electron 主进程（全部系统能力）
-│  │  ├─ index.ts                 #   窗口、IPC 注册、生命周期、--smoke 自检
+│  │  ├─ index.ts                 #   窗口、生命周期、--smoke 自检（v1.6.1 起不再装 IPC）
+│  │  ├─ windowRef.ts             #   主窗口引用（对话框父窗口；避免 ipc/* 反向依赖 index）
 │  │  ├─ updater.ts               #   自动更新状态机（electron-updater，主进程单点维护）
+│  │  ├─ ipc/                     #   IPC 注册按域拆分（v1.6.1），index.ts 只调 registerAllIpc()
+│  │  │  ├─ index.ts              #     registerAllIpc()：按序调用 12 个域
+│  │  │  ├─ handle.ts             #     IPC 包装（异常 -> { ok:false }）+ 通道中文标题
+│  │  │  ├─ errors.ts             #     错误日志 / 渲染层上报 / 自动重连取消
+│  │  │  ├─ connections.ts        #     连接 CRUD / 分组 / 测试 / 导入导出 / 私钥选择
+│  │  │  ├─ sessions.ts           #     会话开关 / 写入 / 尺寸 / 广播
+│  │  │  ├─ commands.ts           #     常用命令 + 命令历史
+│  │  │  ├─ settings.ts           #     设置 / 数据目录 / 已知主机指纹 / 剪贴板
+│  │  │  ├─ sftp.ts               #     SFTP 全部通道（含上传文件夹、传输控制）
+│  │  │  ├─ zmodem.ts             #     ZMODEM 收发热通道（目录令牌 + 文件名净化）
+│  │  │  ├─ localFs.ts            #     本地文件系统
+│  │  │  ├─ diagnostics.ts        #     诊断巡检 + 报告 + 排障包 + 批量执行
+│  │  │  ├─ devices.ts            #     档案 / 监控 / 固件 / 发现 / 通用 exec
+│  │  │  ├─ backupTunnel.ts       #     配置备份 + 隧道 + 会话日志
+│  │  │  └─ windowUpdate.ts       #     窗口控制 + 应用内更新
 │  │  ├─ store/
 │  │  │  ├─ jsonStore.ts          #   原子写 JSON 存储（临时文件 + rename + 写队列）
-│  │  │  ├─ repository.ts         #   连接/命令/历史/设置/已知主机 CRUD（唯一持久化入口）
+│  │  │  ├─ repository.ts         #   纯 re-export barrel（v1.6.3 拆分后只剩 70 行）
+│  │  │  ├─ repo/                 #   持久化按域拆分（v1.6.3）
+│  │  │  │  ├─ connections.ts     #     连接 + 分组 + 凭据语义
+│  │  │  │  ├─ commands.ts        #     常用命令 + 排序 + 导入导出
+│  │  │  │  ├─ history.ts         #     命令历史（2000 条上限）
+│  │  │  │  ├─ settings.ts        #     应用设置 + 一次性外观迁移
+│  │  │  │  ├─ diagSections.ts    #     自定义巡检项
+│  │  │  │  ├─ profiles.ts        #     客户 / 设备档案
+│  │  │  │  ├─ tunnels.ts         #     端口转发定义
+│  │  │  │  └─ knownHosts.ts      #     已知主机指纹
 │  │  │  └─ vault.ts              #   凭据保险箱（safeStorage 加密）
 │  │  ├─ ssh/
-│  │  │  ├─ sftpManager.ts        #   SFTP 管理 + 传输队列（分块读写、暂停/续传/取消、进度节流上报）
-│  │  │  ├─ connectConfig.ts      #   连接配置构建（认证/指纹校验）+ 建连原语 + 错误翻译
+│  │  │  ├─ sftpManager.ts        #   SFTP 管理 + 传输队列（分块读写、暂停/续传/取消、keepRoot 目录上传）
+│  │  │  ├─ connectConfig.ts      #   连接配置构建（认证/指纹校验）+ 指纹探测 + 冲突记录 + 错误翻译
 │  │  │  ├─ sessionManager.ts     #   会话管理（跳板链/shell/合帧转发/延迟探测）
 │  │  │  └─ testConnection.ts     #   测试连接
 │  │  ├─ ssh/ 其余               #   exec / batchExec / diagnostics / metrics / firmware / netScan / portForward
@@ -81,14 +111,19 @@ ssh-workbench/
 │        │  └─ zmodem.ts          #   ZMODEM 会话（Sentry 接管字节流、分块保存）
 │        ├─ stores/               # zustand：settings/layout/connection/session/command/execution/sftp/cwd/toast/ui 等
 │        │                        #   cwdStore 按 sessionId 隔离终端 cwd（不进持久化，会话关闭即清）
+│        │                        #   sftpStore 是上传/下载的唯一执行链路（v1.6.1 收敛），面板只渲染 UI
 │        └─ components/
 │           ├─ layout/            #   TitleBar / ActivityBar / SideNav / MainWorkspace / CommandRail / TabBar / StatusBar / PaneResizer / UpdateBadge
 │           ├─ connections/       #   ConnectionSidebar / ConnectionEditor
 │           ├─ terminal/          #   TerminalView（xterm 集成）/ ZmodemOverlay
 │           ├─ files/             #   FileExplorer / SessionFileTree / 双栏 Local/RemotePane / TransferProgressDock
+│           │                     #   useUploadTarget.ts = 「先确认目标目录再弹文件框」的共用状态机
 │           ├─ commands/          #   CommandPanel / CommandCenter / CommandEditor / Highlight
 │           ├─ panels/            #   HistoryPanel
-│           ├─ settings/          #   SettingsPanel / UpdateSection（软件更新分区）
+│           ├─ settings/          #   SettingsPanel（仅布局总装，118 行）
+│           │                     #   sectionUi.tsx（Section / Row / Segmented 原子）
+│           │                     #   Appearance / Terminal / Behavior / Layout / Shortcut /
+│           │                     #   Danger / KnownHosts / ErrorLog / Update 各分区组件
 │           ├─ execution/         #   VariablePromptDialog / DangerConfirmDialog
 │           └─ ui/                #   Modal / ConfirmDialog / ContextMenu / Toast / Combobox / 表单件
 ```
@@ -338,12 +373,80 @@ IPC：`update:state / check / download / install / open-release` + `evt:update-s
 
 > 自动更新只对 NSIS 安装版生效；portable 与 zip 没有安装上下文、无法自我替换，更新入口不显示。
 
+### 5.13 上传文件夹（v1.6.0）
+
+「上传文件」早就有，但「上传一整个目录」在 v1.6.0 之前是**借拖拽顺带实现的**，语义藏在 `joinRemote(remoteDir, f.rel)` 里：本地目录的**内容**铺进目标目录，目录名本身不出现。这个语义对拖拽是合适的（用户把 `assets/` 拖进 `dest/`，期望 `dest/a.txt`），但对「上传文件夹」按钮就是错的 —— 用户明确选了一个文件夹，远端就该出现同名目录；否则选了两个同名不同内容的目录会互相覆盖，而且看不出来。
+
+现在由 `TransferControl.keepRoot` 区分两条路径：
+
+| 操作 | `keepRoot` | 远端落点 |
+|---|---|---|
+| 上传文件夹（按钮 / 右键菜单） | `true` | `目标目录/本地目录名/...`，空目录也会建出来 |
+| 拖拽目录上传（历史行为） | `false` | 把本地目录的**内容**铺进目标目录 |
+
+三条 UI 入口（侧栏文件面板、会话文件树、双栏远程栏）+ 三处右键菜单。IPC 新增 `SFTP_UPLOAD_FOLDER_DIALOG`（系统目录对话框，可多选）与 `SFTP_SCAN_FOLDERS`（上传前统计文件数 / 总字节数，2 万文件封顶并标记 `truncated`）。
+
+空目录也要建：`transferUploadDir` 在 `keepRoot` 时会先 `ensureRemoteDir`，否则「上传一个空文件夹」看起来毫无反应。
+
+回归：`node scripts/verify-upload-folder.cjs`（22 项，内存 SFTP 假通道覆盖保留目录名 / 铺平 / 空目录 / 扫描统计 / 单文件不受影响）。
+
+### 5.14 主机指纹更新（v1.6.0）
+
+设备重装 / 固件升级 / 换 sshd host key 之后，严格校验会把整台设备拒之门外。旧文案只让人「去设置里删除记录」，现场很绕。v1.6.0 把它做成一条闭环：**探测设备当前值 → 展示「旧 → 新」→ 用户确认 → 写回**。
+
+三个入口共用同一套主进程能力：
+
+- 设置 → 已知主机指纹：逐条指纹按钮 + 顶部「检查全部更新」
+- 连接编辑器：测试连接报冲突时「更新主机指纹并重测」；成功时「用此指纹更新本地记录」
+- 终端报错覆盖层：错误含「指纹」时「更新主机指纹并重连」
+
+**两个必须知道的实现约束**：
+
+1. **冲突不能靠 `hostVerifier` 抛异常传递**。那个回调在 ssh2 的密钥交换流程里是**同步**调用的，抛异常会打断协议状态机，错误退化成含糊的 `Host denied`，新旧指纹都带不出来。正确做法是：校验器只把事实记进 `hostKeyMismatches`（模块级 Map，按 host:port 索引、60 秒新鲜度），然后返回 `false`；连接按标准方式失败，上层用 `takeHostKeyMismatch()` 取详情。
+2. **探测不能走校验流程**。要走的是「只握手、不认证、不写库」的 `probeHostFingerprint()`：`hostVerifier` 只记录并返回 `true`，`handshake` 事件一到就拿值收工。
+
+> **顺带修掉一个一直错的算法**：旧实现给 ssh2 设了 `hostHash = 'sha256'`（ssh2 会把摘要转成 hex 再回调），代码又对**那份 hex 字符串**做 base64 —— 存下来的是 `SHA256:<hex>`，跟 `ssh-keygen -lf` 完全对不上。现在统一 `SHA256:` + base64(sha256(公钥)) 去 padding，与 OpenSSH 一致。老记录不失效：`isLegacyFingerprint()` 认得 64 位小写 hex 的旧格式，校验时两种都比对，命中一次即静默迁移成标准格式。
+
+回归：`node scripts/verify-hostkey.cjs`（14 项：格式、与 openssl 手算一致、旧格式识别且不误判新格式）。
+
+### 5.15 IPC 分层与完整性约束（v1.6.1）
+
+`src/main/index.ts` 曾是 2199 行、装 134 个 handler 的单体文件：22 个业务域挤在一个 615 行的 `registerIpc()` 里，改 SFTP 和改固件升级要动同一处。v1.6.1 按域拆到 `src/main/ipc/`（12 个文件），`index.ts` 只调 `registerAllIpc()`。
+
+两个配套模块是必须的，否则 12 个子文件会反向依赖入口形成循环 import：
+
+| 模块 | 作用 |
+|---|---|
+| `ipc/handle.ts` | IPC 包装（异常统一转 `{ ok:false, error }`）+ 通道中文标题映射（错误日志用） |
+| `windowRef.ts` | 主窗口引用 `getMainWindow() / setMainWindow() / dialogParent()` —— 弹系统对话框需要父窗口，而这个引用原本在 `index.ts` 里 |
+
+**纯搬家的真正风险**：漏搬一个 `handle()` 不会编译失败，只会在用户点到那个按钮时报 `No handler registered`。所以新增三层对账的 `scripts/verify-ipc-registration.cjs`（`npm run test:ipc`）：
+
+1. **静态**：`shared/ipc.ts` 里 141 个通道常量逐个在 `src/main` 找 `IPC.XXX` 注册点；
+2. **运行时**：真跑一遍 `registerAllIpc()`，数 `ipcMain._invokeHandlers` 实际注册数与常量表比对，并检查有没有**多余注册**（改名字忘了改常量）；
+3. **行为**：抽查通道可调用、失败被包装成 `{ ok:false }` 而非抛异常、导入通道拒绝未授权路径。
+
+> 这个脚本第一次跑就抓出一条**死通道** `SESSION_RECONNECT_NOW`（`session:reconnect-now`）：常量表里有，但从未注册也从未被调用（查历史版本同样是 0 处）。它是 `sessionStore.reconnect()` 取代之后的遗留 —— 谁要是真去调它，会得到一个运行时 `No handler registered`。已删除。
+
+### 5.16 前端契约收敛：上传/下载链路（v1.6.1）
+
+v1.6.0 加上传文件夹时，在 4 个地方各写了一遍「解析目标目录 → 弹系统对话框 → toast → 失效缓存」，每份 19–26 行。改一处行为要同步改 4 个地方，漏一个就是「有的入口好使、有的不好使」。
+
+v1.6.1 收敛成：
+
+- **`sftpStore.uploadFileDialog / uploadFolder / downloadTo / downloadToDefault`** —— 唯一执行链路，返回 `{ count, target }` 让各面板自己决定怎么刷新
+- **`components/files/useUploadTarget.ts`** —— 「先确认目标目录再弹文件框」的状态机（4 个 useState + busy/cancel/confirm），两个面板只渲染 `dialogProps`
+
+净效果：`FileExplorer` 1082→993 行，`SessionFileTree` 812→729 行，两者 6 行重复片段 **31 → 2**；`window.api.sftp.*` 的直接调用从 5 个面板收敛到 store 一处。
+
 ## 6. 安全设计
+
 
 | 项 | 实现 |
 |---|---|
 | 凭据存储 | safeStorage 加密后写入 `secrets.json`；系统加密不可用时仅内存持有 |
-| 主机指纹 | 首次连接记录 SHA256 指纹；严格模式下指纹变化直接拒绝并给出处置指引；设置中可管理/删除记录（重刷固件场景） |
+| 主机指纹 | 首次连接记录 OpenSSH 风格 `SHA256:base64` 指纹；严格模式下指纹变化直接拒绝，并把「记录值 / 设备当前值」一并带出来。更新入口三处（设置 / 连接编辑器 / 终端报错层），统一走「探测 → 展示旧新对比 → 用户确认 → 写回」，不静默信任（§5.14） |
+| 指纹记录兼容 | 老记录可能是历史错误格式 `SHA256:<64位hex>`；校验时两种格式都比对，命中一次即静默迁移成标准格式，不需要用户手工清理 |
 | 危险命令 | 命令级标记 + 全局关键词双保险，发送前强制二次确认 |
 | 复制连接 | 刻意不复制凭据 |
 | IPC 边界 | 通道白名单 + 统一错误包装，渲染层无任意 IPC 能力 |
@@ -373,6 +476,8 @@ IPC：`update:state / check / download / install / open-release` + `evt:update-s
 | **P4-d** | **界面重构**：标题栏 + 活动栏 + 可拖拽侧栏 / 右侧常驻命令栏（§5.5、§5.6）、Ctrl+K 命令中心、任务栏图标修复（多尺寸 ico） | ✅ 完成 |
 | **P4-e**（v1.5.0） | **应用内自动更新**：主进程状态机 + 标题栏 `UpdateBadge` + 设置「软件更新」分区，差量下载（§5.12） | ✅ 完成 |
 | **P4-f**（v1.5.1） | **文件面板响应性**：目录批量读取（`SFTP_LIST_MANY` / `SFTP_BOOTSTRAP` + 同帧合并 + TTL 缓存，§5.10）、**面板跟随终端 cwd**（输入追踪 + OSC 7，§5.11） | ✅ 完成 |
+| **P4-g**（v1.6.0） | **上传文件夹**（`keepRoot` 区分「保留目录名」与历史「铺平」语义，§5.13）、**主机指纹更新**（探测 → 旧新对比 → 确认写回，三处入口，§5.14），并修掉一直算错的指纹算法 | ✅ 完成 |
+| **P4-h**（v1.6.1~v1.6.3） | **可维护性专项**：IPC 按域拆分（§5.15）、上传/下载链路收敛进 store（§5.16）、引入 ESLint、拆掉最后两个上帝文件（`repository` 764→70、`SettingsPanel` 959→118） | ✅ 完成 |
 | **待办** | 插件系统（JS 脚本扩展命令/诊断/报告模板） | ⏳ 未开始 |
 | **已有独立安装包，暂无自动更新** | macOS（dmg）/ Linux（AppImage）不出更新元数据，`electron-updater` 当前只接了 Windows NSIS | ⏳ 未开始 |
 | **已确认不做** | 安全与审计（除已实现的主机指纹/凭据加密/危险命令确认外不再扩展)、工单集成、VNC/RDP 入口、网络诊断工具、命令栏浮动形态、Gitee 更新源（理由见 §9） | ⏭️ 用户明确不需要 |
@@ -381,7 +486,45 @@ IPC：`update:state / check / download / install / open-release` + `evt:update-s
 
 ### 7.0 版本更新记录
 
+#### v1.6.3（2026-10-29）
+
+| 分类 | 内容 |
+|---|---|
+| **重构（数据层）** | **`repository.ts` 764 → 70 行**。8 个互不相干的域（连接 / 命令 / 历史 / 设置 / 巡检项 / 档案 / 隧道 / 已知主机）拆到 `src/main/store/repo/*.ts`。刻意保留 `repository.ts` 作为 **re-export barrel**，40 多个 import 点一行都不用改 —— 纯搬家的价值全在「不动调用方」。顺带删掉 `addHistory` 里与 `touchCommand` 完全重复的内联逻辑 |
+| **重构（设置面板）** | **`SettingsPanel.tsx` 959 → 118 行**。拆成 `sectionUi.tsx`（Section / Row / Segmented 原子）+ 7 个 `*Section.tsx`；指纹状态机（273 行）整块进 `KnownHostsSection.tsx`。UI 原子必须独立放，否则 7 个 section 会反向依赖 `SettingsPanel` 形成循环 import |
+| **回归** | 新增 `scripts/verify-repository-split.cjs`（`npm run test:repository`）：临时数据目录真跑 8 个域读写，**48 个断言全打在行为上** —— 凭据三态语义、分组默认值、空分组名必须抛错、sortOrder 递增、导入去重、历史上限、设置合并与迁移、巡检项超时三档钳制、指纹 refresh 不新增条目、8 个 JSON 各写各的 |
+| **回归** | 新增 `scripts/probe-settings-sections.cjs`：CDP 逐个展开 10 个设置分区，确认渲染出真实控件并实测主题切换生效 |
+| **修测试的坑** | `smoke-cdp` 的「跟随终端目录」偶发 FAIL：分区展开状态存进 localStorage，前一个 probe 展开过后 smoke 再点反而收起。代码本身没问题（全新 profile 11/11），但脚本不能重复运行是真坑，已改成「看到就停」的循环 |
+
+#### v1.6.2（2026-10-29）
+
+| 分类 | 内容 |
+|---|---|
+| **工具链** | **项目第一次有 lint 机制**。此前只有 `tsc` 把类型关。新增 `eslint.config.mjs`（扁平配置，ESLint 9 + typescript-eslint 8）分三档：主进程 / preload / shared 走 `recommendedTypeChecked`；渲染层加 `eslint-plugin-react-hooks`；`scripts/*.cjs` 只查明显错误。**刻意不开** `semi` / `quotes` / `indent` —— 既有代码 23537 行不带分号、单引号为主，是既定风格，动了只会制造噪声把真问题埋掉 |
+| **修掉的真 bug** | ① `CommandPanel` / `CommandCenter` 的 `?? []` 每次渲染都分配新数组，作为 `useMemo` 依赖永不相等 —— 记忆化等于没有；② `SessionFileTree` 的 `forceRefresh` 是 `version` 的纯函数却在渲染期计算后被 effect 隐式捕获；③ `zmodem.ts` 的 `send_offer` 返回值没标注，导致 `transfer.*` 整条 any 调用链；④ `String(err ?? '')` 会把对象变成 `[object Object]`，既匹配不到协议特征又掩盖真实原因 |
+| **规则误报的处理** | `require-await` 在 `firmware.upload` / `firmwareStore.startWaitOnline` 上是误报（接口契约是 Promise，调用方一律 `await`），保留 `async` + 行内 disable 说明。ZMODEM 的 `no-control-regex` 同理 —— ZDLE / DLE 就是协议字节 |
+
+#### v1.6.1（2026-10-29）
+
+| 分类 | 内容 |
+|---|---|
+| **重构（主进程）** | **`main/index.ts` 2199 → 1432 行**（其中约 1050 行是原有的 `--smoke` 自检）。134 个 handler 从单个 615 行 `registerIpc()` 按域拆到 `src/main/ipc/` 的 12 个文件。配套抽出 `ipc/handle.ts`（包装 + 通道标题）与 `windowRef.ts`（主窗口引用），避免子模块反向依赖入口形成循环 import（§5.15） |
+| **重构（前端）** | 上传/下载执行链路收敛进 `sftpStore`（`uploadFileDialog` / `uploadFolder` / `downloadTo` / `downloadToDefault`）+ `useUploadTarget` hook。`FileExplorer` 1082→993 行、`SessionFileTree` 812→729 行，两者 6 行重复片段 **31 → 2**（§5.16） |
+| **新增回归** | `scripts/verify-ipc-registration.cjs`（`npm run test:ipc`）三层对账：141 个通道常量逐个找注册点 / 真跑 `registerAllIpc()` 数 `ipcMain` 注册数与常量表比对并查多余注册 / 抽查失败包装与越权路径。**第一次跑就抓出死通道 `SESSION_RECONNECT_NOW`**（常量表里有但从未注册也从未被调用），已删除 |
+| **新增回归** | `scripts/probe-ipc-domains.cjs`：真实应用里逐个域调一个代表通道（17 个域） |
+
+#### v1.6.0（2026-10-29）
+
+| 分类 | 内容 |
+|---|---|
+| **新增功能** | **上传文件夹**：`TransferControl.keepRoot` 区分「保留目录名」与历史「把内容铺进目标目录」两种语义，空目录也建出来；三条 UI 入口 + 三处右键菜单；新增 IPC `SFTP_UPLOAD_FOLDER_DIALOG` / `SFTP_SCAN_FOLDERS`（§5.13） |
+| **新增功能** | **主机指纹更新**：探测设备当前值 → 展示「旧 → 新」→ 用户确认 → 写回。三处入口（设置 / 连接编辑器 / 终端报错层）。新增 IPC `KNOWN_HOSTS_PROBE`（只握手不认证不写库）/ `KNOWN_HOSTS_REFRESH`（§5.14） |
+| **缺陷修复** | **指纹算法一直是错的**：旧实现设了 `hostHash='sha256'`（ssh2 把摘要转 hex 再回调），代码又对那份 hex 做 base64，存下来的是 `SHA256:<hex>`，跟 `ssh-keygen -lf` 完全对不上。现统一 `SHA256:base64(sha256(公钥))`；老记录靠 `isLegacyFingerprint()` 兼容并静默迁移 |
+| **缺陷修复** | 指纹冲突不再靠 `hostVerifier` 抛异常传递（那个回调在 ssh2 密钥交换流程里同步调用，抛异常会打断协议状态机、错误退化成含糊的 `Host denied`）。改为记录进 `hostKeyMismatches` 并返回 `false`，上层用 `takeHostKeyMismatch()` 取详情 |
+| **新增回归** | `verify-upload-folder.cjs`（22 项）、`verify-hostkey.cjs`（14 项）、`perf-new-features.cjs`（真实 IPC 链路）、`probe-packaged-features.cjs`（打包产物内核对新 API 是否真的进包） |
+
 #### v1.5.2（2026-10-27）
+
 
 | 分类 | 内容 |
 |---|---|
@@ -565,6 +708,11 @@ env -u ELECTRON_RUN_AS_NODE ./node_modules/electron/dist/electron.exe . --smoke 
 - **Gitee 作为更新源不可用**（评估后搁置，用户 2026-10-26 定「先暂时不搞」）：`electron-updater` 的 `providerFactory.js` 无 gitee 分支（写 `publish.provider: gitee` 打包期直接抛 `Unsupported provider: gitee`）；Gitee Release 附件 CDN 对 `Range` 返回 **200 全量**而非 206，`isUrlProbablySupportMultiRangeRequests(url) = !url.includes('s3.amazonaws.com')` 会把 gitee URL 判成支持多 Range，导致差分下载必失败并回落全量重下（且无断点续传）；附件下载地址是带 `token` / `ts` 的时效签名，不能固化进 `latest.yml`。唯一干净通道是 Gitee raw 路径（实测 206 + `Accept-Ranges: bytes`），但 82MB exe 进 git 历史不可接受。当前发布链路仍是 `publish.provider: github` / owner `yanxici` / repo `ssh-workbench`；
 - **文件面板跟随有边界**（v1.5.1）：只认单行 `cd` / `pushd` 与 OSC 7；`alias` 改写的 `cd`、环境里带函数的 `cd`、以及远端未配 OSC 7 时的脚本内 `cd` 都跟不到，此时面板停在上一个目录。`Ctrl-U` / `Ctrl-W` / 方向键等编辑后整行被保守丢弃，也是「宁可不动，不跳错」的取舍；
 - **目录缓存的失效时机**（v1.5.1）：TTL 到期、显式 `refresh()`、会话关闭、以及上传/删除/改名/新建等写操作 —— 若是**远端其它人**改了目录内容，面板要等 TTL 到期才看到。
+- **lint 覆盖的是 `src/`，不是全部**（v1.6.2）：`npm run lint` 只跑 `src/**/*.{ts,tsx}`；`scripts/*.cjs` 要单独 `npm run lint:scripts`（`npm run lint:all` 一次跑完）。`npm run check` 只做 typecheck + src lint。
+- **ESLint 刻意不开排版规则**（v1.6.2）：`semi` / `quotes` / `indent` 全部关闭。既有代码 23537 行不带分号、以单引号为主，那是既定风格；开排版规则会产出几千条噪声把真问题埋掉。要统一风格应该单独做一次全仓格式化。
+- **两条 `require-await` 是行内豁免**（v1.6.2）：`firmware.upload` 与 `firmwareStore.startWaitOnline` 的接口契约是 Promise，调用方一律 `await`，去掉 `async` 会让类型对不上。这类豁免必须带注释说明原因。
+- **`repository.ts` 是 re-export barrel**（v1.6.3）：新增数据域请直接在 `src/main/store/repo/` 下开新文件，并在 `repository.ts` 补一行 `export`。不要往里加实现 —— 它会重新长回上帝文件。
+- **设置分区的展开状态存在 localStorage**（v1.6.3）：key 为 `sshwb.settings.sections`。副作用是**自动化脚本不能假设「点一下就会展开」** —— 上一轮已经展开过的话，再点就是收起。写 UI 脚本要用「看到就停」的循环（`smoke-cdp.cjs` 已按此改写）。
 
 ## 10. 开发自检
 
@@ -582,7 +730,25 @@ node scripts/verify-cwdstore.cjs         # cwd 按 sessionId 隔离、会话关�
 node scripts/verify-cwdfollow.cjs        # 跟随决策：初始 Tab / 序号消费 / 关开关与断线 / 重开补跳（v1.5.1 修复）
 node scripts/verify-dirloader.cjs        # 同帧请求合并、按会话分段、切会话丢弃（v1.5.1）
 node scripts/verify-dircache.cjs         # TTL 缓存 / stale-while-revalidate / 写操作失效（v1.5.1）
+node scripts/verify-upload-folder.cjs    # 上传文件夹：保留目录名 / 铺平 / 空目录 / 扫描统计（v1.6.0，22 项）
+node scripts/verify-hostkey.cjs          # 主机指纹格式 / 旧格式兼容 / 不误判（v1.6.0，14 项）
+node scripts/verify-repository-split.cjs # 数据层行为：凭据三态 / 分组默认 / 历史上限 / 超时钳制（v1.6.3，48 项）
 for f in scripts/verify-zmodem*.cjs; do node "$f"; done  # ZMODEM 协议 / 解码 / 渲染层 / 端到端（P4-c，4 个脚本）
+```
+
+需要真实 Electron 主进程才能跑的（会拉起 `ipcMain`）：
+
+```bash
+npm run test:ipc          # 141 个通道三层对账：静态注册点 / 运行时注册数 / 失败包装与越权拒绝（v1.6.1）
+npx electron scripts/perf-new-features.cjs   # 新功能链路：通道注册 + 目录扫描 + 指纹探测失败路径（v1.6.0）
+```
+
+打包产物核对（先起 exe 带 CDP 端口，再跑下面这些）：
+
+```bash
+node scripts/probe-packaged-features.cjs <port>  # preload 新 API 是否真进包 / IPC 通道连通 / 设置分区渲染
+node scripts/probe-ipc-domains.cjs <port>        # 17 个 IPC 域各挑一个代表通道
+node scripts/probe-settings-sections.cjs <port>  # 设置面板 10 个分区逐个展开，确认不是空壳
 ```
 
 耗时类基线（不是断言，用来对比回归）：
