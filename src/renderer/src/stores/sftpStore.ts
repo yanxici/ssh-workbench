@@ -11,6 +11,74 @@ import { normalizeRemoteDir, rememberUploadDir, resolveUploadDir } from '@/lib/u
 import { clearDirCache, invalidateDir, loadDir, peekDir } from '@/lib/dirCache'
 import { useToastStore } from './toastStore'
 
+/** 一次「选本地 → 上传」的结果：入队数 + 实际落点 */
+export interface UploadResult {
+  count: number
+  /** 远端目标目录 */
+  target: string
+}
+
+/**
+ * 上传执行链路的唯一实现：解析目标目录 → 记住 → 弹系统对话框 → 入队 → 失效缓存 → 提示。
+ *
+ * 抽出来之前，文件侧栏、会话文件树、双栏远程栏各自写了一遍（每份 19–26 行），
+ * 改一处行为（比如目录解析兜底）就得同步改 4 个地方，漏一个就是「有的入口好使、有的不好使」。
+ *
+ * 用参数注入 get 而不是直接 useSftpStore.getState()：避免本模块在
+ * 自身初始化期间引用自己的导出（circular），也让这个函数可以被单测直接驱动。
+ */
+async function pickAndUpload(
+  get: () => {
+    sessionId: string | null
+    remoteDir: string
+    uploadRequest: { localPaths: string[]; defaultDir: string } | null
+  },
+  remoteDir: string | undefined,
+  kind: 'file' | 'folder'
+): Promise<UploadResult | null> {
+  const sessionId = get().sessionId
+  if (!sessionId) return null
+
+  // 目标目录：显式指定 → 当前目录 → 上次用过 → 远端 home
+  const target =
+    normalizeRemoteDir(remoteDir ?? get().remoteDir) || (await resolveUploadDir(sessionId))
+  if (!target) {
+    useToastStore.getState().push({
+      kind: 'warning',
+      title: '没有可用的目标目录',
+      detail:
+        kind === 'folder'
+          ? '请先进入远端的一个目录，再上传文件夹'
+          : '请先进入远端的一个目录，再上传文件'
+    })
+    return null
+  }
+  rememberUploadDir(sessionId, target)
+
+  const label = kind === 'folder' ? '上传文件夹' : '上传文件'
+  const res =
+    kind === 'folder'
+      ? await call(window.api.sftp.uploadFolderDialog(sessionId, target, true), {
+          errorTitle: `${label}失败`
+        })
+      : await call(window.api.sftp.uploadDialog(sessionId, target), {
+          errorTitle: `${label}失败`
+        })
+  if (!res || res.canceled) return null
+
+  // 目标目录内容会变：先失效缓存，各面板按需重绘（它们自己决定刷新哪个树）
+  invalidateDir(sessionId, target)
+  useToastStore.getState().push({
+    kind: 'info',
+    title:
+      kind === 'folder'
+        ? `已加入 ${res.count} 个文件夹上传任务`
+        : `已加入 ${res.count} 个上传任务`,
+    detail: kind === 'folder' ? `目标：${target}（远端保留同名目录）` : `目标：${target}`
+  })
+  return { count: res.count, target }
+}
+
 interface SftpState {
   open: boolean
   sessionId: string | null
@@ -62,8 +130,18 @@ interface SftpState {
    *                 拖拽沿用历史语义 false，把目录内容铺进目标目录）
    */
   uploadPaths: (localPaths: string[], remoteDir?: string, keepRoot?: boolean) => Promise<void>
-  /** 弹系统目录对话框上传文件夹（可多选，保留目录名） */
-  uploadFolder: (remoteDir?: string) => Promise<void>
+  /**
+   * 弹系统对话框上传文件（可多选），落到 resolved 目标目录。
+   *
+   * 这一步以前在每个面板里各写一遍（解析目录 → 记住 → 弹框 → toast → 刷新），
+   * 5 个面板就是 5 份几乎相同的 20 行。现在执行链路只留在这里，
+   * 面板只负责「按钮点了调用它」和「成功后重绘自己」。
+   *
+   * @returns 实际入队的任务数；用户取消或没有可用目录时返回 null
+   */
+  uploadFileDialog: (remoteDir?: string) => Promise<UploadResult | null>
+  /** 弹系统目录对话框上传文件夹（可多选，远端保留同名目录） */
+  uploadFolder: (remoteDir?: string) => Promise<UploadResult | null>
   /**
    * 请求上传：先解析默认目标目录并挂起一个待确认请求，
    * 由 FileManagerPanel 渲染目标目录选择框，用户确认后才真正开始传输。
@@ -73,7 +151,18 @@ interface SftpState {
   uploadRequest: { localPaths: string[]; defaultDir: string } | null
   /** 关闭待确认请求（用户取消） */
   cancelUploadRequest: () => void
-  downloadPaths: (remotePaths: string[], localDir?: string) => Promise<void>
+  /**
+   * 下载一批远端路径到指定的本地目录（不弹对话框）。
+   * @returns 入队数；没有可用目录/空选择时返回 null
+   */
+  downloadPaths: (remotePaths: string[], localDir?: string) => Promise<UploadResult | null>
+  /**
+   * 下载：给了本地目录就直接入队，没给就弹系统对话框选保存位置。
+   * 目录的递归遍历在主进程（sftpManager），渲染层不需要预先展开。
+   */
+  downloadTo: (remotePaths: string[], localDir?: string) => Promise<UploadResult | null>
+  /** 一键下载到本机「下载」文件夹（不弹对话框） */
+  downloadToDefault: (remotePaths: string[]) => Promise<UploadResult | null>
   applyProgress: (e: TransferProgressEvent) => void
   /** 暂停 / 继续 / 终止单个传输任务（主进程负责真正停住分块循环） */
   pauseTask: (id: string) => Promise<void>
@@ -220,32 +309,10 @@ export const useSftpStore = create<SftpState>()((set, get) => ({
     }
   },
 
-  uploadFolder: async (remoteDir) => {
-    const sessionId = get().sessionId
-    if (!sessionId) return
-    const target =
-      normalizeRemoteDir(remoteDir ?? get().remoteDir) || (await resolveUploadDir(sessionId))
-    if (!target) {
-      useToastStore.getState().push({
-        kind: 'warning',
-        title: '没有可用的目标目录',
-        detail: '请先进入远端的一个目录，再上传文件夹'
-      })
-      return
-    }
-    rememberUploadDir(sessionId, target)
-    const res = await call(window.api.sftp.uploadFolderDialog(sessionId, target, true), {
-      errorTitle: '上传文件夹失败'
-    })
-    if (res && !res.canceled) {
-      invalidateDir(sessionId, target)
-      useToastStore.getState().push({
-        kind: 'info',
-        title: `已加入 ${res.count} 个文件夹上传任务`,
-        detail: `目标：${target}（远端保留同名目录）`
-      })
-    }
-  },
+  uploadFileDialog: async (remoteDir) =>
+    pickAndUpload(get, remoteDir, 'file'),
+  uploadFolder: async (remoteDir) =>
+    pickAndUpload(get, remoteDir, 'folder'),
 
   requestUpload: async (localPaths, preferredDir) => {
     const sessionId = get().sessionId
@@ -260,17 +327,41 @@ export const useSftpStore = create<SftpState>()((set, get) => ({
   downloadPaths: async (remotePaths, localDir) => {
     const sessionId = get().sessionId
     const target = localDir ?? get().localDir
-    if (!sessionId || remotePaths.length === 0 || !target) return
+    if (!sessionId || remotePaths.length === 0 || !target) return null
     const ids = await call(window.api.sftp.download(sessionId, remotePaths, target), {
       errorTitle: '下载失败'
     })
-    if (ids) {
-      useToastStore.getState().push({
-        kind: 'info',
-        title: `已加入 ${ids.length} 个下载任务`,
-        detail: `目标：${target}`
-      })
-    }
+    if (!ids) return null
+    useToastStore.getState().push({
+      kind: 'info',
+      title: `已加入 ${ids.length} 个下载任务`,
+      detail: `目标：${target}`
+    })
+    return { count: ids.length, target }
+  },
+
+  downloadTo: async (remotePaths, localDir) => {
+    const sessionId = get().sessionId
+    if (!sessionId || remotePaths.length === 0) return null
+    // 给了目录就走上面那条（本地栏拖拽、右键「下载到左侧目录」）；
+    // 没给就弹系统对话框，落点由用户临时决定
+    if (localDir) return get().downloadPaths(remotePaths, localDir)
+    const res = await call(window.api.sftp.downloadDialog(sessionId, remotePaths), {
+      errorTitle: '下载失败'
+    })
+    if (!res || res.canceled) return null
+    useToastStore.getState().push({
+      kind: 'info',
+      title: `已加入 ${res.count} 个下载任务`
+    })
+    return { count: res.count, target: '' }
+  },
+
+  downloadToDefault: async (remotePaths) => {
+    const sessionId = get().sessionId
+    if (!sessionId || remotePaths.length === 0) return null
+    const dir = await call(window.api.sftp.downloadsDir(), { silent: true })
+    return dir ? get().downloadPaths(remotePaths, dir) : null
   },
 
   applyProgress: (e) => {

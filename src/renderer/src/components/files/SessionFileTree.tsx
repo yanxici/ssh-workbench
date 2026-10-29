@@ -24,8 +24,9 @@ import { useSessionStore } from '@/stores/sessionStore'
 import { useToastStore } from '@/stores/toastStore'
 import { call } from '@/lib/ipc'
 import { cn, formatBytes, remoteDirname, remoteJoin } from '@/lib/utils'
-import { normalizeRemoteDir, rememberUploadDir, resolveUploadDir } from '@/lib/uploadDir'
+import { normalizeRemoteDir } from '@/lib/uploadDir'
 import { UploadTargetDialog } from './UploadTargetDialog'
+import { useUploadTarget } from './useUploadTarget'
 import {
   ConfirmDialog,
   ContextMenu,
@@ -84,6 +85,8 @@ export function SessionFileTree({
   const version = useSftpStore((s) => s.treeVersion)
   const bumpTree = useSftpStore((s) => s.bumpTree)
   const openEditor = useSftpStore((s) => s.openEditor)
+  const uploadFolder = useSftpStore((s) => s.uploadFolder)
+  const downloadTo = useSftpStore((s) => s.downloadTo)
   /** 所属会话的连接状态：连接中不发 SFTP 请求，就绪后自动加载 */
   const sessionStatus = useSessionStore(
     (s) => s.sessions.find((x) => x.id === sessionId)?.status ?? 'disconnected'
@@ -98,10 +101,7 @@ export function SessionFileTree({
   /** 当前目录（顶部路径栏显示；双击目录时更新并同步终端 cd） */
   const [currentDir, setCurrentDir] = useState<string | null>(null)
   /** 上传前的目标目录确认框 */
-  const [uploadOpen, setUploadOpen] = useState(false)
-  const [uploadDefault, setUploadDefault] = useState('')
-  const [uploadHint, setUploadHint] = useState<string | undefined>(undefined)
-  const [uploadBusy, setUploadBusy] = useState(false)
+
 
   // 初始化：根为 /，取 home 用于自动展开到主目录。
   // 只有会话 connected 后才发起请求（修复「连接瞬间打开文件树」的竞态失败）
@@ -137,48 +137,18 @@ export function SessionFileTree({
   /**
    * 上传：先确认目标目录，再弹系统的本地文件选择框。
    *
-   * 以前这里是 `autoExpand[last] ?? '/'` —— home 还没取到（或取失败）时
-   * 直接退化成根目录，用户也没法改；现在默认值走同一条解析链，
-   * 真的没有默认值时对话框会留空要求用户自己选，绝不静默落根。
+   * 「确认目标目录」这套状态机与文件侧栏共用 useUploadTarget，
+   * 真正的传输链路在 sftpStore.uploadFileDialog。
    */
-  const beginUpload = async (preferred?: string): Promise<void> => {
-    const dir = await resolveUploadDir(
-      sessionId,
-      preferred ?? (selected?.type === 'directory' ? selected.path : currentDir)
-    )
-    setUploadDefault(dir)
-    setUploadHint(
-      preferred
-        ? `目标来自所选条目：${preferred}`
-        : dir
-          ? undefined
-          : '还没有可用目录，请手动指定上传位置'
-    )
-    setUploadOpen(true)
-  }
+  const uploadTarget = useUploadTarget(sessionId, bumpTree)
+  const selectedDir = (): string | undefined =>
+    selected?.type === 'directory' ? selected.path : (currentDir ?? undefined)
 
-  const doUpload = async (dir: string): Promise<void> => {
-    const target = normalizeRemoteDir(dir)
-    if (!target) return
-    setUploadBusy(true)
-    try {
-      rememberUploadDir(sessionId, target)
-      const res = await call(window.api.sftp.uploadDialog(sessionId, target), {
-        errorTitle: '上传失败'
-      })
-      if (res && !res.canceled) {
-        useToastStore.getState().push({
-          kind: 'info',
-          title: `已加入 ${res.count} 个上传任务`,
-          detail: `目标：${target}`
-        })
-        bumpTree()
-      }
-    } finally {
-      setUploadBusy(false)
-      setUploadOpen(false)
-    }
-  }
+  const beginUpload = (preferred?: string): Promise<void> =>
+    uploadTarget.request(
+      preferred ?? selectedDir(),
+      preferred ? `目标来自所选条目：${preferred}` : undefined
+    )
 
   const handleUpload = (): void => {
     void beginUpload()
@@ -186,30 +156,8 @@ export function SessionFileTree({
 
   /** 上传文件夹：目标目录与「上传文件」同一套解析，落点保留同名目录 */
   const handleUploadFolder = async (): Promise<void> => {
-    const target = await resolveUploadDir(
-      sessionId,
-      selected?.type === 'directory' ? selected.path : currentDir
-    )
-    if (!target) {
-      useToastStore.getState().push({
-        kind: 'warning',
-        title: '没有可用的目标目录',
-        detail: '请先展开一个远端目录'
-      })
-      return
-    }
-    rememberUploadDir(sessionId, target)
-    const res = await call(window.api.sftp.uploadFolderDialog(sessionId, target, true), {
-      errorTitle: '上传文件夹失败'
-    })
-    if (res && !res.canceled) {
-      useToastStore.getState().push({
-        kind: 'info',
-        title: `已加入 ${res.count} 个文件夹上传任务`,
-        detail: `目标：${target}（保留同名目录）`
-      })
-      bumpTree()
-    }
+    const res = await uploadFolder(selectedDir())
+    if (res) bumpTree()
   }
 
   /** 双击目录：更新路径栏，并让终端 cd 过去 */
@@ -230,13 +178,7 @@ export function SessionFileTree({
 
   const handleDownload = (): void => {
     if (!selected) return
-    void call(window.api.sftp.downloadDialog(sessionId, [selected.path]), {
-      errorTitle: '下载失败'
-    }).then((res) => {
-      if (res && !res.canceled) {
-        useToastStore.getState().push({ kind: 'info', title: '已加入下载任务' })
-      }
-    })
+    void downloadTo([selected.path])
   }
 
   return (
@@ -351,15 +293,7 @@ export function SessionFileTree({
       </div>
 
       {/* 上传目标目录确认（选完目录才弹本地文件选择框） */}
-      <UploadTargetDialog
-        open={uploadOpen}
-        sessionId={sessionId}
-        defaultDir={uploadDefault}
-        hint={uploadHint}
-        busy={uploadBusy}
-        onCancel={() => setUploadOpen(false)}
-        onConfirm={(dir) => void doUpload(dir)}
-      />
+      <UploadTargetDialog {...uploadTarget.dialogProps} />
     </div>
   )
 }
@@ -581,6 +515,9 @@ function TreeRow({
   onUploadTo: (dir: string) => void
 }): JSX.Element {
   const { menu, openMenu, closeMenu } = useContextMenu<string>()
+  // 上传执行链路统一在 store 里，这一层只负责「点了 → 刷新这级目录」
+  const uploadFolder = useSftpStore((s) => s.uploadFolder)
+  const downloadTo = useSftpStore((s) => s.downloadTo)
   const [dialog, setDialog] = useState<null | 'mkdir' | 'rename' | 'chmod'>(null)
   const [pendingDelete, setPendingDelete] = useState(false)
 
@@ -631,32 +568,12 @@ function TreeRow({
 
   /** 上传文件夹到本行的落点（目录本身 / 文件所在目录） */
   const uploadFolderHere = async (): Promise<void> => {
-    const target = await resolveUploadDir(
-      sessionId,
-      isDir ? file.path : remoteDirname(file.path)
-    )
-    if (!target) return
-    rememberUploadDir(sessionId, target)
-    const res = await call(window.api.sftp.uploadFolderDialog(sessionId, target, true), {
-      errorTitle: '上传文件夹失败'
-    })
-    if (res && !res.canceled) {
-      useToastStore.getState().push({
-        kind: 'info',
-        title: `已加入 ${res.count} 个文件夹上传任务`,
-        detail: `目标：${target}（保留同名目录）`
-      })
-      onRefresh()
-    }
+    const res = await uploadFolder(isDir ? file.path : remoteDirname(file.path))
+    if (res) onRefresh()
   }
 
   const downloadHere = async (): Promise<void> => {
-    const res = await call(window.api.sftp.downloadDialog(sessionId, [file.path]), {
-      errorTitle: '下载失败'
-    })
-    if (res && !res.canceled) {
-      useToastStore.getState().push({ kind: 'info', title: '已加入下载任务' })
-    }
+    await downloadTo([file.path])
   }
 
   const menuItems = (): MenuEntry[] => [
