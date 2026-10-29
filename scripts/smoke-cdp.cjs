@@ -173,20 +173,32 @@ const CLOSE_POPUPS = `(() => {
   )
   check('设置面板可打开', settingsClicked && modalTitle === '设置', `title=${modalTitle}`)
 
-  // 「跟随终端目录」开关在「行为」分区里（分区默认折叠，先展开再找）
-  const followToggle = await cdp.evaluate(`(() => {
-    const ov = document.querySelector('.modal-overlay');
-    if (!ov) return 'no-modal';
-    const sec = [...ov.querySelectorAll('button, [role="button"], .settings-section-head')]
-      .find(e => (e.textContent || '').includes('行为'));
-    if (sec) sec.click();
-    return 'ok';
-  })()`)
-  await sleep(600)
-  const followVisible = await cdp.evaluate(
-    'document.querySelector(".modal-overlay")?.innerText.includes("跟随终端目录") ?? false'
-  )
-  check('设置里有「跟随终端目录」开关', followToggle === 'ok' && followVisible,
+  /*
+   * 「跟随终端目录」开关在「行为」分区里。
+   *
+   * 分区展开状态会存进 localStorage 并在下次打开时恢复 —— 这意味着
+   * 「点一下」并不总是展开：如果上一次运行（或别的 probe 脚本）已经把它
+   * 展开了，这一下反而会收起。所以这里改成「看到就停」的循环，
+   * 让脚本可以重复运行而不受上一轮残留影响。
+   */
+  let followToggle = 'no-modal'
+  let followVisible = false
+  for (let i = 0; i < 4; i++) {
+    followVisible = await cdp.evaluate(
+      'document.querySelector(".modal-overlay")?.innerText.includes("跟随终端目录") ?? false'
+    )
+    if (followVisible) break
+    followToggle = await cdp.evaluate(`(() => {
+      const ov = document.querySelector('.modal-overlay');
+      if (!ov) return 'no-modal';
+      const sec = [...ov.querySelectorAll('button, [role="button"], .settings-section-head')]
+        .find(e => (e.textContent || '').includes('行为'));
+      if (sec) sec.click();
+      return 'ok';
+    })()`)
+    await sleep(500)
+  }
+  check('设置里有「跟随终端目录」开关', followVisible,
     `expand=${followToggle} visible=${followVisible}`)
 
   await cdp.evaluate(CLOSE_POPUPS)
