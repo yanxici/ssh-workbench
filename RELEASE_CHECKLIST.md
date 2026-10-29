@@ -305,7 +305,7 @@ git -c http.proxy=http://127.0.0.1:7897 push origin v<ver>
 - [ ] **远端资产口径**（用户 2026-10-26 定的规则，v1.6.x 实际执行如下）
   - **最小口径（规则原文）**：只传 `ssh-workbench-Setup-<ver>.exe` + `.blockmap` + `latest.yml` —— 后两个是自动更新元数据，不是"另一个版本"，缺了客户端查不到更新 / 无法差量下载
   - **不传**：`portable.exe`、`win.zip` —— 与 Setup 解出来的 `win-unpacked` 一致，多传白费 200+ MB
-  - **v1.6.x 实际做法（偏离了规则，需用户确认）**：三个产物全传了，因为 CI 先传过一套、`--clobber` 覆盖时干脆一起传齐了。**下次发版请按最小口径**，除非用户明确要 zip/portable
+  - **v1.6.3 已按此口径修正**：一度因覆盖 CI 产物把三个文件都传了，随后删掉 portable 与 `SSH.Workbench-<ver>-win.zip`，只留 Setup + blockmap + latest.yml。删后核对：两者 404，Setup 返回 206 且 sha512 与 `latest.yml` 逐字符一致
   - 本地 `dist-v13` 照样出三件套，这条**只约束远端上传**
 - [ ] asset `state=uploaded`，体积与本地一致
 - [ ] 回读 release 的 `assets` 数组：恰好 3 个文件，无 portable / zip
