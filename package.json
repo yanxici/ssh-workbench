@@ -22,6 +22,7 @@
     "test:cwdfollow": "node scripts/verify-shellcwd.cjs && node scripts/verify-cwdstore.cjs && node scripts/verify-cwdfollow.cjs",
     "test:hostkey": "node scripts/verify-hostkey.cjs",
     "test:uploadfolder": "node scripts/verify-upload-folder.cjs",
+    "test:ipc": "electron scripts/verify-ipc-registration.cjs",
     "test:features": "node scripts/verify-hostkey.cjs && node scripts/verify-upload-folder.cjs",
     "test:stress": "node scripts/stress-test.js && node scripts/stress-cwd.cjs",
     "test:stress:e2e": "electron scripts/stress-e2e.cjs",

@@ -127,9 +127,13 @@ export const IPC = {
   ERR_REPORT: 'err:report',
 
   /* ---------------- 自动重连 ---------------- */
-  /** 手动触发一次重连（UI 的「立即重试」按钮） */
-  SESSION_RECONNECT_NOW: 'session:reconnect-now',
-  /** 取消正在进行的自动重连（用户主动关闭标签） */
+  /**
+   * 取消正在进行的自动重连（用户主动关闭标签）。
+   *
+   * 注：这里曾有一个 SESSION_RECONNECT_NOW（手动立即重连），但从未注册过也没有
+   * 任何调用方 —— 重连走的是渲染层 sessionStore.reconnect() 重新发 SESSION_OPEN，
+   * 那条死通道在 v1.6.0 拆分 IPC 时被 verify-ipc-registration 抓出来并删除。
+   */
   SESSION_RECONNECT_CANCEL: 'session:reconnect-cancel',
 
   /* ---------------- 端口转发 / 隧道 ---------------- */
