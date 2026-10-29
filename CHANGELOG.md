@@ -5,6 +5,34 @@ All notable changes to SSH Workbench will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.1] - 2026-10-29
+
+### Changed（重构，无功能变化）
+
+#### 上传/下载执行链路收敛到 store
+- 新增 `sftpStore.uploadFileDialog` / `downloadTo` / `downloadToDefault`：**唯一**的执行链路（解析目标目录 → 弹系统对话框 → 入队 → 失效目录缓存 → 提示），返回 `{ count, target }` 让各面板自己决定怎么刷新
+- 新增 `components/files/useUploadTarget.ts`：把「先确认目标目录再弹文件框」的 4 个 useState + beginUpload + doUpload 抽成 hook，两个面板只渲染 `dialogProps`
+- 拆分前：`FileExplorer` / `SessionFileTree` / `RemotePane` 各写一遍，一份 19–26 行。改一处行为（比如目录解析兜底）要同步改 4 个地方，漏一个就是「有的入口好使、有的不好使」
+- 净效果：`FileExplorer` 1082→993 行，`SessionFileTree` 812→729 行，两者 6 行重复片段 **31 → 2**
+
+#### main/index.ts 按域拆分
+- 原本 2199 行，同时是窗口创建、菜单、更新器、错误日志和 **134 个 IPC handler** 的宿主；22 个业务域挤在一个 615 行的 `registerIpc()` 里
+- 新增 `src/main/ipc/`：`errors` / `connections` / `sessions` / `commands` / `settings` / `sftp` / `zmodem` / `localFs` / `diagnostics` / `devices` / `backupTunnel` / `windowUpdate` 共 12 个域文件，每个只导入自己用到的模块
+- 新增 `ipc/handle.ts`（IPC 包装 + 通道中文标题）与 `windowRef.ts`（主窗口引用），避免 20 个子模块反过来依赖入口形成循环 import
+- `index.ts` 只留窗口 / 生命周期 / 事件接线：2199 → 1432 行（其中约 1050 行是原有的 `--smoke` 自检，属独立功能）
+
+### Removed
+
+- **死通道 `SESSION_RECONNECT_NOW`**（`session:reconnect-now`）：常量表里有，但从未注册过、也从未被任何代码调用（查历史版本同样是 0 处）。重连实际走渲染层 `sessionStore.reconnect()` 重发 `SESSION_OPEN`。是新增的 IPC 完整性自检把它抓出来的。
+
+### Added (scripts)
+
+- `scripts/verify-ipc-registration.cjs`（`npm run test:ipc`）：三层对账 ——
+  1. 静态：`shared/ipc.ts` 里 141 个通道常量逐个在 `src/main` 找注册点；
+  2. 运行时：真跑 `registerAllIpc()`，数 `ipcMain` 上实际注册数并与常量表比对（这次就是靠它发现死通道，以及确认拆分没漏搬 handler）；
+  3. 行为：抽查通道可调用、失败被包装成 `{ ok: false }` 而非抛异常、导入通道拒绝未授权路径
+- `scripts/probe-ipc-domains.cjs`：在真实应用里逐个域调一个代表通道（17 个域），验证拆分后功能面完整
+
 ## [1.6.0] - 2026-10-29
 
 ### Added
