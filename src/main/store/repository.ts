@@ -50,7 +50,7 @@ const profileStore = new JsonStore<DeviceProfile[]>(join(dataDir(), 'profiles.js
 export interface KnownHost {
   host: string
   port: number
-  /** SHA256:xxxx 格式 */
+  /** SHA256:<base64> 格式（与 OpenSSH 一致）；老记录可能是 SHA256:<hex>，校验时兼容 */
   fingerprint: string
   addedAt: number
 }
@@ -739,6 +739,20 @@ export async function upsertKnownHost(entry: KnownHost): Promise<void> {
 export async function listKnownHosts(): Promise<KnownHost[]> {
   const all = await knownHostStore.read()
   return Object.values(all).sort((a, b) => b.addedAt - a.addedAt)
+}
+
+/**
+ * 更新一条已知主机记录的指纹（设备重装 / 固件升级 / 换证书之后）。
+ * 只改指纹与时间戳，不动 host/port 主键。
+ */
+export async function refreshKnownHost(
+  host: string,
+  port: number,
+  fingerprint: string
+): Promise<KnownHost> {
+  const entry: KnownHost = { host, port, fingerprint, addedAt: Date.now() }
+  await upsertKnownHost(entry)
+  return entry
 }
 
 export async function deleteKnownHost(key: string): Promise<void> {

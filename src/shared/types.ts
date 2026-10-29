@@ -493,6 +493,11 @@ export interface TestConnectionResult {
   banner?: string
   /** 主机密钥指纹（SHA256） */
   fingerprint?: string
+  /**
+   * 主机指纹冲突详情：known = 本地记录里的，actual = 设备当前的。
+   * 有值时渲染层可以直接给出「更新主机指纹」的入口。
+   */
+  hostKeyMismatch?: { known: string | null; actual: string }
 }
 
 /** 剪贴板 ssh 命令解析结果 */
@@ -558,6 +563,24 @@ export interface TransferTask {
   unit?: 'bytes' | 'files'
   startedAt: number
   finishedAt?: number
+}
+
+/** 待上传文件夹的扫描结果（选完目录后给用户一个「多少文件、多大」的预览） */
+export interface UploadScanItem {
+  localPath: string
+  name: string
+  isDir: boolean
+  /** 该条目（目录则递归）包含的文件数 */
+  files: number
+  bytes: number
+  /** files/bytes 只是下限（目录过大，扫描提前收手） */
+  truncated?: boolean
+}
+
+export interface UploadScanResult {
+  totalFiles: number
+  totalBytes: number
+  items: UploadScanItem[]
 }
 
 export interface LocalFile {

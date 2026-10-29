@@ -5,6 +5,7 @@ import {
   FileText,
   Folder,
   FolderPlus,
+  FolderUp,
   Link2,
   Loader2,
   Pencil,
@@ -38,6 +39,7 @@ export function RemotePane(): JSX.Element {
   const mkdir = useSftpStore((s) => s.mkdirRemote)
   const rename = useSftpStore((s) => s.renameRemote)
   const remove = useSftpStore((s) => s.removeRemote)
+  const uploadFolder = useSftpStore((s) => s.uploadFolder)
   const chmod = useSftpStore((s) => s.chmodRemote)
   const openEditor = useSftpStore((s) => s.openEditor)
 
@@ -72,6 +74,11 @@ export function RemotePane(): JSX.Element {
         label: '下载到左侧目录',
         icon: <Download size={12} />,
         onClick: () => void downloadPaths(targets)
+      },
+      {
+        label: '上传文件夹到此目录',
+        icon: <FolderUp size={12} />,
+        onClick: () => void uploadFolder(f?.type === 'directory' ? path : dir || undefined)
       },
       {
         label: '重命名',
@@ -117,6 +124,13 @@ export function RemotePane(): JSX.Element {
           }}
           title={dir}
         />
+        <button
+          className="btn-icon h-6 w-6 shrink-0"
+          title={dir ? `上传文件夹到 ${dir}（远端保留同名目录）` : '上传文件夹（选择目标目录）'}
+          onClick={() => void uploadFolder(dir || undefined)}
+        >
+          <FolderUp size={13} />
+        </button>
         <button
           className="btn-icon h-6 w-6 shrink-0"
           title="新建文件夹"

@@ -7,6 +7,7 @@ import {
   AlertCircle,
   ChevronDown,
   ChevronUp,
+  Fingerprint,
   Loader2,
   PlugZap,
   RefreshCw,
@@ -20,6 +21,8 @@ import { resolveDark, useSettingsStore } from '@/stores/settingsStore'
 import { getXtermTheme } from '@/theme/colorThemes'
 import { ContextMenu, useContextMenu, type MenuEntry } from '@/components/ui'
 import { call } from '@/lib/ipc'
+import { useConnectionStore } from '@/stores/connectionStore'
+import { useToastStore } from '@/stores/toastStore'
 import { ensureZmodem, detachZmodem, bytesToBase64, requestZmodemConfirm } from '@/lib/zmodem'
 
 function ReconnectButton({ sessionId }: { sessionId: string }): JSX.Element {
@@ -31,6 +34,55 @@ function ReconnectButton({ sessionId }: { sessionId: string }): JSX.Element {
       <RefreshCw size={12} />
       重新连接
       <span className="text-2xs opacity-70">（或按 Enter）</span>
+    </button>
+  )
+}
+
+/**
+ * 指纹冲突时的一键修复：重新探测设备当前指纹 → 写入已知主机 → 重连。
+ *
+ * 设备重装 / 固件升级后整台设备都连不上，而错误文案里让人去设置里翻记录，
+ * 现场太绕；这里直接把动作放在报错的正下方。
+ */
+function UpdateHostKeyButton({ session }: { session: SessionUi }): JSX.Element | null {
+  const [busy, setBusy] = useState(false)
+  const connection = useConnectionStore((s) =>
+    s.connections.find((c) => c.id === session.connectionId)
+  )
+  if (!connection) return null
+  return (
+    <button
+      className="btn mt-1 h-7 px-3 text-xs"
+      disabled={busy}
+      title={`重新探测 ${connection.host}:${connection.port} 的指纹并写入本地记录`}
+      onClick={() => {
+        void (async () => {
+          setBusy(true)
+          try {
+            const probe = await call(
+              window.api.knownHosts.probe(connection.host, connection.port),
+              { errorTitle: `无法获取 ${connection.host}:${connection.port} 的指纹` }
+            )
+            if (!probe) return
+            const saved = await call(
+              window.api.knownHosts.refresh(connection.host, connection.port, probe.fingerprint),
+              { errorTitle: '更新主机指纹失败' }
+            )
+            if (!saved) return
+            useToastStore.getState().push({
+              kind: 'success',
+              title: '已更新主机指纹',
+              detail: '正在重新连接…'
+            })
+            useSessionStore.getState().reconnect(session.id)
+          } finally {
+            setBusy(false)
+          }
+        })()
+      }}
+    >
+      {busy ? <Loader2 size={12} className="animate-spin" /> : <Fingerprint size={12} />}
+      更新主机指纹并重连
     </button>
   )
 }
@@ -352,9 +404,10 @@ export function TerminalView({
             <div className="flex max-w-[460px] flex-col items-center gap-2 text-center">
               <AlertCircle size={22} className="text-danger" />
               <div className="text-xs font-medium text-ink">连接失败</div>
-              <div className="selectable break-all text-2xs leading-relaxed text-ink-3">
+              <div className="selectable whitespace-pre-line break-all text-2xs leading-relaxed text-ink-3">
                 {session.error ?? '未知错误'}
               </div>
+              {/指纹/.test(session.error ?? '') && <UpdateHostKeyButton session={session} />}
               <ReconnectButton sessionId={sessionId} />
             </div>
           )}

@@ -52,6 +52,7 @@ import {
   listDiagSections,
   listHistory,
   listKnownHosts,
+  refreshKnownHost,
   listProfiles,
   listTunnels,
   renameCommandGroup,
@@ -110,6 +111,7 @@ import { sessionManager } from './ssh/sessionManager'
 import { sftpManager } from './ssh/sftpManager'
 import { tunnelManager } from './ssh/portForward'
 import { testConnection } from './ssh/testConnection'
+import { probeHostFingerprint } from './ssh/connectConfig'
 
 let mainWindow: BrowserWindow | null = null
 
@@ -218,6 +220,8 @@ function channelTitle(channel: string): string {
     'session:write': '终端写入失败',
     'sftp:list': '读取远程目录失败',
     'sftp:upload': '上传失败',
+    'sftp:upload-folder-dialog': '上传文件夹失败',
+    'sftp:scan-folders': '扫描本地文件夹失败',
     'sftp:download': '下载失败',
     'sftp:remove': '删除远程文件失败',
     'sftp:mkdir': '新建远程目录失败',
@@ -463,6 +467,23 @@ function registerIpc(): void {
   handle(IPC.KNOWN_HOSTS_LIST, () => listKnownHosts())
   handle(IPC.KNOWN_HOSTS_DELETE, (key: string) => deleteKnownHost(key))
 
+  // 探测设备「现在」的主机指纹：只握手、不认证、不写库。
+  // 用户看到的对比是「记录里的旧值 vs 现场的新值」，所以不能走会拒绝握手的校验流程。
+  handle(IPC.KNOWN_HOSTS_PROBE, async (host: string, port: number) => {
+    const fingerprint = await probeHostFingerprint(host, port)
+    return { host, port, fingerprint }
+  })
+
+  // 更新指纹：缺省重新探测一次再写入，也允许直接带上用户确认过的值。
+  handle(
+    IPC.KNOWN_HOSTS_REFRESH,
+    async (host: string, port: number, fingerprint?: string) => {
+      const next = fingerprint?.trim() || (await probeHostFingerprint(host, port))
+      if (!next.startsWith('SHA256:')) throw new Error('指纹格式不正确（应形如 SHA256:xxxx）')
+      return refreshKnownHost(host, port, next)
+    }
+  )
+
   /* ---------------- 剪贴板 ---------------- */
   handle(IPC.CLIP_READ, () => clipboard.readText())
   handle(IPC.CLIP_WRITE, (text: string) => clipboard.writeText(text))
@@ -486,11 +507,19 @@ function registerIpc(): void {
   handle(IPC.SFTP_WRITE, (sessionId: string, path: string, content: string) =>
     sftpManager.writeText(sessionId, path, content)
   )
-  handle(IPC.SFTP_UPLOAD, async (sessionId: string, localPaths: string[], remoteDir: string) => {
-    // 兜底：渲染层传空/空白目录时不再落到远端根 '/'，改用 home
-    const target = remoteDir?.trim() || (await sftpManager.home(sessionId))
-    return sftpManager.upload(sessionId, localPaths, target)
-  })
+  handle(
+    IPC.SFTP_UPLOAD,
+    async (
+      sessionId: string,
+      localPaths: string[],
+      remoteDir: string,
+      options?: { keepRoot?: boolean }
+    ) => {
+      // 兜底：渲染层传空/空白目录时不再落到远端根 '/'，改用 home
+      const target = remoteDir?.trim() || (await sftpManager.home(sessionId))
+      return sftpManager.upload(sessionId, localPaths, target, options)
+    }
+  )
   handle(IPC.SFTP_DOWNLOAD, (sessionId: string, remotePaths: string[], localDir: string) =>
     sftpManager.download(sessionId, remotePaths, localDir)
   )
@@ -512,6 +541,29 @@ function registerIpc(): void {
     const ids = sftpManager.upload(sessionId, res.filePaths, target)
     return { canceled: false, count: ids.length }
   })
+
+  // 上传文件夹：系统对话框只让选目录，落点是「远端目标目录/本地目录名」
+  handle(
+    IPC.SFTP_UPLOAD_FOLDER_DIALOG,
+    async (sessionId: string, remoteDir: string, keepRoot?: boolean) => {
+      const target = remoteDir?.trim() || (await sftpManager.home(sessionId))
+      const win = BrowserWindow.getFocusedWindow() ?? mainWindow
+      const res = await dialog.showOpenDialog(win as BrowserWindow, {
+        title: `选择要上传到 ${target} 的文件夹（可多选）`,
+        buttonLabel: '上传',
+        properties: ['openDirectory', 'multiSelections']
+      })
+      if (res.canceled || res.filePaths.length === 0) return { canceled: true, count: 0 }
+      const ids = sftpManager.upload(sessionId, res.filePaths, target, {
+        // 默认保留目录名，用户明确选的是「文件夹」而不是「文件夹里的东西」
+        keepRoot: keepRoot !== false
+      })
+      return { canceled: false, count: ids.length }
+    }
+  )
+
+  // 扫描待上传目录（选择文件夹后先给出文件数/体积预览，再决定是否上传）
+  handle(IPC.SFTP_SCAN_FOLDERS, (localPaths: string[]) => sftpManager.scanFolders(localPaths))
 
   handle(IPC.SFTP_DOWNLOAD_DIALOG, async (sessionId: string, remotePaths: string[]) => {
     const win = BrowserWindow.getFocusedWindow() ?? mainWindow

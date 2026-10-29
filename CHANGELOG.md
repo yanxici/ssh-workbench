@@ -5,6 +5,38 @@ All notable changes to SSH Workbench will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.0] - 2026-10-29
+
+### Added
+
+#### 上传文件夹（目录树整棵传过去）
+- 侧栏文件面板、会话文件树、双栏文件管理（远程栏）各新增一个「上传文件夹」按钮，右键菜单同步加「上传文件夹到此处」
+- 新增 IPC `SFTP_UPLOAD_FOLDER_DIALOG`（系统目录对话框，可多选）与 `SFTP_SCAN_FOLDERS`（上传前统计）
+- `sftpManager.upload()` 新增 `options.keepRoot`：
+  - `true`（上传文件夹）：远端落点是 `目标目录/<本地目录名>/...`，空目录也会建出来
+  - `false`（历史拖拽语义，保持不变）：把本地目录的**内容**铺进目标目录
+  - 之前两种场景复用同一段代码，直接把文件夹传上去会「少一层目录」，选了两个同名不同内容的目录还会互相覆盖
+- `sftpManager.scanFolders()`：选完目录先算文件数 / 总字节数（2 万文件封顶，超出标记 `truncated`），避免对着没有总量的进度条等
+- 新增 `scripts/verify-upload-folder.cjs`（22 项，内存 SFTP 假通道）
+
+#### 主机指纹更新
+- 设置 → 已知主机指纹：每条记录新增指纹按钮（探测设备当前值 → 弹「旧 → 新」对比 → 确认后写回），顶部新增「检查全部更新」批量探测
+- 连接编辑器：测试连接报指纹冲突时直接给「更新主机指纹并重测」按钮；测试成功时给「用此指纹更新本地记录」
+- 终端报错覆盖层：错误文案含「指纹」时出现「更新主机指纹并重连」一键按钮，不必再去设置里翻记录
+- 新增 IPC `KNOWN_HOSTS_PROBE`（只握手、不认证、不写库）与 `KNOWN_HOSTS_REFRESH`
+- 新增 `probeHostFingerprint()` / `takeHostKeyMismatch()`：冲突详情（记录值 / 当前值）从 `hostVerifier` 同步回调里带出来，不再只能给一句「校验未通过」
+
+### Fixed
+
+- **指纹算法一直是错的**：旧实现给 ssh2 设了 `hostHash='sha256'`（ssh2 会把摘要转成 hex 再回调），代码又对**那份 hex 字符串**做 base64 —— 存下来的是 `SHA256:<hex>`，与 `ssh-keygen -lf` 完全对不上。现在统一 `SHA256:base64(sha256(公钥))`，与 OpenSSH 一致
+  - 老记录不丢：`isLegacyFingerprint()` 认得 64 位小写 hex 的旧格式，校验时两种都比对，命中一次即静默迁移成标准格式
+- 指纹冲突不再靠 `hostVerifier` 抛异常传递：那个回调在 ssh2 密钥交换流程里同步执行，抛异常会打断协议状态机、错误退化成含糊的 "Host denied"。改为记录事实 + 返回 `false`，上层按标准失败路径取详情
+
+### Added (scripts)
+
+- `scripts/verify-hostkey.cjs`（14 项纯函数用例）：格式、与 openssl 手算一致、旧格式识别与不误判
+- `scripts/perf-new-features.cjs`（Electron 真实 IPC 链路）：新通道注册、扫描统计、指纹探测失败路径与非法指纹拒绝
+
 ## [1.5.2] - 2026-10-27
 
 ### Fixed

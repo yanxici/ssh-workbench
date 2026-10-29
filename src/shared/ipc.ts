@@ -58,6 +58,10 @@ export const IPC = {
   /* ---------------- 已知主机指纹 ---------------- */
   KNOWN_HOSTS_LIST: 'known:list',
   KNOWN_HOSTS_DELETE: 'known:delete',
+  /** 探测某 host:port 当前的主机指纹（不校验、不落库），用于「旧 → 新」对比 */
+  KNOWN_HOSTS_PROBE: 'known:probe',
+  /** 把记录里的指纹更新为指定值（缺省 = 现场探测到的最新值） */
+  KNOWN_HOSTS_REFRESH: 'known:refresh',
 
   /* ---------------- 剪贴板 ---------------- */
   CLIP_READ: 'clip:read',
@@ -79,6 +83,10 @@ export const IPC = {
   SFTP_UPLOAD: 'sftp:upload',
   SFTP_DOWNLOAD: 'sftp:download',
   SFTP_UPLOAD_DIALOG: 'sftp:upload-dialog',
+  /** 选择本地文件夹上传（保留目录名，目录树整棵建到远端） */
+  SFTP_UPLOAD_FOLDER_DIALOG: 'sftp:upload-folder-dialog',
+  /** 扫描待上传目录：文件数 / 总字节数 / 一级条目预览 */
+  SFTP_SCAN_FOLDERS: 'sftp:scan-folders',
   SFTP_DOWNLOAD_DIALOG: 'sftp:download-dialog',
   /** 本机「下载」文件夹路径（一键下载的落点） */
   SFTP_DOWNLOADS_DIR: 'sftp:downloads-dir',

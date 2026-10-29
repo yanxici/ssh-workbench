@@ -55,7 +55,8 @@ import type {
   TunnelConfig,
   TunnelInput,
   TunnelRuntimeInfo,
-  UpdateStatus
+  UpdateStatus,
+  UploadScanResult
 } from '@shared/types'
 
 /**
@@ -71,6 +72,13 @@ export interface KnownHostInfo {
   port: number
   fingerprint: string
   addedAt: number
+}
+
+/** 现场探测到的指纹（与已知记录对比用） */
+export interface KnownHostProbe {
+  host: string
+  port: number
+  fingerprint: string
 }
 
 export interface StorePaths {
@@ -205,7 +213,17 @@ export const api = {
 
   knownHosts: {
     list: (): Promise<IpcResult<KnownHostInfo[]>> => invoke(IPC.KNOWN_HOSTS_LIST),
-    remove: (key: string): Promise<IpcResult<void>> => invoke(IPC.KNOWN_HOSTS_DELETE, key)
+    remove: (key: string): Promise<IpcResult<void>> => invoke(IPC.KNOWN_HOSTS_DELETE, key),
+    /** 探测设备当前的主机指纹（只握手，不认证、不写库） */
+    probe: (host: string, port: number): Promise<IpcResult<KnownHostProbe>> =>
+      invoke(IPC.KNOWN_HOSTS_PROBE, host, port),
+    /** 更新指纹：不传 fingerprint 时由主进程现场探测一次再写入 */
+    refresh: (
+      host: string,
+      port: number,
+      fingerprint?: string
+    ): Promise<IpcResult<KnownHostInfo>> =>
+      invoke(IPC.KNOWN_HOSTS_REFRESH, host, port, fingerprint)
   },
 
   /** 错误日志：用户在设置里能直接查看、复制、导出 */
@@ -252,8 +270,10 @@ export const api = {
     upload: (
       sessionId: string,
       localPaths: string[],
-      remoteDir: string
-    ): Promise<IpcResult<string[]>> => invoke(IPC.SFTP_UPLOAD, sessionId, localPaths, remoteDir),
+      remoteDir: string,
+      options?: { keepRoot?: boolean }
+    ): Promise<IpcResult<string[]>> =>
+      invoke(IPC.SFTP_UPLOAD, sessionId, localPaths, remoteDir, options),
     download: (
       sessionId: string,
       remotePaths: string[],
@@ -264,6 +284,16 @@ export const api = {
       remoteDir: string
     ): Promise<IpcResult<{ canceled: boolean; count: number }>> =>
       invoke(IPC.SFTP_UPLOAD_DIALOG, sessionId, remoteDir),
+    /** 上传文件夹（系统目录对话框；keepRoot 默认 true = 远端保留同名目录） */
+    uploadFolderDialog: (
+      sessionId: string,
+      remoteDir: string,
+      keepRoot?: boolean
+    ): Promise<IpcResult<{ canceled: boolean; count: number }>> =>
+      invoke(IPC.SFTP_UPLOAD_FOLDER_DIALOG, sessionId, remoteDir, keepRoot),
+    /** 扫描本地目录：文件数 / 总字节数（上传前预览用） */
+    scanFolders: (localPaths: string[]): Promise<IpcResult<UploadScanResult>> =>
+      invoke(IPC.SFTP_SCAN_FOLDERS, localPaths),
     downloadDialog: (
       sessionId: string,
       remotePaths: string[]

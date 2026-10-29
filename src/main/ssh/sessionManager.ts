@@ -15,7 +15,8 @@ import {
   connectClient,
   connectWithOptionalProxy,
   forwardThrough,
-  humanizeConnectError
+  humanizeConnectError,
+  takeHostKeyMismatch
 } from './connectConfig'
 
 /**
@@ -483,8 +484,17 @@ class SessionManager {
 
   private describeError(err: unknown, conn: Connection): string {
     const raw = err instanceof Error ? err.message : String(err)
-    if (/host key|verif/i.test(raw)) {
-      return `主机指纹校验未通过（${conn.host}:${conn.port}）。若设备已重装或固件升级导致密钥变化，请在 设置 → 已知主机 中删除该记录后重试。`
+    if (/host key|verif|Host denied/i.test(raw)) {
+      const mismatch = takeHostKeyMismatch(conn.host, conn.port)
+      if (mismatch) {
+        return (
+          `主机指纹已变化（${conn.host}:${conn.port}）\n` +
+          `记录中：${mismatch.known ?? '（无）'}\n` +
+          `设备当前：${mismatch.actual}\n` +
+          '若设备确实重装系统或升级过固件，请到 设置 → 已知主机指纹 点该记录上的指纹按钮确认更新。'
+        )
+      }
+      return `主机指纹校验未通过（${conn.host}:${conn.port}）。若设备已重装或固件升级导致密钥变化，请在 设置 → 已知主机 中更新该记录后重试。`
     }
     return humanizeConnectError(raw)
   }

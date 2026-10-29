@@ -3,7 +3,12 @@ import { promises as fs } from 'node:fs'
 import type { FileHandle } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
-import type { RemoteFile, TransferProgressEvent, TransferTask } from '@shared/types'
+import type {
+  RemoteFile,
+  TransferProgressEvent,
+  TransferTask,
+  UploadScanItem
+} from '@shared/types'
 import { sessionManager } from './sessionManager'
 
 /**
@@ -35,6 +40,9 @@ const MAX_CONCURRENT_TRANSFERS = 3
  */
 const LIST_MANY_CONCURRENCY = 8
 
+/** 上传前扫描预览的文件数上限：超过就只报「至少这么多」，避免选中巨大目录时卡住 */
+const SCAN_FILE_LIMIT = 20000
+
 /**
  * 传输控制块：暂停/继续/取消都作用在这里。
  *
@@ -55,6 +63,12 @@ interface TransferControl {
   paused: boolean
   cancelled: boolean
   halt: boolean
+  /**
+   * 目录上传时是否保留本地目录本身（true → 目标目录/本地目录名/...）。
+   * 拖拽上传沿用旧语义（把目录内容铺进目标目录），「上传文件夹」显式开启保留，
+   * 用户可以预期「选了 foo 就在远端得到 foo/」。
+   */
+  keepRoot: boolean
   waiters: Array<() => void>
 }
 
@@ -607,7 +621,20 @@ export class SftpManager {
 
   /* ------------------------------ 传输 ------------------------------ */
 
-  upload(sessionId: string, localPaths: string[], remoteDir: string): string[] {
+  /**
+   * 上传一批本地路径（文件或目录）。
+   *
+   * @param options.keepRoot 目录项是否保留本地目录名本身：
+   *   - true  → 目标目录/本地目录名/...（「上传文件夹」的直觉语义）
+   *   - false → 把本地目录的内容铺进目标目录（历史拖拽语义，保持不变）
+   */
+  upload(
+    sessionId: string,
+    localPaths: string[],
+    remoteDir: string,
+    options: { keepRoot?: boolean } = {}
+  ): string[] {
+    const keepRoot = options.keepRoot === true
     const taskIds: string[] = []
     for (const localPath of localPaths) {
       const taskId = randomUUID()
@@ -627,10 +654,54 @@ export class SftpManager {
         taskId,
         'upload',
         localPath,
-        remotePath
+        remotePath,
+        keepRoot
       )
     }
     return taskIds
+  }
+
+  /**
+   * 扫描待上传的本地目录：文件数 / 总字节数 / 一级条目。
+   *
+   * 选完文件夹后立刻给出「N 个文件、共 X MB、会新建哪些目录」，
+   * 比直接扔进队列让用户盯着一个没有总量的进度条要好得多；
+   * 也顺手把「空目录」这种情况提前暴露出来（否则上传会建一堆空目录）。
+   */
+  async scanFolders(
+    localPaths: string[]
+  ): Promise<{ totalFiles: number; totalBytes: number; items: UploadScanItem[] }> {
+    const items: UploadScanItem[] = []
+    let totalFiles = 0
+    let totalBytes = 0
+    for (const p of localPaths) {
+      const st = await fs.stat(p).catch(() => null)
+      if (!st) continue
+      if (!st.isDirectory()) {
+        items.push({ localPath: p, name: basename(p), isDir: false, files: 1, bytes: st.size })
+        totalFiles += 1
+        totalBytes += st.size
+        continue
+      }
+      const files = await walkLocal(p, SCAN_FILE_LIMIT)
+      let bytes = 0
+      for (const f of files) {
+        const s = await fs.stat(f.full).catch(() => null)
+        if (s) bytes += s.size
+      }
+      items.push({
+        localPath: p,
+        name: basename(p),
+        isDir: true,
+        files: files.length,
+        bytes,
+        // 命中上限：数字是下限，UI 提示「至少」
+        truncated: files.length >= SCAN_FILE_LIMIT
+      })
+      totalFiles += files.length
+      totalBytes += bytes
+    }
+    return { totalFiles, totalBytes, items }
   }
 
   download(sessionId: string, remotePaths: string[], localDir: string): string[] {
@@ -666,7 +737,8 @@ export class SftpManager {
     taskId: string,
     direction: 'upload' | 'download',
     localPath: string,
-    remotePath: string
+    remotePath: string,
+    keepRoot = false
   ): void {
     const ctl: TransferControl = {
       sessionId,
@@ -679,6 +751,7 @@ export class SftpManager {
       paused: false,
       cancelled: false,
       halt: false,
+      keepRoot,
       waiters: []
     }
     this.controls.set(taskId, ctl)
@@ -954,8 +1027,14 @@ async function transferDownload(
 
 /* ------------------------------ 目录递归传输 ------------------------------ */
 
-/** 本地目录递归遍历，返回相对路径与绝对路径 */
-async function walkLocal(root: string): Promise<Array<{ rel: string; full: string }>> {
+/**
+ * 本地目录递归遍历，返回相对路径与绝对路径。
+ * @param limit 可选上限：扫描预览用，命中即停（正式上传不传，必须走全量）
+ */
+async function walkLocal(
+  root: string,
+  limit?: number
+): Promise<Array<{ rel: string; full: string }>> {
   const out: Array<{ rel: string; full: string }> = []
   const stack: Array<{ dir: string; rel: string }> = [{ dir: root, rel: '' }]
   while (stack.length > 0) {
@@ -966,7 +1045,10 @@ async function walkLocal(root: string): Promise<Array<{ rel: string; full: strin
       const full = join(current.dir, e.name)
       const rel = current.rel ? `${current.rel}/${e.name}` : e.name
       if (e.isDirectory()) stack.push({ dir: full, rel })
-      else out.push({ rel, full })
+      else {
+        out.push({ rel, full })
+        if (limit !== undefined && out.length >= limit) return out
+      }
     }
   }
   return out
@@ -1009,7 +1091,15 @@ async function ensureRemoteDir(sftp: SFTPWrapper, dirPath: string): Promise<void
   }
 }
 
-/** 上传目录：进度按"已完成文件数 / 总文件数"，每个文件内部同样可分块暂停/取消 */
+/**
+ * 上传目录：进度按"已完成文件数 / 总文件数"，每个文件内部同样可分块暂停/取消。
+ *
+ * 目录落点有两种语义，由 ctl.keepRoot 决定：
+ * - false（历史行为，拖拽上传）：把本地目录的**内容**铺进目标目录；
+ * - true（「上传文件夹」）：目标目录/<本地目录名>/...
+ *   —— 用户明确选了一个文件夹，远端就该出现同名目录，否则两个不同名的文件夹
+ *   会被铺平到同一个目标里，互相覆盖都看不出来。
+ */
 async function transferUploadDir(
   sftp: SFTPWrapper,
   ctl: TransferControl,
@@ -1017,10 +1107,16 @@ async function transferUploadDir(
   emit: (e: TransferProgressEvent) => void
 ): Promise<void> {
   const localDir = ctl.localPath
-  // ctl.remotePath = 目标目录 + 本地目录名；目录上传的语义是把本地目录内容铺进目标目录，
-  // 所以这里取它的父目录（与旧实现 joinRemote(remoteDir, f.rel) 保持一致）。
-  const remoteDir = ctl.remotePath.slice(0, ctl.remotePath.lastIndexOf('/')) || '/'
+  // 旧实现按「内容铺进目标目录」定义，这里取 remotePath 的父目录即可；
+  // 保留目录本身时直接用 remotePath（= 目标目录/本地目录名）。
+  const remoteDir = ctl.keepRoot
+    ? ctl.remotePath
+    : ctl.remotePath.slice(0, ctl.remotePath.lastIndexOf('/')) || '/'
   const files = await walkLocal(localDir)
+
+  // 目录里一个文件都没有时也要把目录本身建出来，否则「上传文件夹」看起来毫无反应
+  if (ctl.keepRoot) await ensureRemoteDir(sftp, remoteDir)
+
   ctl.unit = 'files'
   ctl.total = files.length
   ctl.transferred = 0

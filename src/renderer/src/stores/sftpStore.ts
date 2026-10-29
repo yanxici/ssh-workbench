@@ -56,7 +56,14 @@ interface SftpState {
   setLocalSel: (paths: string[]) => void
   setRemoteSel: (paths: string[]) => void
 
-  uploadPaths: (localPaths: string[], remoteDir?: string) => Promise<void>
+  /**
+   * 上传一批本地路径到远端目录。
+   * @param keepRoot 目录项是否在远端保留本地目录名（「上传文件夹」= true；
+   *                 拖拽沿用历史语义 false，把目录内容铺进目标目录）
+   */
+  uploadPaths: (localPaths: string[], remoteDir?: string, keepRoot?: boolean) => Promise<void>
+  /** 弹系统目录对话框上传文件夹（可多选，保留目录名） */
+  uploadFolder: (remoteDir?: string) => Promise<void>
   /**
    * 请求上传：先解析默认目标目录并挂起一个待确认请求，
    * 由 FileManagerPanel 渲染目标目录选择框，用户确认后才真正开始传输。
@@ -184,7 +191,7 @@ export const useSftpStore = create<SftpState>()((set, get) => ({
 
   /* ---------------- 传输 ---------------- */
 
-  uploadPaths: async (localPaths, remoteDir) => {
+  uploadPaths: async (localPaths, remoteDir, keepRoot) => {
     const sessionId = get().sessionId
     if (!sessionId || localPaths.length === 0) return
 
@@ -198,9 +205,10 @@ export const useSftpStore = create<SftpState>()((set, get) => ({
     }
 
     rememberUploadDir(sessionId, target)
-    const ids = await call(window.api.sftp.upload(sessionId, localPaths, target), {
-      errorTitle: '上传失败'
-    })
+    const ids = await call(
+      window.api.sftp.upload(sessionId, localPaths, target, keepRoot ? { keepRoot: true } : undefined),
+      { errorTitle: '上传失败' }
+    )
     if (ids) {
       // 上传会改变目标目录内容：失效该目录并在完成后刷新，避免看到旧列表
       invalidateDir(sessionId, target)
@@ -208,6 +216,33 @@ export const useSftpStore = create<SftpState>()((set, get) => ({
         kind: 'info',
         title: `已加入 ${ids.length} 个上传任务`,
         detail: `目标：${target}`
+      })
+    }
+  },
+
+  uploadFolder: async (remoteDir) => {
+    const sessionId = get().sessionId
+    if (!sessionId) return
+    const target =
+      normalizeRemoteDir(remoteDir ?? get().remoteDir) || (await resolveUploadDir(sessionId))
+    if (!target) {
+      useToastStore.getState().push({
+        kind: 'warning',
+        title: '没有可用的目标目录',
+        detail: '请先进入远端的一个目录，再上传文件夹'
+      })
+      return
+    }
+    rememberUploadDir(sessionId, target)
+    const res = await call(window.api.sftp.uploadFolderDialog(sessionId, target, true), {
+      errorTitle: '上传文件夹失败'
+    })
+    if (res && !res.canceled) {
+      invalidateDir(sessionId, target)
+      useToastStore.getState().push({
+        kind: 'info',
+        title: `已加入 ${res.count} 个文件夹上传任务`,
+        detail: `目标：${target}（远端保留同名目录）`
       })
     }
   },

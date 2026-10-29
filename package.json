@@ -1,6 +1,6 @@
 {
   "name": "ssh-workbench",
-  "version": "1.5.2",
+  "version": "1.6.0",
   "private": true,
   "description": "轻量级 SSH 客户端 + 嵌入式技术支持工作台",
   "author": "ssh-workbench",
@@ -20,6 +20,9 @@
     "test:shellcwd": "node scripts/verify-shellcwd.cjs",
     "test:cwdstore": "node scripts/verify-cwdstore.cjs",
     "test:cwdfollow": "node scripts/verify-shellcwd.cjs && node scripts/verify-cwdstore.cjs && node scripts/verify-cwdfollow.cjs",
+    "test:hostkey": "node scripts/verify-hostkey.cjs",
+    "test:uploadfolder": "node scripts/verify-upload-folder.cjs",
+    "test:features": "node scripts/verify-hostkey.cjs && node scripts/verify-upload-folder.cjs",
     "test:stress": "node scripts/stress-test.js && node scripts/stress-cwd.cjs",
     "test:stress:e2e": "electron scripts/stress-e2e.cjs",
     "icon": "node scripts/make-icon.cjs",

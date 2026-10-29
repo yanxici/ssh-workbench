@@ -8,6 +8,7 @@ import {
   FolderOpen,
   FolderPlus,
   FolderTree,
+  FolderUp,
   HardDrive,
   Home,
   LayoutGrid,
@@ -515,6 +516,32 @@ export function FileExplorer({
     setUploadOpen(true)
   }
 
+  /** 上传文件夹：不再需要先选目标对话框，直接用当前/所选目录 */
+  const openUploadFolder = async (dir?: string): Promise<void> => {
+    if (!sessionId) return
+    const target = await resolveUploadDir(sessionId, dir ?? currentDir)
+    if (!target) {
+      useToastStore.getState().push({
+        kind: 'warning',
+        title: '没有可用的目标目录',
+        detail: '请先进入远端的一个目录'
+      })
+      return
+    }
+    rememberUploadDir(sessionId, target)
+    const res = await call(window.api.sftp.uploadFolderDialog(sessionId, target, true), {
+      errorTitle: '上传文件夹失败'
+    })
+    if (res && !res.canceled) {
+      useToastStore.getState().push({
+        kind: 'info',
+        title: `已加入 ${res.count} 个文件夹上传任务`,
+        detail: `目标：${target}（保留同名目录）`
+      })
+      bumpTree()
+    }
+  }
+
   const doUpload = async (dir: string): Promise<void> => {
     if (!sessionId) return
     const target = normalizeRemoteDir(dir)
@@ -648,6 +675,12 @@ export function FileExplorer({
         onClick: () => void openUploadTo(dir)
       },
       {
+        label: target?.type === 'directory' ? '上传文件夹到此处' : '上传文件夹到此目录',
+        icon: <FolderUp size={12} />,
+        disabled: !dir,
+        onClick: () => void openUploadFolder(dir)
+      },
+      {
         label: '新建文件夹',
         icon: <FolderPlus size={12} />,
         disabled: !dir,
@@ -743,6 +776,17 @@ export function FileExplorer({
           onClick={() => void openUpload()}
         >
           <Upload size={13} />
+        </button>
+        <button
+          className="btn-icon h-6 w-6"
+          title={
+            currentDir
+              ? `上传文件夹到 ${currentDir}（远端保留同名目录）`
+              : '上传文件夹（选择目标目录）'
+          }
+          onClick={() => void openUploadFolder()}
+        >
+          <FolderUp size={13} />
         </button>
         <button
           className="btn-icon h-6 w-6"

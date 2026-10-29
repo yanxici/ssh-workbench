@@ -5,7 +5,8 @@ import {
   buildConnectConfig,
   connectClient,
   connectWithOptionalProxy,
-  humanizeConnectError
+  humanizeConnectError,
+  takeHostKeyMismatch
 } from './connectConfig'
 
 /**
@@ -49,10 +50,27 @@ export async function testConnection(input: TestConnectionInput): Promise<TestCo
     return { ok: true, durationMs: Date.now() - started, banner, fingerprint }
   } catch (err) {
     const raw = err instanceof Error ? err.message : String(err)
-    const friendly = /host key|verif/i.test(raw)
-      ? `主机指纹校验未通过：${fingerprint ?? ''}。若设备已重装或固件升级，请在 设置 → 已知主机 中删除记录后重试`
+    const friendly = /host key|verif|Host denied/i.test(raw)
+      ? `主机指纹校验未通过：${fingerprint ?? ''}。若设备已重装或固件升级，可直接点「更新主机指纹」`
       : humanizeConnectError(raw)
-    return { ok: false, error: friendly, durationMs: Date.now() - started, banner, fingerprint }
+    // 指纹冲突：把「记录中 / 设备当前」都带回去，让编辑器能直接给「更新指纹」按钮
+    const mismatch = /host key|verif|Host denied/i.test(raw)
+      ? takeHostKeyMismatch(input.host, input.port)
+      : null
+    const result: TestConnectionResult = {
+      ok: false,
+      error: friendly,
+      durationMs: Date.now() - started,
+      banner,
+      fingerprint
+    }
+    if (mismatch) {
+      result.hostKeyMismatch = {
+        known: mismatch.known,
+        actual: mismatch.actual
+      }
+    }
+    return result
   } finally {
     try {
       client?.end()

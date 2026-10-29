@@ -1,5 +1,14 @@
 import { useEffect, useState } from 'react'
-import { CheckCircle2, Loader2, FlaskConical, FolderOpen, KeyRound, Plug, Trash2 } from 'lucide-react'
+import {
+  CheckCircle2,
+  Loader2,
+  FlaskConical,
+  FolderOpen,
+  Fingerprint,
+  KeyRound,
+  Plug,
+  Trash2
+} from 'lucide-react'
 import type {
   AuthType,
   Connection,
@@ -92,6 +101,8 @@ export function ConnectionEditor({
   const [testing, setTesting] = useState(false)
   const [testResult, setTestResult] = useState<TestConnectionResult | null>(null)
   const [saving, setSaving] = useState(false)
+  /** 正在更新主机指纹 */
+  const [updatingKey, setUpdatingKey] = useState(false)
 
   /* ---------- 打开时初始化 ---------- */
   useEffect(() => {
@@ -296,6 +307,52 @@ export function ConnectionEditor({
     const res = await call(window.api.conn.test(input), { errorTitle: '测试连接异常' })
     if (res) setTestResult(res)
     setTesting(false)
+  }
+
+  /**
+   * 就地把「设备当前指纹」写入已知主机记录，然后自动重测一次。
+   * 设备重装 / 固件升级后的标准动作，用户不必再去设置里翻。
+   */
+  const trustCurrentHostKey = async (): Promise<void> => {
+    const mismatch = testResult?.hostKeyMismatch
+    if (!mismatch) return
+    setUpdatingKey(true)
+    try {
+      const saved = await call(
+        window.api.knownHosts.refresh(form.host.trim(), Number(form.port), mismatch.actual),
+        { errorTitle: '更新主机指纹失败' }
+      )
+      if (!saved) return
+      useToastStore.getState().push({
+        kind: 'success',
+        title: '已更新主机指纹',
+        detail: `下次连接按新指纹校验：${mismatch.actual.slice(0, 24)}…`
+      })
+      await runTest()
+    } finally {
+      setUpdatingKey(false)
+    }
+  }
+
+  /** 测试通过后，把「设备当前指纹」同步进本地记录（设备换过 key 时用） */
+  const syncCurrentHostKey = async (): Promise<void> => {
+    const fp = testResult?.fingerprint
+    if (!fp) return
+    setUpdatingKey(true)
+    try {
+      const saved = await call(
+        window.api.knownHosts.refresh(form.host.trim(), Number(form.port), fp),
+        { errorTitle: '更新主机指纹失败' }
+      )
+      if (saved) {
+        useToastStore.getState().push({
+          kind: 'success',
+          title: '本地指纹记录已对齐设备当前密钥'
+        })
+      }
+    } finally {
+      setUpdatingKey(false)
+    }
   }
 
   const groupOptions = [...new Set(connections.map((c) => c.group).filter(Boolean))]
@@ -629,13 +686,50 @@ export function ConnectionEditor({
 
         {testResult && !testResult.ok && (
           <div className="col-span-2 selectable rounded-lg border border-danger/30 bg-danger/5 px-3 py-2 text-2xs leading-relaxed text-danger">
-            {testResult.error}
+            <div className="whitespace-pre-line">{testResult.error}</div>
+            {testResult.hostKeyMismatch && (
+              <div className="mt-2 space-y-1.5 border-t border-danger/20 pt-2">
+                <div className="font-mono text-3xs text-ink-3">
+                  记录中：{testResult.hostKeyMismatch.known ?? '（无记录）'}
+                </div>
+                <div className="selectable break-all font-mono text-3xs text-ink-2">
+                  设备当前：{testResult.hostKeyMismatch.actual}
+                </div>
+                <button
+                  className="btn h-6 px-2 text-2xs"
+                  disabled={updatingKey}
+                  onClick={() => void trustCurrentHostKey()}
+                >
+                  {updatingKey ? (
+                    <Loader2 size={11} className="animate-spin" />
+                  ) : (
+                    <Fingerprint size={11} />
+                  )}
+                  更新主机指纹并重测
+                </button>
+              </div>
+            )}
           </div>
         )}
         {testResult?.ok && (testResult.banner || testResult.fingerprint) && (
           <div className="col-span-2 selectable space-y-0.5 rounded-lg border border-success/25 bg-success/5 px-3 py-2 font-mono text-2xs leading-relaxed text-ink-3">
             {testResult.banner && <div>{testResult.banner}</div>}
             {testResult.fingerprint && <div>Host key: {testResult.fingerprint}</div>}
+            {testResult.fingerprint && (
+              <button
+                className="mt-1 flex items-center gap-1 font-sans text-2xs text-accent transition-colors hover:text-ink"
+                disabled={updatingKey}
+                title="把该设备当前的指纹写进已知主机记录（设备重装/固件升级后用它对齐）"
+                onClick={() => void syncCurrentHostKey()}
+              >
+                {updatingKey ? (
+                  <Loader2 size={10} className="animate-spin" />
+                ) : (
+                  <Fingerprint size={10} />
+                )}
+                用此指纹更新本地记录
+              </button>
+            )}
           </div>
         )}
       </div>
