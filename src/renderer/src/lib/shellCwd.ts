@@ -396,6 +396,8 @@ export function containsCdCommand(cmdline: string): boolean {
  */
 export function parseOsc7(payload: string): string | null {
   if (!payload) return null
+  // \u0007 = BEL：OSC 序列的终结符，路径里不该出现，用它截断是必要的
+  // eslint-disable-next-line no-control-regex -- 见上：协议终结符必须写进正则
   const m = /^\s*file:\/\/([^/]*)(\/[^\u0007]*)/.exec(payload)
   if (!m) return null
   let path = m[2]

@@ -73,6 +73,15 @@ const SORT_LABEL: Record<SortMode, string> = {
  */
 const WALL_COLS = 3
 
+/**
+ * 空数组哨兵（模块级常量）。
+ *
+ * 不能写成 hook 里的 `?? []`：那样每次渲染都会分配一个新数组，
+ * 作为 useMemo 依赖时永远不相等 —— 记忆化等于没有，且会在每次 render 重算。
+ * 这个问题是 ESLint 的 react-hooks/exhaustive-deps 抓出来的。
+ */
+const EMPTY_IDS: string[] = []
+
 export function CommandPanel({
   onEdit,
   layout = 'vertical',
@@ -102,7 +111,8 @@ export function CommandPanel({
 
   const extraGroups = useSettingsStore((s) => s.settings.commandGroups)
   const groupOrder = useSettingsStore((s) => s.settings.commandGroupOrder)
-  const pinnedIds = useSettingsStore((s) => s.settings.pinnedCommandIds) ?? []
+  // undefined 时回退到模块级空数组，保证引用稳定（见 EMPTY_IDS 注释）
+  const pinnedIds = useSettingsStore((s) => s.settings.pinnedCommandIds) ?? EMPTY_IDS
   const createGroup = useCommandStore((s) => s.createGroup)
   const setGroupOrder = useCommandStore((s) => s.setGroupOrder)
   const openCommandCenter = useUiStore((s) => s.openCommandCenter)

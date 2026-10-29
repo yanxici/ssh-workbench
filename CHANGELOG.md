@@ -5,6 +5,54 @@ All notable changes to SSH Workbench will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.2] - 2026-10-29
+
+### Added
+
+#### ESLint（项目第一次有 lint 机制）
+
+此前只有 `tsc` 把类型关，没有任何 lint —— 未使用变量、循环依赖、`any` 泛滥、Hook 依赖漏项全靠自觉。
+
+- 新增 `eslint.config.mjs`（扁平配置，ESLint 9 + typescript-eslint 8），分三档：
+  - **主进程 / preload / shared**：类型感知规则全开（`recommendedTypeChecked`）
+  - **渲染层**：类型感知 + `eslint-plugin-react-hooks`
+  - **scripts/\*.cjs**：Node 环境，只查明显错误
+- 新增 5 个 npm 脚本：
+
+  | 脚本 | 作用 |
+  |---|---|
+  | `npm run lint` | 只查 src |
+  | `npm run lint:fix` | 自动修可修的 |
+  | `npm run lint:scripts` | 只查验证脚本 |
+  | `npm run lint:all` | 全查 |
+  | `npm run check` | typecheck + lint（提交前跑这个） |
+
+**校准原则**：这是给已经在跑的既有代码加护栏，不是重排风格。所以没开 `semi` / `quotes` / `indent` 这类排版规则（既有代码 23537 行不带分号、以单引号为主，是既定风格），只开能抓真问题的。
+
+### Fixed（lint 第一次跑就抓出来的真问题）
+
+首轮 49 条，全部修掉，没有靠关规则糊过去：
+
+- **React Hook 记忆化完全失效**（`CommandPanel` / `CommandCenter`）：`useSettingsStore(...) ?? []` 每次都分配新数组，作为 `useMemo` 依赖永不相等 —— 等于没记忆，还每次 render 重算。改为模块级空数组哨兵 `EMPTY_IDS` / `EMPTY_GROUPS`
+- **`forceRefresh` 缺失依赖**（`SessionFileTree`）：它是 `version` 的纯函数，却在渲染期计算后被 effect 隐式捕获。移进 effect 内部推导，语义不变且依赖关系显式
+- **过期 eslint-disable 注释**（`FileExplorer`）：压着一条早已不存在的告警，会掩盖以后真出现的
+- **zmodem 的 `any` 调用链**：`send_offer` 返回值没标注类型，导致 `transfer.get_offset()` / `send()` / `end()` 全是 unsafe any 调用。补 `ZmodemTransfer | undefined` 标注
+- **`String(err ?? '')` 会把对象变成 `[object Object]`**（`zmodem.ts`）—— 既匹配不到协议特征，又掩盖真实原因
+- 若干 `JSON.parse` 结果直接当数组用（`ConnectionSidebar`）、`new Array(n)` 的 `any[]`（`diagnostics`）、`executeJavaScript` 返回 `any`（smoke 自检）
+- 清理 9 个脚本里的死变量与 1 处恒为真的 `undefined ?? 5`
+
+### 有意保留的豁免
+
+两处 `require-await` 用行内 disable 而非去掉 `async`：`firmware.upload` 与 `firmwareStore.startWaitOnline` 的接口契约是 Promise，调用方一律 `await`；去掉 `async` 会让类型对不上（我一开始就是那么改的，被 `tsc` 当场拦下）。ZMODEM 的 `no-control-regex` 同理 —— ZDLE/DLE 就是协议字节。
+
+### 验证
+
+- `npm run typecheck` / `npm run lint` / `npm run build` 全绿
+- **lint 有效性验证**：临时写了一个故意违规的文件（条件里调 hook、浮空 promise、弱比较），三条规则全部报出，确认不是空转
+- 19 个既有回归脚本全部通过；`verify-zmodem` 的 6 项失败与改动前基线逐项一致（AGENTS.md 已记录的既有失败）
+- 真实应用：UI 冒烟 11/11、IPC 域 18/18、IPC 完整性 141/141 通道
+- `connections.json` 2934 条、哈希 `bda0ab23…` 与改动前一致
+
 ## [1.6.1] - 2026-10-29
 
 ### Changed（重构，无功能变化）

@@ -95,13 +95,14 @@ export function LogPlayerDialog({
         for (let i = 0; i < lines.length; i += 1) {
           if (i === 0) continue // 头部行（version/width/height/title）
           const row = JSON.parse(lines[i]) as unknown
+          // 上面的 typeof 已经收窄成 number/string，无需再断言
           if (Array.isArray(row) && typeof row[0] === 'number' && typeof row[2] === 'string') {
             events.push({
-              t: row[0] as number,
+              t: row[0],
               type: row[1] === 'i' ? 'i' : 'o',
-              data: row[2] as string
+              data: row[2]
             })
-            maxT = Math.max(maxT, row[0] as number)
+            maxT = Math.max(maxT, row[0])
           }
         }
         eventsRef.current = events

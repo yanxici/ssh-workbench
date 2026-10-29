@@ -300,7 +300,7 @@ function runSmoke(win: BrowserWindow): void {
           const settings = await shoot('smoke-shot-settings.png')
 
           // 「栏宽」分组在设置面板下方：展开它并滚到可见位置，验证可滚动可达
-          const layoutSection = await win.webContents.executeJavaScript(`
+          const layoutSection: unknown = await win.webContents.executeJavaScript(`
             (() => {
               const head = [...document.querySelectorAll('button')]
                 .find((b) => b.textContent?.includes('栏宽'))
@@ -350,7 +350,7 @@ function runSmoke(win: BrowserWindow): void {
           }
 
           // 命令面板筛选态：点「最近」chip 后应是空状态提示（此时还没执行过命令）
-          const recentOk = await win.webContents.executeJavaScript(`
+          const recentOk: unknown = await win.webContents.executeJavaScript(`
             (() => {
               const btn = [...document.querySelectorAll('button')]
                 .find((b) => b.textContent?.trim() === '最近')
@@ -361,7 +361,7 @@ function runSmoke(win: BrowserWindow): void {
           `)
           await settle(400)
           // 顺便探一下有没有残留的浮层（截图上出现了整体发白的现象，先排除是遮罩没清掉）
-          const leftovers = await win.webContents.executeJavaScript(`
+          const leftovers: unknown = await win.webContents.executeJavaScript(`
             ({
               overlays: document.querySelectorAll('.modal-overlay').length,
               fixed: [...document.querySelectorAll('div')].filter(
@@ -374,7 +374,7 @@ function runSmoke(win: BrowserWindow): void {
           const filtered2 = await shoot('smoke-shot-panel-recent.png')
 
           // 排查看不清的那张图：是不是「关掉带 backdrop-blur 的浮层后残留了模糊层」
-          const sharpProbe = await win.webContents.executeJavaScript(`
+          const sharpProbe: unknown = await win.webContents.executeJavaScript(`
             (() => {
               const blurry = [...document.querySelectorAll('*')].filter((el) => {
                 const s = getComputedStyle(el)
@@ -410,7 +410,7 @@ function runSmoke(win: BrowserWindow): void {
           win.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Return' })
           win.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Return' })
           await settle(700)
-          const keyboardRun = await win.webContents.executeJavaScript(`
+          const keyboardRun: unknown = await win.webContents.executeJavaScript(`
             (() => {
               const overlay = [...document.querySelectorAll('div')].find(
                 (d) => getComputedStyle(d).position === 'fixed' && d.offsetWidth > 1000

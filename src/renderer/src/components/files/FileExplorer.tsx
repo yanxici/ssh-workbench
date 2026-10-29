@@ -362,8 +362,8 @@ export function FileExplorer({
     return () => {
       cancelled = true
     }
-    // openDirs 不进依赖：展开/折叠不该触发根目录重拉
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // openDirs 不进依赖：展开/折叠不该触发根目录重拉。
+    // （openDirs 只在下面的「批量补齐」effect 里被读，这里不引用它——所以不需要 disable 注释。）
   }, [sessionId, connected, currentDir, version, fetchDir])
 
   /**

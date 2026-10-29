@@ -51,7 +51,7 @@ app.whenReady().then(async () => {
   check('两次读取结果条数一致', localPerf.sameLen === true)
 
   /* ---------- 2. 目录缓存在渲染层的实际行为 ---------- */
-  const cacheBehavior = await run(`(async () => {
+  await run(`(async () => {
     // 直接测 dirCache 模块在运行时的表现（打进 bundle 后可通过侧信道观察）
     const sftpStore = window.__sftpStore
     return { hasStore: !!sftpStore }

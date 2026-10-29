@@ -339,8 +339,6 @@ function TreeLevel({
    * 用它和「普通挂载」区分：普通挂载吃缓存，写操作后必须绕过缓存。
    */
   const lastVersionRef = useRef(version)
-  const forceRefresh = version !== lastVersionRef.current
-  if (forceRefresh) lastVersionRef.current = version
   // 初始展开状态：自动展开链中属于本层子目录的项
   const [openDirs, setOpenDirs] = useState<Set<string>>(
     () => new Set(autoExpand.filter((p) => remoteDirname(p) === path))
@@ -348,6 +346,14 @@ function TreeLevel({
 
   useEffect(() => {
     let cancelled = false
+
+    /*
+     * version 前进 = 外部要求强制刷新（上传/删除/新建等写操作之后）。
+     * 在 effect 内部推导而不是渲染期算：它完全是 version 的函数，
+     * 放在外面会让 hooks lint 看不出依赖关系（而 version 本身已在依赖数组里）。
+     */
+    const forceRefresh = version !== lastVersionRef.current
+    if (forceRefresh) lastVersionRef.current = version
 
     /*
      * 先看缓存：命中就直接上屏，避免折叠再展开、切走再切回都重新等一次往返。

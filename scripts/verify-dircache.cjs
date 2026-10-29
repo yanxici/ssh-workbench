@@ -70,7 +70,7 @@ async function main() {
     check('第二次命中缓存，没有新请求', calls === 1, 'calls=' + calls)
     check('两次返回同一份数据引用', a === b)
 
-    const c = await loadDir('s1', '/root', fetcher)
+    await loadDir('s1', '/root', fetcher)
     check('第三次仍然命中', calls === 1, 'calls=' + calls)
   }
 

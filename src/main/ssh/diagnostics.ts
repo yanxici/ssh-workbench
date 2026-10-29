@@ -65,7 +65,10 @@ class DiagnosticsRunner {
      */
     const CONCURRENCY = 4
     /** 按下标预占位，保证进度与结果顺序仍与传入顺序一致 */
-    const slots: Array<DiagSectionResult | undefined> = new Array(picked.length)
+    // new Array(n) 返回 any[]：显式标注联合类型，否则后面的赋值全是 unsafe
+    const slots: Array<DiagSectionResult | undefined> = new Array<DiagSectionResult | undefined>(
+      picked.length
+    )
     let nextIndex = 0
     let finishedCount = 0
 

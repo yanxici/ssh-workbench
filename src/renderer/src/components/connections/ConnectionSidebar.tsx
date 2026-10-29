@@ -553,13 +553,16 @@ export function ConnectionSidebar({
                   // 连接拖进分组：批量移动，这是最符合直觉的归组方式
                   e.preventDefault()
                   e.stopPropagation()
-                  let ids: string[] = []
+                  // JSON.parse 返回 any：先当 unknown，再逐项校验成 string[]
+                  let parsed: unknown
                   try {
-                    ids = JSON.parse(raw)
+                    parsed = JSON.parse(raw)
                   } catch {
                     return
                   }
-                  if (!Array.isArray(ids) || ids.length === 0) return
+                  if (!Array.isArray(parsed) || parsed.length === 0) return
+                  const ids: string[] = parsed.filter((x): x is string => typeof x === 'string')
+                  if (ids.length === 0) return
                   void moveToGroup(ids, group).then((n) => {
                     if (n > 0) {
                       useToastStore.getState().push({

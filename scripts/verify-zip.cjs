@@ -2,7 +2,6 @@
  * ZIP 打包自检：用 Python 标准库 zipfile 独立校验（跨实现验证）。
  * 用法：node node_modules/typescript/bin/tsc -p tsconfig.verify.json && node scripts/verify-zip.cjs
  */
-const { execFileSync } = require('node:child_process')
 const { createZip, crc32 } = require('../.tsc-verify/main/util/zip.js')
 
 let pass = 0

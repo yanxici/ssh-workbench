@@ -24,7 +24,13 @@
  */
 
 import * as ZmodemModule from 'zmodem.js'
-import { Sentry, type Detection, type ZmodemSession, type ZmodemOffer } from 'zmodem.js'
+import {
+  Sentry,
+  type Detection,
+  type ZmodemSession,
+  type ZmodemOffer,
+  type ZmodemTransfer
+} from 'zmodem.js'
 
 /** 传输方向：send = 本机发给远端（对端 rz）；receive = 远端发给本机（对端 sz） */
 export type ZmodemDirection = 'send' | 'receive'
@@ -97,6 +103,8 @@ const RECEIVE_FLUSH_BYTES = 256 * 1024
  * 识别「协议残渣」行：远端传输结束后残留的控制字符回显、重发的 ZRINIT 头、
  * 以及 sz/rz 的进度文案。用于把这类内容记入 residueChars 而不是当作正常输出。
  */
+/* eslint-disable no-control-regex -- ZMODEM 的 ZDLE(0x18)/DLE(0x10) 本来就是控制字符，
+   不写进正则根本无法识别协议帧；这里是有意的，不是手滑。 */
 const RESIDUE_PATTERNS: RegExp[] = [
   /\*\*[\x18\x10]?B[0-9A-Fa-f]{2}/, // ZMODEM 头魔数 **\x18B01 等
   /\*\*\x18?[0-9A-Fa-f]{2}/,
@@ -125,6 +133,7 @@ function isResidueText(text: string): boolean {
   const stripped = text.replace(/[\x10-\x1f\x00-\x08]/g, '')
   return text.length > 0 && !stripped.trim()
 }
+/* eslint-enable no-control-regex */
 
 const states = new Map<string, SessionState>()
 
@@ -758,7 +767,9 @@ async function runSend(sessionId: string, session: ZmodemSession): Promise<void>
   let sent = 0
 
   for (const file of picked.files) {
-    let transfer
+    // 显式标注：没有它 TS 会把 `send_offer` 的返回值当成 any（zmodem.js 无自带类型），
+    // 后面 transfer.get_offset()/send()/end() 就全成了不安全的 any 调用
+    let transfer: ZmodemTransfer | undefined
     try {
       transfer = await session.send_offer({
         name: file.name,
@@ -861,7 +872,9 @@ export function feedZmodem(sessionId: string, rawBase64?: string, fallbackText?:
 
 /** 对端重发的起始帧（sz 的 ZRQINIT 重传），属于正常协议噪声 */
 function isPeerRetransmit(err: unknown): boolean {
-  const message = err instanceof Error ? err.message : String(err ?? '')
+  // 不用 String(err)：传入普通对象会得到 "[object Object]"，既匹配不到也掩盖了真实原因
+  const message =
+    err instanceof Error ? err.message : typeof err === 'string' ? err : ''
   return /Unhandled header:\s*ZR?Q?INIT|Unhandled header:\s*ZRQINIT/i.test(message)
 }
 

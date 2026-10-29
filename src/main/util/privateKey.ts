@@ -31,9 +31,15 @@ export function inspectPrivateKey(data: Buffer): KeyInspectResult {
     }
     throw new Error(`无法识别的私钥格式：${parsed.message}`)
   }
-  const key = Array.isArray(parsed) ? parsed[0] : parsed
-  if (!key || !key.isPrivateKey()) throw new Error('这不是私钥文件')
-  return { type: key.type, encrypted: false }
+  // ssh2 的 parseKey 返回类型是 any（新版 key 对象与旧版 ParsedKey 混用），
+  // 这里只用到两个成员，就地收窄成最小接口，避免后续全是 unsafe member access
+  const key = (Array.isArray(parsed) ? parsed[0] : parsed) as
+    | { isPrivateKey?: () => boolean; type?: string }
+    | undefined
+  if (!key || typeof key.isPrivateKey !== 'function' || !key.isPrivateKey()) {
+    throw new Error('这不是私钥文件')
+  }
+  return { type: key.type ?? guessType(text), encrypted: false }
 }
 
 function guessType(text: string): string {

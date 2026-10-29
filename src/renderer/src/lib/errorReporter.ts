@@ -44,7 +44,8 @@ export function installErrorReporter(): void {
   installed = true
 
   window.addEventListener('error', (event) => {
-    const err = event.error
+    // ErrorEvent.error 是 any（可以是任意抛出值，不一定是 Error）
+    const err: unknown = event.error
     report(
       'window-error',
       event.message || '未捕获的脚本错误',
@@ -53,7 +54,8 @@ export function installErrorReporter(): void {
   })
 
   window.addEventListener('unhandledrejection', (event) => {
-    const reason = event.reason
+    // 拒绝理由同样可以是任意值（reject('字符串') 很常见）
+    const reason: unknown = event.reason
     report(
       'unhandled-rejection',
       '未处理的 Promise 异常',

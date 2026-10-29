@@ -118,7 +118,9 @@ console.log('\n[4] 重连次数上限')
 
   check('上限被 clamp 到 1~20（下界）', Math.max(1, Math.min(-5, 20)) === 1)
   check('上限被 clamp 到 1~20（上界）', Math.max(1, Math.min(999, 20)) === 20)
-  check('默认值 5 合法', Math.max(1, Math.min(undefined ?? 5, 20)) === 5)
+  // 默认值 5：这里直接传 5。原先写的是 `undefined ?? 5`，在常量层面恒等于 5，
+  // 看起来像还有别的分支，实际只是在复刻默认参数的行为。
+  check('默认值 5 合法', Math.max(1, Math.min(5, 20)) === 5)
 }
 
 console.log('\n[5] 用户主动关闭不应触发重连')

@@ -258,6 +258,9 @@ export const useFirmwareStore = create<FirmwareState>()((set, get) => ({
 
   setWaitPort: (waitPort) => set({ waitPort }),
 
+  // 保持 async：内部只起定时器（轮询探测），但接口契约是 Promise
+  // （调用方 await 它，与其他 start*/stop* 方法保持一致）
+  // eslint-disable-next-line @typescript-eslint/require-await -- 见上：契约是 Promise
   startWaitOnline: async () => {
     const { sessionId } = get()
     const session = useSessionStore.getState().sessions.find((s) => s.id === sessionId)

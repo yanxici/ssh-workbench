@@ -37,7 +37,8 @@ export function resolveDark(mode: ThemeMode): boolean {
  */
 function applyThemeVars(vars: ThemeVars): void {
   const root = document.documentElement
-  for (const [key, value] of Object.entries(vars)) {
+  // Object.entries 的 value 是 any（ThemeVars 的值类型较宽），显式标注成 string
+  for (const [key, value] of Object.entries(vars) as Array<[string, string]>) {
     root.style.setProperty(`--c-${key}`, value)
   }
 }

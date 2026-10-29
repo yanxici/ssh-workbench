@@ -6,7 +6,6 @@
  * 注意：脚本不会打印私钥内容
  */
 const fs = require('fs')
-const os = require('os')
 const path = require('path')
 const esbuild = require('esbuild')
 const { Client, Server, utils } = require('ssh2')

@@ -76,7 +76,8 @@ export function generateMarkdown(report: DiagReport): string {
     const flag = r.status === 'done' ? '✅' : r.status === 'skipped' ? '⏭️' : '⚠️'
     lines.push(`### ${flag} ${r.name}`)
     lines.push('')
-    lines.push(`- 状态：**${statusLabel(r)}**　耗时：${r.durationMs}ms　退出码：${r.exitCode ?? '-'}`)
+    // 全角空格（U+3000）用作中文排版里的字段分隔，是有意的
+    lines.push(`- 状态：**${statusLabel(r)}**\u3000耗时：${r.durationMs}ms\u3000退出码：${r.exitCode ?? '-'}`)
     lines.push('')
     lines.push('命令：')
     lines.push('')

@@ -939,7 +939,7 @@ async function downloadFileChunked(
         const len = total > 0 ? Math.min(CHUNK_SIZE, total - chunkPos) : CHUNK_SIZE
         const buf = Buffer.allocUnsafe(len)
         pending.push(
-          pRead(sftp, handle as Buffer, buf, 0, len, chunkPos).then((bytes) => ({
+          pRead(sftp, handle, buf, 0, len, chunkPos).then((bytes) => ({
             pos: chunkPos,
             bytes,
             buf
@@ -954,7 +954,7 @@ async function downloadFileChunked(
           eof = true
           break
         }
-        await (local as FileHandle).write(c.buf, 0, c.bytes, c.pos)
+        await local.write(c.buf, 0, c.bytes, c.pos)
         pos = c.pos + c.bytes
         onBytes(pos, total)
       }

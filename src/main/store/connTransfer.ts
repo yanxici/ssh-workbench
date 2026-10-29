@@ -353,7 +353,8 @@ async function readEnvelope(file: string): Promise<Envelope> {
   if (st.size > MAX_FILE_BYTES) throw new Error('文件过大，不是连接导出文件')
   let env: unknown
   try {
-    env = JSON.parse((await fs.readFile(file, 'utf8')).replace(/^﻿/, ''))
+    // \uFEFF = UTF-8 BOM：PowerShell 导出的文件常带，JSON.parse 会直接报错
+    env = JSON.parse((await fs.readFile(file, 'utf8')).replace(/^\uFEFF/, ''))
   } catch {
     throw new Error('不是有效的连接导出文件（无法解析）')
   }

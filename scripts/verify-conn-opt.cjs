@@ -251,7 +251,6 @@ console.log('\n[6] 压测：2790 条连接模糊搜索')
 
 }
 
-const failedCount = () => fail
 main().then(() => {
   console.log('\n结果：' + pass + ' 通过 / ' + fail + ' 失败\n')
   process.exit(fail === 0 ? 0 : 1)

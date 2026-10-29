@@ -33,7 +33,6 @@ function check(name, ok, detail = '') {
 }
 
 const Zmodem = require('zmodem.js')
-const ZRINIT_FLAGS = ['CANFDX', 'CANOVIO', 'CANBRK', 'CANFC32']
 const tick = () => new Promise((r) => setImmediate(r))
 
 /** 造一个「假主进程 + 假 UI」，并把 lib 的导出接进这套环境 */
@@ -359,7 +358,7 @@ async function runSz(o) {
 
   /* ---------- 6：确认弹窗挂着时点「中断」必须立刻退出（不能死在 await 上） ---------- */
   {
-    const { lib, state } = loadLib()
+    const { lib } = loadLib()
     const sessionId = 's-cancel-confirm'
     let confirmCalls = 0
     const events = []
@@ -411,7 +410,7 @@ async function runSz(o) {
 
   /* ---------- 8：进度快照（切标签页/重挂载后必须能恢复面板，否则卡死没出口） ---------- */
   {
-    const { lib, state } = loadLib()
+    const { lib } = loadLib()
     const sessionId = 's-snapshot'
     let confirmCalls = 0
     lib.ensureZmodem(sessionId, {

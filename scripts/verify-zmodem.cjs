@@ -48,9 +48,6 @@ function makeSentry() {
   return { sentry, toTerminal, sent, detections }
 }
 
-/* ZRINIT 起始帧：[42,42,24,66,48] = **\x18B0 —— sz/rz 都会以此类序列开头 */
-const ZM_START = [42, 42, 24, 66, 48]
-
 ;(function testDetection() {
   const { sentry, toTerminal, detections } = makeSentry()
 
@@ -295,6 +292,8 @@ const ZM_START = [42, 42, 24, 66, 48]
   const zm = fs.readFileSync(path.join(ROOT, 'src/renderer/src/lib/zmodem.ts'), 'utf8')
 
   // 复刻实现（与 lib/zmodem.ts 保持一致；下方同时断言源码里确有这些模式）
+  /* eslint-disable no-control-regex -- 这里复刻的是 ZMODEM 协议解析，
+     ZDLE(0x18)/DLE(0x10) 是协议字节，不是误写的控制字符 */
   const RESIDUE_PATTERNS = [
     /\*\*[\x18\x10]?B[0-9A-Fa-f]{2}/,
     /\*\*\x18?[0-9A-Fa-f]{2}/,

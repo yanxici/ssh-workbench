@@ -54,7 +54,14 @@ class FirmwareOps {
     return { canceled: false, file: { path, name: basename(path), size: st.size } }
   }
 
-  /** 上传固件到设备（复用 SFTP 传输队列与进度事件） */
+  /**
+   * 上传固件到设备（复用 SFTP 传输队列与进度事件）。
+   *
+   * 保持 async 是有意的：它同步入队后立刻返回 taskId，但接口约定是 Promise
+   * （调用方一律 await，与 verify/upgrade 等兄弟方法一致）。这条
+   * require-await 是误报 —— 去掉 async 会让 IPC handler 的返回类型对不上。
+   */
+  // eslint-disable-next-line @typescript-eslint/require-await -- 见方法注释：契约是 Promise
   async upload(
     sessionId: string,
     localPath: string,

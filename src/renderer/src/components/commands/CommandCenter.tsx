@@ -43,6 +43,13 @@ import { Highlight } from './Highlight'
 const WALL_COLS = 3
 
 /**
+ * 模块级空数组哨兵：`?? []` 每次渲染都是新引用，会让下游 useMemo 永不命中缓存。
+ * 由 react-hooks/exhaustive-deps 抓出。
+ */
+const EMPTY_IDS: string[] = []
+const EMPTY_GROUPS: string[] = []
+
+/**
  * 命令中心（Ctrl+K）—— 解决「命令多了以后只能靠翻列表找」的核心组件。
  *
  * 旧痛点：命令全塞在一个长列表里，搜索框默认收起，搜到还要在分组里滚；
@@ -68,9 +75,9 @@ export function CommandCenter({
   const togglePin = useCommandStore((s) => s.togglePin)
   const remove = useCommandStore((s) => s.remove)
 
-  const pinnedIds = useSettingsStore((s) => s.settings.pinnedCommandIds) ?? []
-  const groupOrder = useSettingsStore((s) => s.settings.commandGroupOrder) ?? []
-  const extraGroups = useSettingsStore((s) => s.settings.commandGroups) ?? []
+  const pinnedIds = useSettingsStore((s) => s.settings.pinnedCommandIds) ?? EMPTY_IDS
+  const groupOrder = useSettingsStore((s) => s.settings.commandGroupOrder) ?? EMPTY_GROUPS
+  const extraGroups = useSettingsStore((s) => s.settings.commandGroups) ?? EMPTY_GROUPS
   const savedSort = useSettingsStore((s) => s.settings.commandSort) ?? 'smart'
   const updateSettings = useSettingsStore((s) => s.update)
 
