@@ -5,6 +5,71 @@ All notable changes to SSH Workbench will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.3] - 2026-10-29
+
+### Changed（重构，无功能变化）
+
+体检清单里最后两项「上帝文件」已拆分。都是纯搬家 —— **没有改任何一行业务逻辑**。
+
+#### 1. `store/repository.ts` 764 → 70 行（8 个域拆开）
+
+原本 8 个互不相干的业务域挤在一个文件里：连接 / 命令 / 历史 / 设置 / 巡检项 / 档案 / 隧道 / 已知主机。改「连接的分组重命名」和改「设置迁移」要动同一个文件。
+
+现在按域落到 `src/main/store/repo/`：
+
+| 文件 | 行数 | 职责 |
+|---|---|---|
+| `connections.ts` | 161 | 连接增删改查、分组、凭据语义 |
+| `commands.ts` | 185 | 常用命令、排序、导入导出 |
+| `history.ts` | 51 | 命令历史（含上限裁剪） |
+| `settings.ts` | 140 | 应用设置 + 一次性外观迁移 |
+| `diagSections.ts` | 57 | 自定义巡检项 |
+| `profiles.ts` | 52 | 客户 / 设备档案 |
+| `tunnels.ts` | 55 | 端口转发定义 |
+| `knownHosts.ts` | 62 | 已知主机指纹 |
+| `repository.ts` | **70** | 纯 re-export barrel |
+
+**关键设计**：`repository.ts` 保留为统一出口做 re-export，所以 **40 多个 import 点一行都不用改**。将来要再拆也不会波及调用方。
+
+顺带修了一处冗余：`addHistory` 里原本内联了一遍「useCount+1 / lastUsedAt 刷新」的逻辑，和 `touchCommand` 完全重复，改为直接调用后者。
+
+#### 2. `SettingsPanel.tsx` 959 → 118 行（7 个分区拆开）
+
+原本这一个文件同时装着：4 个 UI 原子（Section / Row / Segmented / ColorThemeGallery）、7 个业务分区、以及一段完整的指纹探测状态机（探测 → 旧新对比 → 确认写库）。
+
+现在：
+
+| 文件 | 行数 |
+|---|---|
+| `SettingsPanel.tsx` | **118**（只负责布局顺序 + Modal 外壳） |
+| `sectionUi.tsx` | 128（Section / Row / Segmented 原子） |
+| `AppearanceSection.tsx` | 121（明暗 + 配色画廊） |
+| `TerminalSection.tsx` | 70 |
+| `BehaviorSection.tsx` | 74 |
+| `LayoutSection.tsx` | 70 |
+| `ShortcutSection.tsx` | 201（含冲突弹窗） |
+| `KnownHostsSection.tsx` | 273（指纹状态机整套） |
+| `DangerSection.tsx` | 34 |
+
+UI 原子放独立文件是必须的：否则 7 个 section 会反向依赖 `SettingsPanel`，形成循环 import。
+
+### Added (scripts)
+
+- `scripts/verify-repository-split.cjs`（`npm run test:repository`）：用临时数据目录真跑一遍 8 个域的读写，断言的是**行为**而不是行数 —— 48 个断言覆盖凭据语义（undefined/''/值）、分组默认值、sortOrder 递增、导入去重、历史上限、设置合并与迁移、超时钳制、指纹更新不新增条目、以及 8 个 JSON 文件确实各写各的
+- `scripts/probe-settings-sections.cjs`：CDP 里逐个展开 10 个设置分区，确认拆分后每个都渲染出真实控件（不是空壳），并实测主题切换生效
+
+### 验证
+
+- `npm run check`（typecheck + lint）/ `npm run build` 全绿
+- 19 个回归脚本全部通过，含新增的数据仓库回归
+- 真实应用：设置面板 10 个分区全部渲染正常（20/20）、指纹探测流程行为不变（仍是 10s 超时且原因可见）、UI 冒烟 11/11、IPC 域 18/18
+- IPC 完整性 141/141 通道
+- `connections.json` 2934 条、哈希 `bda0ab23…` 与改动前一致
+
+### 一处测试自身的问题（记下来避免误判）
+
+跑 `smoke-cdp` 时「跟随终端目录开关」一度报 FAIL。排查后确认是**测试之间互相干扰**：前一个 probe 脚本把分区展开状态写进了 localStorage，smoke 再点一次反而把它收起了。用全新 profile 复跑 11/11 通过，代码本身没问题。
+
 ## [1.6.2] - 2026-10-29
 
 ### Added
