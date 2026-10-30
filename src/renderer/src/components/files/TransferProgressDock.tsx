@@ -317,7 +317,7 @@ function TransferRow({
           className="min-w-0 flex-1 truncate text-2xs text-ink-2"
           title={`${task.direction === 'upload' ? '上传' : '下载'}\n${task.localPath} ⇄ ${task.remotePath}${
             task.error ? `\n${task.error}` : ''
-          }`}
+          }${task.note ? `\n${task.note}` : ''}`}
         >
           {name}
         </span>

@@ -561,6 +561,8 @@ export interface TransferTask {
   speedBps?: number
   /** 进度单位：字节（单文件）或文件个数（目录递归传输）；缺省按 bytes 处理 */
   unit?: 'bytes' | 'files'
+  /** 非失败类说明（跳过链接、空目录等），与 error 区分显示 */
+  note?: string
   startedAt: number
   finishedAt?: number
 }
@@ -605,6 +607,11 @@ export interface TransferProgressEvent {
   speedBps?: number
   /** 进度单位：bytes=字节数，files=已完成文件数（目录传输） */
   unit?: 'bytes' | 'files'
+  /**
+   * 附带说明（非失败）：例如「跳过 N 个符号链接」「文件夹里没有文件，只建了目录」。
+   * 与 error 分开，避免把「部分跳过」渲染成红色失败。
+   */
+  note?: string
 }
 
 /* ------------------------------------------------------------------ *

@@ -57,11 +57,22 @@ function treeFiles(dir, base = dir, out = {}) {
   for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
     const full = path.join(dir, e.name)
     const rel = path.relative(base, full).split(path.sep).join('/')
-    if (e.isDirectory()) treeFiles(full, base, out)
+    if (e.isSymbolicLink()) continue
+    if (e.isDirectory()) {
+      out[rel + '/'] = 'dir'
+      treeFiles(full, base, out)
+    }
     else out[rel] = md5(full)
   }
   return out
 }
+/** 只取文件项（去掉空目录的 dir 标记），用于 md5 多重集比对 */
+function fileOnly(map) {
+  const out = {}
+  for (const [k, v] of Object.entries(map)) if (v !== 'dir') out[k] = v
+  return out
+}
+
 async function waitFor(fn, timeoutMs, stepMs = 250) {
   const end = Date.now() + timeoutMs
   while (Date.now() < end) {
@@ -136,6 +147,9 @@ window.__e2e = {
     return 'no-blank-container'
   },
   menu(re){ const rx = new RegExp(re); const els = Array.from(document.querySelectorAll('body *')).filter(e => e.children.length <= 1 && (e.textContent||'').trim().length < 26 && rx.test((e.textContent||'').trim())); for (const el of els) { const f = this.find(el, ['onClick']); if (f) { f(this.ev()); return el.textContent.trim() } } return null },
+  pickDirInModal(name){ const m = document.querySelector('.modal'); if (!m) return 'no-modal'; const els = Array.from(m.querySelectorAll('*')).filter(e => e.children.length <= 1 && (e.textContent||'').trim() === name); for (const el of els) { const f = this.find(el, ['onClick']); if (f) { f(this.ev()); return 'ok' } } return 'no-item' },
+  modalDirValue(){ const i = document.querySelector('.modal input'); return i ? i.value : null },
+  modalTitleHas(s){ const m = document.querySelector('.modal'); return m && (m.textContent||'').includes(s) ? 'ok' : null },
   btn(re){ const rx = new RegExp(re); const b = Array.from(document.querySelectorAll('button')).find(x => rx.test(x.getAttribute('title') || '')); if(!b) return false; b.click(); return true },
   setValue(el, v){ const proto = el.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype; const d = Object.getOwnPropertyDescriptor(proto, 'value').set; d.call(el, v); el.dispatchEvent(new Event('input', { bubbles: true })) },
   modalInput(){ return document.querySelector('.modal input') || null },
@@ -199,6 +213,20 @@ async function main() {
   fs.mkdirSync(path.join(srcFolder, 'nested'), { recursive: true })
   fs.writeFileSync(path.join(srcFolder, 'a.txt'), 'folder a\n')
   fs.writeFileSync(path.join(srcFolder, 'nested', 'deep.bin'), crypto.randomBytes(64 * 1024))
+  /* 空目录（含两层空）与 junction：真实项目里到处都是，历史上一个丢、一个变 0 字节假文件 */
+  fs.mkdirSync(path.join(srcFolder, 'emptySub', 'emptyLeaf'), { recursive: true })
+  const srcFolderB = path.join(LOCAL_SRC, 'folderB')
+  fs.mkdirSync(path.join(srcFolderB, 'onlyEmpty', 'leaf'), { recursive: true })
+  fs.writeFileSync(path.join(srcFolderB, 'b.txt'), 'folder b\n')
+  let junctionMade = false
+  if (process.platform === 'win32') {
+    try {
+      fs.symlinkSync(srcFolder, path.join(srcFolder, 'junctionLoop'), 'junction')
+      junctionMade = true
+    } catch {
+      /* 无权限创建 junction 就跳过这部分断言 */
+    }
+  }
 
   /* 2. 起 SFTP 服务器 */
   const sftp = spawn(process.execPath, [path.join(ROOT_DIR, 'scripts', 'lab-sftp-server.cjs')], {
@@ -355,15 +383,55 @@ async function main() {
   /* S6 上传文件夹（保留目录名） */
   await setDialog('dirs', [srcFolder])
   await page.evalJs(`window.__e2e.btn('^上传文件夹到')`)
+  /* 新行为：先弹「上传文件夹到远端目录」，确认落点后才选本地文件夹 */
+  const folderDlgTitle = await page.evalJs(`window.__e2e.modalTitleHas('上传文件夹到远端目录')`)
+  const folderConfirm = await page.evalJs(`window.__e2e.menu('^选择文件夹并上传$') || 'no-confirm'`)
   const upDirOk = await waitFor(
-    () => remoteExists('/e2e/folderA/a.txt') && remoteExists('/e2e/folderA/nested/deep.bin'),
+    () =>
+      remoteExists('/e2e/folderA/a.txt') &&
+      remoteExists('/e2e/folderA/nested/deep.bin') &&
+      remoteExists('/e2e/folderA/emptySub/emptyLeaf'),
     30000
   )
   const srcTree = treeFiles(srcFolder)
   const upTree = treeFiles(path.join(LAB_ROOT, 'e2e', 'folderA'))
   const upDirSame = JSON.stringify(srcTree) === JSON.stringify(upTree)
+  const junctionLeaked = junctionMade && remoteExists('/e2e/folderA/junctionLoop')
   await refresh()
-  check('上传文件夹（远端保留同名目录）', upDirOk && upDirSame, `结构一致=${upDirSame}`)
+  check(
+    '上传文件夹（保留同名目录 + 空目录 + 跳过链接）',
+    upDirOk && upDirSame && folderDlgTitle === 'ok' && folderConfirm === '选择文件夹并上传' && !junctionLeaked,
+    `目标目录弹窗=${folderDlgTitle} confirm=${folderConfirm} 结构一致=${upDirSame} 空目录=${remoteExists('/e2e/folderA/emptySub/emptyLeaf')} 链接泄漏=${junctionLeaked}`
+  )
+
+  /* S6b 上传文件夹 → 自选下级目标目录（用户明确抱怨过的场景） */
+  fs.mkdirSync(path.join(LAB_ROOT, 'e2e', 'sub-target'), { recursive: true })
+  await refresh()
+  await setDialog('dirs', [srcFolderB])
+  await page.evalJs(`window.__e2e.btn('^上传文件夹到')`)
+  /* 目录列表是异步拉的，等它出现再点，避免测成「弹窗还没加载」 */
+  const subListed = await waitFor(
+    async () => (await page.evalJs(`window.__e2e.pickDirInModal('sub-target')`)) === 'ok',
+    10000,
+    300
+  )
+  const pickSub = subListed ? 'ok' : 'no-item'
+  await sleep(400)
+  const subDirValue = await page.evalJs(`window.__e2e.modalDirValue()`)
+  const subConfirm = await page.evalJs(`window.__e2e.menu('^选择文件夹并上传$') || 'no-confirm'`)
+  const subOk = await waitFor(
+    () => remoteExists('/e2e/sub-target/folderB/b.txt') && remoteExists('/e2e/sub-target/folderB/onlyEmpty/leaf'),
+    30000
+  )
+  const subTreeSame =
+    JSON.stringify(treeFiles(srcFolderB)) ===
+    JSON.stringify(treeFiles(path.join(LAB_ROOT, 'e2e', 'sub-target', 'folderB')))
+  await refresh()
+  check(
+    '上传文件夹到所选下级目录（弹窗内逐级选择）',
+    pickSub === 'ok' && String(subDirValue).endsWith('/sub-target') && subOk && subTreeSame,
+    `pick=${pickSub} 目录=${subDirValue} confirm=${subConfirm} 落盘=${subOk} 结构一致=${subTreeSame}`
+  )
 
   /* S7 双击编辑远端文件并保存 */
   const edOpen = await page.evalJs(`window.__e2e.dblclick('one.txt')`)
@@ -475,6 +543,10 @@ async function main() {
     await setDialog('dirs', [bigDir])
     const tUp = Date.now()
     await page.evalJs(`window.__e2e.btn('^上传文件夹到')`)
+    await sleep(600)
+    const stressConfirm = await page.evalJs(`window.__e2e.menu('^选择文件夹并上传$') || 'no-confirm'`)
+    if (!/选择文件夹并上传/.test(stressConfirm || ''))
+      throw new Error('压测：目标目录确认按钮没点到 ' + stressConfirm)
     const expect = N + 2
     const allUp = await waitFor(() => {
       const dst = path.join(LAB_ROOT, 'e2e', 'stress')
@@ -504,13 +576,13 @@ async function main() {
     await sleep(800)
     const dlItem2 = await page.evalJs(`window.__e2e.menu('^下载此目录$')`)
     const tDl = Date.now()
-    const want = Object.values(srcTreeBig).sort()
+    const want = Object.values(fileOnly(srcTreeBig)).sort()
     const backOk = await waitFor(() => {
-      const got = Object.values(treeFiles(dlStress)).sort()
+      const got = Object.values(fileOnly(treeFiles(dlStress))).sort()
       return got.length >= want.length && got.join() === want.join()
     }, 180000, 500)
     const dlSec = ((Date.now() - tDl) / 1000).toFixed(1)
-    const backTree = treeFiles(dlStress)
+    const backTree = fileOnly(treeFiles(dlStress))
     const gotList = Object.values(backTree).sort()
     const dlBad = want.filter((h, i) => gotList[i] !== h)
     check(

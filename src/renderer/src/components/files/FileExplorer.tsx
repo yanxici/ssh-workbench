@@ -99,7 +99,6 @@ export function FileExplorer({
   const version = useSftpStore((s) => s.treeVersion)
   const bumpTree = useSftpStore((s) => s.bumpTree)
   const openEditor = useSftpStore((s) => s.openEditor)
-  const uploadFolder = useSftpStore((s) => s.uploadFolder)
   const downloadToStore = useSftpStore((s) => s.downloadTo)
   const downloadDefault = useSftpStore((s) => s.downloadToDefault)
   /* 展开状态在 effect 里也要读（不想因为它变化就整条 effect 重跑） */
@@ -513,12 +512,16 @@ export function FileExplorer({
     uploadTarget.request(currentDir, currentDir ? `当前浏览：${currentDir}` : '未进入目录，请手动指定上传位置')
 
   /**
-   * 上传文件夹：执行链路在 sftpStore.uploadFolder（解析目录 / 弹框 / 提示 / 失效缓存），
-   * 这里只管「点完之后重绘自己这棵树」。
+   * 上传文件夹：同样先让用户确认**远端目标目录**（可以逐级进子目录），
+   * 再弹系统的本地文件夹选择框。以前这里直接跳系统框，落点只能是当前目录，
+   * 想传到别的（下级）目录根本没法表达。
    */
   const openUploadFolder = async (dir?: string): Promise<void> => {
-    const res = await uploadFolder(sessionId, dir ?? currentDir)
-    if (res) bumpTree()
+    await uploadTarget.request(
+      dir ?? currentDir,
+      dir ? `目标来自所选条目：${dir}` : '选好目标目录后，再选本地要上传的文件夹',
+      'folder'
+    )
   }
 
   /* ---------- 右键菜单动作 ---------- */

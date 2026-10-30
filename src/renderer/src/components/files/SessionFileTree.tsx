@@ -85,7 +85,6 @@ export function SessionFileTree({
   const version = useSftpStore((s) => s.treeVersion)
   const bumpTree = useSftpStore((s) => s.bumpTree)
   const openEditor = useSftpStore((s) => s.openEditor)
-  const uploadFolder = useSftpStore((s) => s.uploadFolder)
   const downloadTo = useSftpStore((s) => s.downloadTo)
   /** 所属会话的连接状态：连接中不发 SFTP 请求，就绪后自动加载 */
   const sessionStatus = useSessionStore(
@@ -154,10 +153,14 @@ export function SessionFileTree({
     void beginUpload()
   }
 
-  /** 上传文件夹：目标目录与「上传文件」同一套解析，落点保留同名目录 */
+  /** 上传文件夹：先确认远端目标目录（可逐级进子目录），再选本地文件夹 */
   const handleUploadFolder = async (): Promise<void> => {
-    const res = await uploadFolder(sessionId, selectedDir())
-    if (res) bumpTree()
+    const dir = selectedDir()
+    await uploadTarget.request(
+      dir,
+      dir ? `目标来自所选条目：${dir}` : '选好目标目录后，再选本地要上传的文件夹',
+      'folder'
+    )
   }
 
   /** 双击目录：更新路径栏，并让终端 cd 过去 */
@@ -522,8 +525,8 @@ function TreeRow({
 }): JSX.Element {
   const { menu, openMenu, closeMenu } = useContextMenu<string>()
   // 上传执行链路统一在 store 里，这一层只负责「点了 → 刷新这级目录」
-  const uploadFolder = useSftpStore((s) => s.uploadFolder)
   const downloadTo = useSftpStore((s) => s.downloadTo)
+  const uploadFolder = useSftpStore((s) => s.uploadFolder)
   const [dialog, setDialog] = useState<null | 'mkdir' | 'rename' | 'chmod'>(null)
   const [pendingDelete, setPendingDelete] = useState(false)
 

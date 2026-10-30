@@ -1031,11 +1031,29 @@ async function transferDownload(
  * 本地目录递归遍历，返回相对路径与绝对路径。
  * @param limit 可选上限：扫描预览用，命中即停（正式上传不传，必须走全量）
  */
-async function walkLocal(
-  root: string,
-  limit?: number
-): Promise<Array<{ rel: string; full: string }>> {
-  const out: Array<{ rel: string; full: string }> = []
+interface LocalTree {
+  files: Array<{ rel: string; full: string }>
+  /** 相对路径的目录清单（含空目录，顺序为父目录在前） */
+  dirs: string[]
+  /** 被跳过的符号链接 / junction（相对路径） */
+  links: string[]
+}
+
+/**
+ * 遍历本地目录，同时收齐「文件、目录（含空目录）、被跳过的链接」。
+ *
+ * 两个历史 bug 就出在这里：
+ * 1. 只收集文件 → 空目录在远端根本不会被建出来，用户传一个「只有子目录」的
+ *    文件夹时看起来什么都没发生；
+ * 2. 符号链接 / Windows junction 的 `dirent.isDirectory()` 是 false，会被当成
+ *    文件去 open，轻则传出一个 0 字节的假文件，重则 EISDIR 直接让整个目录
+ *    上传失败（node_modules、pnpm store、OneDrive 目录里遍地都是）。
+ *    这里统一跳过并记下来，后面在失败汇总里报给用户。
+ */
+async function walkLocalTree(root: string, limit?: number): Promise<LocalTree> {
+  const files: LocalTree['files'] = []
+  const dirs: string[] = []
+  const links: string[] = []
   const stack: Array<{ dir: string; rel: string }> = [{ dir: root, rel: '' }]
   while (stack.length > 0) {
     const current = stack.pop()
@@ -1044,22 +1062,43 @@ async function walkLocal(
     for (const e of entries) {
       const full = join(current.dir, e.name)
       const rel = current.rel ? `${current.rel}/${e.name}` : e.name
-      if (e.isDirectory()) stack.push({ dir: full, rel })
-      else {
-        out.push({ rel, full })
-        if (limit !== undefined && out.length >= limit) return out
+      if (e.isSymbolicLink()) {
+        links.push(rel)
+        continue
+      }
+      if (e.isDirectory()) {
+        dirs.push(rel)
+        stack.push({ dir: full, rel })
+      } else {
+        files.push({ rel, full })
+        if (limit !== undefined && files.length >= limit) return { files, dirs, links }
       }
     }
   }
-  return out
+  return { files, dirs, links }
+}
+
+/** 只要文件清单（扫描预览用） */
+async function walkLocal(
+  root: string,
+  limit?: number
+): Promise<Array<{ rel: string; full: string }>> {
+  return (await walkLocalTree(root, limit)).files
 }
 
 /** 远端目录递归遍历 */
+/**
+ * 远端目录递归遍历：同时返回文件与目录清单。
+ *
+ * 目录清单不能省 —— 只按文件还原本地结构时，远端那些**空目录**会在下载后
+ * 彻底消失（和上传侧「空目录不落地」是同一类 bug）。
+ */
 async function walkRemote(
   sftp: SFTPWrapper,
   root: string
-): Promise<Array<{ rel: string; full: string }>> {
+): Promise<{ files: Array<{ rel: string; full: string }>; dirs: string[] }> {
   const out: Array<{ rel: string; full: string }> = []
+  const dirs: string[] = []
   const stack: Array<{ dir: string; rel: string }> = [{ dir: root, rel: '' }]
   while (stack.length > 0) {
     const current = stack.pop()
@@ -1068,11 +1107,13 @@ async function walkRemote(
     for (const e of entries) {
       const full = joinRemote(current.dir, e.filename)
       const rel = current.rel ? `${current.rel}/${e.filename}` : e.filename
-      if (e.attrs.isDirectory()) stack.push({ dir: full, rel })
-      else out.push({ rel, full })
+      if (e.attrs.isDirectory()) {
+        dirs.push(rel)
+        stack.push({ dir: full, rel })
+      } else out.push({ rel, full })
     }
   }
-  return out
+  return { files: out, dirs }
 }
 
 /** 远端逐级创建目录（已存在的层级忽略） */
@@ -1112,10 +1153,15 @@ async function transferUploadDir(
   const remoteDir = ctl.keepRoot
     ? ctl.remotePath
     : ctl.remotePath.slice(0, ctl.remotePath.lastIndexOf('/')) || '/'
-  const files = await walkLocal(localDir)
+  const { files, dirs, links } = await walkLocalTree(localDir)
 
   // 目录里一个文件都没有时也要把目录本身建出来，否则「上传文件夹」看起来毫无反应
   if (ctl.keepRoot) await ensureRemoteDir(sftp, remoteDir)
+
+  // 先把目录全部建好（父在前），空目录才不会丢
+  for (const d of dirs) {
+    await ensureRemoteDir(sftp, joinRemote(remoteDir, d))
+  }
 
   ctl.unit = 'files'
   ctl.total = files.length
@@ -1123,17 +1169,39 @@ async function transferUploadDir(
   emit(eventOf(ctl, taskId, 'running'))
 
   let done = 0
+  const failed: string[] = []
   for (const f of files) {
     await checkpoint(ctl)
     const target = joinRemote(remoteDir, f.rel)
     const targetDir = target.slice(0, target.lastIndexOf('/')) || '/'
     await ensureRemoteDir(sftp, targetDir)
-    await uploadFileChunked(sftp, ctl, f.full, target, () => undefined)
+    try {
+      await uploadFileChunked(sftp, ctl, f.full, target, () => undefined)
+    } catch (err) {
+      // 单个文件失败（权限、占用、路径过长…）不该让整批目录上传前功尽弃
+      if (err instanceof TransferCancelledError || err instanceof TransferAbortedError) throw err
+      failed.push(`${f.rel}：${err instanceof Error ? err.message : String(err)}`)
+    }
     done += 1
     ctl.transferred = done
     emit(eventOf(ctl, taskId, 'running'))
   }
   ctl.transferred = ctl.total
+
+  const notes: string[] = []
+  if (failed.length > 0) {
+    notes.push(`${failed.length} 个文件失败（例如 ${failed.slice(0, 3).join('；')}）`)
+  } else if (ctl.total === 0) {
+    notes.push('该文件夹里没有文件，已创建目录结构')
+  }
+  if (links.length > 0) {
+    notes.push(`跳过 ${links.length} 个符号链接/目录联接（例如 ${links.slice(0, 2).join('、')}）`)
+  }
+  if (failed.length > 0) throw new Error(notes.join('；'))
+  if (links.length > 0) {
+    // 只跳过链接、文件全成功：不算失败，但也不能悄悄咽下去
+    emit(eventOf(ctl, taskId, 'running', { note: notes.join('；') }))
+  }
 }
 
 /** 下载目录：进度按"已完成文件数 / 总文件数" */
@@ -1146,22 +1214,37 @@ async function transferDownloadDir(
   const remoteDir = ctl.remotePath
   // ctl.localPath 已经是"目标目录/远端目录名"，目录内文件直接铺在它下面
   const localDir = ctl.localPath
-  const files = await walkRemote(sftp, remoteDir)
+  const { files, dirs } = await walkRemote(sftp, remoteDir)
   ctl.unit = 'files'
   ctl.total = files.length
   ctl.transferred = 0
   emit(eventOf(ctl, taskId, 'running'))
 
+  // 先把远端目录结构（含空目录）在本地建出来，否则下载完的空目录会凭空消失
+  for (const d of dirs) {
+    await fs.mkdir(join(localDir, ...d.split('/')), { recursive: true })
+  }
+
   let done = 0
+  const failed: string[] = []
   for (const f of files) {
     await checkpoint(ctl)
     const target = join(localDir, ...f.rel.split('/'))
-    await downloadFileChunked(sftp, ctl, f.full, target, () => undefined)
+    try {
+      await downloadFileChunked(sftp, ctl, f.full, target, () => undefined)
+    } catch (err) {
+      // 单个文件失败（权限、占用、磁盘满…）不该让整批下载前功尽弃
+      if (err instanceof TransferCancelledError || err instanceof TransferAbortedError) throw err
+      failed.push(`${f.rel}：${err instanceof Error ? err.message : String(err)}`)
+    }
     done += 1
     ctl.transferred = done
     emit(eventOf(ctl, taskId, 'running'))
   }
   ctl.transferred = ctl.total
+  if (failed.length > 0) {
+    throw new Error(`${failed.length} 个文件失败（例如 ${failed.slice(0, 3).join('；')}）`)
+  }
 }
 
 export const sftpManager = new SftpManager()

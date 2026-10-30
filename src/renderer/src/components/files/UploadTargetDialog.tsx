@@ -20,6 +20,7 @@ export function UploadTargetDialog({
   defaultDir,
   hint,
   busy,
+  kind = 'file',
   onCancel,
   onConfirm
 }: {
@@ -30,6 +31,8 @@ export function UploadTargetDialog({
   /** 额外说明（例如「已选 3 个本地文件」） */
   hint?: string
   busy?: boolean
+  /** 确认后弹的是本地文件选择框还是文件夹选择框 */
+  kind?: 'file' | 'folder'
   onCancel: () => void
   onConfirm: (dir: string) => void
 }): JSX.Element | null {
@@ -118,7 +121,7 @@ export function UploadTargetDialog({
     <>
       <Modal
         open={open}
-        title="上传到远端目录"
+        title={kind === 'folder' ? '上传文件夹到远端目录' : '上传到远端目录'}
         onClose={onCancel}
         width="max-w-md"
         footer={
@@ -127,7 +130,7 @@ export function UploadTargetDialog({
               取消
             </button>
             <button className="btn btn-primary" disabled={busy} onClick={submit}>
-              {busy ? '正在准备…' : '选择文件并上传'}
+              {busy ? '正在准备…' : kind === 'folder' ? '选择文件夹并上传' : '选择文件并上传'}
             </button>
           </>
         }

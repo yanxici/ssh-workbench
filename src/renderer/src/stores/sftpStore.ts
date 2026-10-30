@@ -413,6 +413,7 @@ export const useSftpStore = create<SftpState>()((set, get) => ({
         unit: e.unit ?? base.unit,
         status: e.status,
         error: e.error,
+        note: e.note ?? base.note,
         speedBps: e.speedBps,
         finishedAt: finished ? Date.now() : base.finishedAt
       }
