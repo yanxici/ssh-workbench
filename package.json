@@ -27,9 +27,10 @@
     "test:cwdfollow": "node scripts/verify-shellcwd.cjs && node scripts/verify-cwdstore.cjs && node scripts/verify-cwdfollow.cjs",
     "test:hostkey": "node scripts/verify-hostkey.cjs",
     "test:uploadfolder": "node scripts/verify-upload-folder.cjs",
+    "test:uploadsession": "node scripts/verify-upload-session.cjs",
     "test:ipc": "electron scripts/verify-ipc-registration.cjs",
     "test:repository": "node scripts/verify-repository-split.cjs",
-    "test:features": "node scripts/verify-hostkey.cjs && node scripts/verify-upload-folder.cjs",
+    "test:features": "node scripts/verify-hostkey.cjs && node scripts/verify-upload-folder.cjs && node scripts/verify-upload-session.cjs",
     "test:stress": "node scripts/stress-test.js && node scripts/stress-cwd.cjs",
     "test:stress:e2e": "electron scripts/stress-e2e.cjs",
     "icon": "node scripts/make-icon.cjs",
@@ -39,10 +40,13 @@
     "unguard:integrity": "pwsh -NoProfile -File scripts/check-integrity.ps1 -Unguard",
     "smoke": "electron-vite build && electron . --smoke",
     "smoke:cdp": "node scripts/smoke-cdp.cjs",
-    "build:win": "pwsh -NoProfile -File scripts/check-integrity.ps1 && electron-vite build && electron-builder --win --config electron-builder.yml",
+    "build:win": "pwsh -NoProfile -File scripts/check-integrity.ps1 && npm run typecheck && npm run test:features && electron-vite build && node scripts/e2e-ui-sftp.cjs && electron-builder --win --config electron-builder.yml",
     "build:win:portable": "electron-vite build && electron-builder --win portable --config electron-builder.yml",
     "build:mac": "electron-vite build && electron-builder --mac --config electron-builder.yml",
-    "build:linux": "electron-vite build && electron-builder --linux --config electron-builder.yml"
+    "build:linux": "electron-vite build && electron-builder --linux --config electron-builder.yml",
+    "test:ui": "node scripts/e2e-ui-sftp.cjs",
+    "test:ui:stress": "node scripts/e2e-ui-sftp.cjs --stress",
+    "verify:prepackage": "npm run typecheck && npm run test:features && node scripts/e2e-ui-sftp.cjs"
   },
   "dependencies": {
     "electron-updater": "^6.8.11",

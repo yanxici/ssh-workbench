@@ -10,6 +10,20 @@
  *
  * 用法：npx electron scripts/verify-ipc-registration.cjs
  */
+
+/*
+ * 有些终端/CI 会全局设置 ELECTRON_RUN_AS_NODE=1，此时 electron 走 Node 模式，
+ * require('electron') 拿到的是路径字符串而不是内置模块 —— 静态断言照样全绿，
+ * 但运行时那段其实没跑（假测试）。发现该变量就静默重开一次，去掉它再跑。
+ */
+if (process.env.ELECTRON_RUN_AS_NODE) {
+  const { spawnSync } = require('child_process')
+  const env = { ...process.env }
+  delete env.ELECTRON_RUN_AS_NODE
+  const r = spawnSync(process.execPath, [__filename, ...process.argv.slice(2)], { stdio: 'inherit', env })
+  process.exit(r.status === null ? 1 : r.status)
+}
+
 const { app, ipcMain } = require('electron')
 const fs = require('fs')
 const path = require('path')

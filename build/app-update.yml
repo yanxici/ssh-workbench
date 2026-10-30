@@ -1,0 +1,5 @@
+owner: yanxici
+repo: ssh-workbench
+provider: github
+releaseType: release
+updaterCacheDirName: ssh-workbench-updater
