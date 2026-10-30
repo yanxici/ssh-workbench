@@ -27,6 +27,8 @@ import {
 /** 文件管理器右栏：远程设备文件系统（下载来源 / 上传目标） */
 export function RemotePane(): JSX.Element {
   const dir = useSftpStore((s) => s.remoteDir)
+  /** 本面板所属会话：上传/下载执行链路要求显式传入（不再依赖 store.sessionId） */
+  const sessionId = useSftpStore((s) => s.sessionId)
   const files = useSftpStore((s) => s.remoteFiles)
   const loading = useSftpStore((s) => s.remoteLoading)
   const sel = useSftpStore((s) => s.remoteSel)
@@ -68,17 +70,17 @@ export function RemotePane(): JSX.Element {
         label: '编辑',
         icon: <Pencil size={12} />,
         disabled: !f || f.type === 'directory',
-        onClick: () => void openEditor(path)
+        onClick: () => void openEditor(sessionId, path)
       },
       {
         label: '下载到左侧目录',
         icon: <Download size={12} />,
-        onClick: () => void downloadPaths(targets)
+        onClick: () => void downloadPaths(sessionId, targets)
       },
       {
         label: '上传文件夹到此目录',
         icon: <FolderUp size={12} />,
-        onClick: () => void uploadFolder(f?.type === 'directory' ? path : dir || undefined)
+        onClick: () => void uploadFolder(sessionId, f?.type === 'directory' ? path : dir || undefined)
       },
       {
         label: '重命名',
@@ -127,7 +129,7 @@ export function RemotePane(): JSX.Element {
         <button
           className="btn-icon h-6 w-6 shrink-0"
           title={dir ? `上传文件夹到 ${dir}（远端保留同名目录）` : '上传文件夹（选择目标目录）'}
-          onClick={() => void uploadFolder(dir || undefined)}
+          onClick={() => void uploadFolder(sessionId, dir || undefined)}
         >
           <FolderUp size={13} />
         </button>
@@ -157,8 +159,8 @@ export function RemotePane(): JSX.Element {
             const paths = JSON.parse(raw) as string[]
             // 拖到右栏 = 明确落到「右栏当前显示的目录」，这是用户看得见的选择；
             // 只有右栏还没定位（dir 为空）时才回退到目录选择框。
-            if (dir) void uploadPaths(paths, dir)
-            else void requestUpload(paths)
+            if (dir) void uploadPaths(sessionId, paths, dir)
+            else void requestUpload(sessionId, paths)
           } catch {
             /* 无效拖拽数据 */
           }
@@ -183,7 +185,7 @@ export function RemotePane(): JSX.Element {
             onClick={(e) => clickRow(f.path, e)}
             onDoubleClick={() => {
               if (f.type === 'directory') void nav(f.path)
-              else void openEditor(f.path)
+              else void openEditor(sessionId, f.path)
             }}
             onContextMenu={(e) => openMenu(e, f.path)}
             className={cn(

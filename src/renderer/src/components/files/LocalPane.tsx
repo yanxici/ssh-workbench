@@ -25,6 +25,8 @@ import {
 /** 文件管理器左栏：本地文件系统（上传来源 / 下载目标） */
 export function LocalPane(): JSX.Element {
   const dir = useSftpStore((s) => s.localDir)
+  /** 本面板所属会话：上传/下载执行链路要求显式传入（不再依赖 store.sessionId） */
+  const sessionId = useSftpStore((s) => s.sessionId)
   const files = useSftpStore((s) => s.localFiles)
   const loading = useSftpStore((s) => s.localLoading)
   const sel = useSftpStore((s) => s.localSel)
@@ -63,7 +65,7 @@ export function LocalPane(): JSX.Element {
       {
         label: '上传到远端目录…',
         icon: <Upload size={12} />,
-        onClick: () => void requestUpload(targets)
+        onClick: () => void requestUpload(sessionId, targets)
       },
       {
         label: '重命名',
@@ -149,7 +151,7 @@ export function LocalPane(): JSX.Element {
           if (!raw) return
           e.preventDefault()
           try {
-            void downloadPaths(JSON.parse(raw) as string[])
+            void downloadPaths(sessionId, JSON.parse(raw) as string[])
           } catch {
             /* 无效拖拽数据 */
           }

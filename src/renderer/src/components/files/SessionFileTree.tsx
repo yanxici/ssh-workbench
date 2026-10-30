@@ -156,7 +156,7 @@ export function SessionFileTree({
 
   /** 上传文件夹：目标目录与「上传文件」同一套解析，落点保留同名目录 */
   const handleUploadFolder = async (): Promise<void> => {
-    const res = await uploadFolder(selectedDir())
+    const res = await uploadFolder(sessionId, selectedDir())
     if (res) bumpTree()
   }
 
@@ -178,7 +178,7 @@ export function SessionFileTree({
 
   const handleDownload = (): void => {
     if (!selected) return
-    void downloadTo([selected.path])
+    void downloadTo(sessionId, [selected.path])
   }
 
   return (
@@ -279,7 +279,7 @@ export function SessionFileTree({
             autoExpand={autoExpand}
             selectedPath={selected?.path ?? null}
             onSelect={setSelected}
-            onOpenFile={(f) => void openEditor(f.path)}
+            onOpenFile={(f) => void openEditor(sessionId, f.path)}
             onEnterDir={enterDir}
             onRefresh={bumpTree}
             onUploadTo={(dir) => void beginUpload(dir)}
@@ -574,12 +574,12 @@ function TreeRow({
 
   /** 上传文件夹到本行的落点（目录本身 / 文件所在目录） */
   const uploadFolderHere = async (): Promise<void> => {
-    const res = await uploadFolder(isDir ? file.path : remoteDirname(file.path))
+    const res = await uploadFolder(sessionId, isDir ? file.path : remoteDirname(file.path))
     if (res) onRefresh()
   }
 
   const downloadHere = async (): Promise<void> => {
-    await downloadTo([file.path])
+    await downloadTo(sessionId, [file.path])
   }
 
   const menuItems = (): MenuEntry[] => [

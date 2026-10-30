@@ -55,10 +55,11 @@ export function useUploadTarget(
 
   const confirm = useCallback(
     (dir: string): void => {
+      if (!sessionId) return
       const target = normalizeRemoteDir(dir)
       if (!target) return
       setBusy(true)
-      void uploadFileDialog(target)
+      void uploadFileDialog(sessionId, target)
         .then((res) => {
           if (res) onUploaded?.()
         })
@@ -67,7 +68,7 @@ export function useUploadTarget(
           setOpen(false)
         })
     },
-    [uploadFileDialog, onUploaded]
+    [sessionId, uploadFileDialog, onUploaded]
   )
 
   return {

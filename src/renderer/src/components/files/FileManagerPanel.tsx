@@ -71,7 +71,7 @@ export function FileManagerPanel(): JSX.Element | null {
             className="btn-icon h-8 w-8"
             title={`上传选中项（已选 ${localSel.length}，可改目标目录）`}
             disabled={localSel.length === 0}
-            onClick={() => void requestUpload(localSel)}
+            onClick={() => void requestUpload(sessionId, localSel)}
           >
             <ArrowRight size={16} />
           </button>
@@ -79,7 +79,7 @@ export function FileManagerPanel(): JSX.Element | null {
             className="btn-icon h-8 w-8"
             title={`下载选中项到左侧目录（已选 ${remoteSel.length}）`}
             disabled={remoteSel.length === 0}
-            onClick={() => void downloadPaths(remoteSel)}
+            onClick={() => void downloadPaths(sessionId, remoteSel)}
           >
             <ArrowLeft size={16} />
           </button>
@@ -104,7 +104,7 @@ export function FileManagerPanel(): JSX.Element | null {
         onConfirm={(dir) => {
           const paths = uploadRequest?.localPaths ?? []
           cancelUploadRequest()
-          void uploadPaths(paths, dir)
+          void uploadPaths(sessionId, paths, dir)
         }}
       />
     </div>

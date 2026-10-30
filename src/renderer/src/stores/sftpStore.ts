@@ -28,15 +28,17 @@ export interface UploadResult {
  * 自身初始化期间引用自己的导出（circular），也让这个函数可以被单测直接驱动。
  */
 async function pickAndUpload(
-  get: () => {
-    sessionId: string | null
-    remoteDir: string
-    uploadRequest: { localPaths: string[]; defaultDir: string } | null
-  },
+  get: () => { remoteDir: string },
+  /**
+   * 目标会话**必须由调用方传入**：这套执行链路同时服务双栏面板（会话挂在 store 上）
+   * 和会话内文件树（每个会话树有自己的 sessionId）。以前这里读 get().sessionId，
+   * 而 store.sessionId 只在 openFor 里赋值、全应用没有调用者 —— 于是文件树里的
+   * 上传/下载全部静默 return null（点了没反应、也不报错）。
+   */
+  sessionId: string | null,
   remoteDir: string | undefined,
   kind: 'file' | 'folder'
 ): Promise<UploadResult | null> {
-  const sessionId = get().sessionId
   if (!sessionId) return null
 
   // 目标目录：显式指定 → 当前目录 → 上次用过 → 远端 home
@@ -108,7 +110,8 @@ interface SftpState {
   dismissTask: (id: string) => void
 
   /** 远程编辑器 */
-  editing: { path: string; content: string } | null
+  /** 远程编辑器：sessionId 跟着一起存，保存时不必再让面板补上下文 */
+  editing: { sessionId: string; path: string; content: string } | null
 
   /** 文件树刷新版本号（bump 后所有已挂载的树层级重新加载自身目录） */
   treeVersion: number
@@ -129,7 +132,12 @@ interface SftpState {
    * @param keepRoot 目录项是否在远端保留本地目录名（「上传文件夹」= true；
    *                 拖拽沿用历史语义 false，把目录内容铺进目标目录）
    */
-  uploadPaths: (localPaths: string[], remoteDir?: string, keepRoot?: boolean) => Promise<void>
+  uploadPaths: (
+    sessionId: string | null,
+    localPaths: string[],
+    remoteDir?: string,
+    keepRoot?: boolean
+  ) => Promise<void>
   /**
    * 弹系统对话框上传文件（可多选），落到 resolved 目标目录。
    *
@@ -137,16 +145,21 @@ interface SftpState {
    * 5 个面板就是 5 份几乎相同的 20 行。现在执行链路只留在这里，
    * 面板只负责「按钮点了调用它」和「成功后重绘自己」。
    *
+   * @param sessionId 目标会话（会话内文件树必须传自己的；不能依赖 store.sessionId）
    * @returns 实际入队的任务数；用户取消或没有可用目录时返回 null
    */
-  uploadFileDialog: (remoteDir?: string) => Promise<UploadResult | null>
+  uploadFileDialog: (sessionId: string | null, remoteDir?: string) => Promise<UploadResult | null>
   /** 弹系统目录对话框上传文件夹（可多选，远端保留同名目录） */
-  uploadFolder: (remoteDir?: string) => Promise<UploadResult | null>
+  uploadFolder: (sessionId: string | null, remoteDir?: string) => Promise<UploadResult | null>
   /**
    * 请求上传：先解析默认目标目录并挂起一个待确认请求，
    * 由 FileManagerPanel 渲染目标目录选择框，用户确认后才真正开始传输。
    */
-  requestUpload: (localPaths: string[], preferredDir?: string) => Promise<void>
+  requestUpload: (
+    sessionId: string | null,
+    localPaths: string[],
+    preferredDir?: string
+  ) => Promise<void>
   /** 待确认的上传请求（null = 没有） */
   uploadRequest: { localPaths: string[]; defaultDir: string } | null
   /** 关闭待确认请求（用户取消） */
@@ -155,14 +168,25 @@ interface SftpState {
    * 下载一批远端路径到指定的本地目录（不弹对话框）。
    * @returns 入队数；没有可用目录/空选择时返回 null
    */
-  downloadPaths: (remotePaths: string[], localDir?: string) => Promise<UploadResult | null>
+  downloadPaths: (
+    sessionId: string | null,
+    remotePaths: string[],
+    localDir?: string
+  ) => Promise<UploadResult | null>
   /**
    * 下载：给了本地目录就直接入队，没给就弹系统对话框选保存位置。
    * 目录的递归遍历在主进程（sftpManager），渲染层不需要预先展开。
    */
-  downloadTo: (remotePaths: string[], localDir?: string) => Promise<UploadResult | null>
+  downloadTo: (
+    sessionId: string | null,
+    remotePaths: string[],
+    localDir?: string
+  ) => Promise<UploadResult | null>
   /** 一键下载到本机「下载」文件夹（不弹对话框） */
-  downloadToDefault: (remotePaths: string[]) => Promise<UploadResult | null>
+  downloadToDefault: (
+    sessionId: string | null,
+    remotePaths: string[]
+  ) => Promise<UploadResult | null>
   applyProgress: (e: TransferProgressEvent) => void
   /** 暂停 / 继续 / 终止单个传输任务（主进程负责真正停住分块循环） */
   pauseTask: (id: string) => Promise<void>
@@ -170,7 +194,7 @@ interface SftpState {
   cancelTask: (id: string) => Promise<void>
   clearFinished: () => void
 
-  openEditor: (path: string) => Promise<void>
+  openEditor: (sessionId: string | null, path: string) => Promise<void>
   closeEditor: () => void
   saveEditor: (content: string) => Promise<void>
 
@@ -280,8 +304,7 @@ export const useSftpStore = create<SftpState>()((set, get) => ({
 
   /* ---------------- 传输 ---------------- */
 
-  uploadPaths: async (localPaths, remoteDir, keepRoot) => {
-    const sessionId = get().sessionId
+  uploadPaths: async (sessionId, localPaths, remoteDir, keepRoot) => {
     if (!sessionId || localPaths.length === 0) return
 
     // 目标目录按「显式指定 → 当前目录 → 上次目录 → 远端 home」解析；
@@ -309,13 +332,12 @@ export const useSftpStore = create<SftpState>()((set, get) => ({
     }
   },
 
-  uploadFileDialog: async (remoteDir) =>
-    pickAndUpload(get, remoteDir, 'file'),
-  uploadFolder: async (remoteDir) =>
-    pickAndUpload(get, remoteDir, 'folder'),
+  uploadFileDialog: async (sessionId, remoteDir) =>
+    pickAndUpload(get, sessionId, remoteDir, 'file'),
+  uploadFolder: async (sessionId, remoteDir) =>
+    pickAndUpload(get, sessionId, remoteDir, 'folder'),
 
-  requestUpload: async (localPaths, preferredDir) => {
-    const sessionId = get().sessionId
+  requestUpload: async (sessionId, localPaths, preferredDir) => {
     if (!sessionId || localPaths.length === 0) return
     const { remoteDir } = get()
     const defaultDir = await resolveUploadDir(sessionId, preferredDir ?? remoteDir)
@@ -324,8 +346,7 @@ export const useSftpStore = create<SftpState>()((set, get) => ({
 
   cancelUploadRequest: () => set({ uploadRequest: null }),
 
-  downloadPaths: async (remotePaths, localDir) => {
-    const sessionId = get().sessionId
+  downloadPaths: async (sessionId, remotePaths, localDir) => {
     const target = localDir ?? get().localDir
     if (!sessionId || remotePaths.length === 0 || !target) return null
     const ids = await call(window.api.sftp.download(sessionId, remotePaths, target), {
@@ -340,12 +361,11 @@ export const useSftpStore = create<SftpState>()((set, get) => ({
     return { count: ids.length, target }
   },
 
-  downloadTo: async (remotePaths, localDir) => {
-    const sessionId = get().sessionId
+  downloadTo: async (sessionId, remotePaths, localDir) => {
     if (!sessionId || remotePaths.length === 0) return null
     // 给了目录就走上面那条（本地栏拖拽、右键「下载到左侧目录」）；
     // 没给就弹系统对话框，落点由用户临时决定
-    if (localDir) return get().downloadPaths(remotePaths, localDir)
+    if (localDir) return get().downloadPaths(sessionId, remotePaths, localDir)
     const res = await call(window.api.sftp.downloadDialog(sessionId, remotePaths), {
       errorTitle: '下载失败'
     })
@@ -357,11 +377,10 @@ export const useSftpStore = create<SftpState>()((set, get) => ({
     return { count: res.count, target: '' }
   },
 
-  downloadToDefault: async (remotePaths) => {
-    const sessionId = get().sessionId
+  downloadToDefault: async (sessionId, remotePaths) => {
     if (!sessionId || remotePaths.length === 0) return null
     const dir = await call(window.api.sftp.downloadsDir(), { silent: true })
-    return dir ? get().downloadPaths(remotePaths, dir) : null
+    return dir ? get().downloadPaths(sessionId, remotePaths, dir) : null
   },
 
   applyProgress: (e) => {
@@ -468,19 +487,19 @@ export const useSftpStore = create<SftpState>()((set, get) => ({
 
   /* ---------------- 远程编辑器 ---------------- */
 
-  openEditor: async (path) => {
-    const sessionId = get().sessionId
+  openEditor: async (sessionId, path) => {
     if (!sessionId) return
     const content = await call(window.api.sftp.readText(sessionId, path), {
       errorTitle: '无法打开文件'
     })
-    if (content !== null) set({ editing: { path, content } })
+    if (content !== null) set({ editing: { sessionId, path, content } })
   },
 
   closeEditor: () => set({ editing: null }),
 
   saveEditor: async (content) => {
-    const { sessionId, editing } = get()
+    const { editing } = get()
+    const sessionId = editing?.sessionId
     if (!sessionId || !editing) return
     const done = await call(window.api.sftp.writeText(sessionId, editing.path, content), {
       errorTitle: '保存失败'

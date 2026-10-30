@@ -517,7 +517,7 @@ export function FileExplorer({
    * 这里只管「点完之后重绘自己这棵树」。
    */
   const openUploadFolder = async (dir?: string): Promise<void> => {
-    const res = await uploadFolder(dir ?? currentDir)
+    const res = await uploadFolder(sessionId, dir ?? currentDir)
     if (res) bumpTree()
   }
 
@@ -529,9 +529,9 @@ export function FileExplorer({
 
   /** 下载：执行链路在 sftpStore.downloadTo / downloadToDefault，这里只做转发 */
   const downloadTo = (paths: string[], localDir?: string): Promise<unknown> =>
-    downloadToStore(paths, localDir)
+    downloadToStore(sessionId, paths, localDir)
   const downloadToDefault = (paths: string[]): Promise<unknown> =>
-    downloadDefault(paths)
+    downloadDefault(sessionId, paths)
 
   const mkdirAt = async (parent: string, name: string): Promise<void> => {
     if (!sessionId) return
@@ -570,7 +570,7 @@ export function FileExplorer({
             {
               label: '编辑',
               icon: <Pencil size={12} />,
-              onClick: () => void openEditor(target.path)
+              onClick: () => void openEditor(sessionId, target.path)
             }
           ]
         : []),
@@ -837,7 +837,7 @@ export function FileExplorer({
                     setCurrentDir(file.path)
                     toggleDir(file.path)
                   } else {
-                    void openEditor(file.path)
+                    void openEditor(sessionId, file.path)
                   }
                 }}
                 title={`${file.path}${isDir ? '' : ` · ${formatBytes(file.size)}`}`}
