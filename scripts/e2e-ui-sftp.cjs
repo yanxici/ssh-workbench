@@ -83,11 +83,22 @@ async function waitFor(fn, timeoutMs, stepMs = 250) {
 }
 
 /* ---------------- CDP ---------------- */
+/*
+ * Node 22+ 自带全局 WebSocket；CI 上如果跑 Node 20 就没有，用 ws 兜底。
+ */
+const WEB_SOCKET_IMPL = (() => {
+  if (typeof WebSocket === 'function') return WebSocket
+  try {
+    return require('ws')
+  } catch {
+    throw new Error('当前 Node 既没有全局 WebSocket，也没装 ws：请用 Node 22+ 或 npm i -D ws')
+  }
+})()
 async function attach(port, want) {
   const list = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json()
   const t = list.find((x) => x.webSocketDebuggerUrl && (want === 'main' ? true : x.type === 'page'))
   if (!t) throw new Error(`${want}: ${port} 无可用 target`)
-  const ws = new WebSocket(t.webSocketDebuggerUrl)
+  const ws = new WEB_SOCKET_IMPL(t.webSocketDebuggerUrl)
   await new Promise((res, rej) => {
     ws.addEventListener('open', res)
     ws.addEventListener('error', rej)
