@@ -7,9 +7,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version tag (e.g., v1.2.0)'
+        description: 'Version tag (e.g., v1.6.4)'
         required: true
-        default: 'v1.2.0'
+        default: 'v1.6.4'
 
 permissions:
   contents: write
@@ -17,88 +17,44 @@ permissions:
 jobs:
   build:
     runs-on: windows-latest
-    
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-      
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '18'
-      
+          node-version: '20'
+          cache: npm
+
       - name: Install dependencies
-        run: npm install
-      
-      - name: Build application
-        run: npm run build:win
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      
-      - name: Get version
-        id: get_version
+        run: npm ci
+
+      # 门禁：类型检查 + 功能自检 + 真·UI 级 SFTP 端到端（含上传文件夹/空目录/链接）
+      # 任何一项不过就不出包 —— 1.6.3 就是「测试全绿但功能坏了」的教训。
+      - name: Verify (typecheck + features + UI e2e)
+        run: npm run verify:prepackage
+
+      - name: Determine version
+        id: version
         shell: bash
         run: |
-          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
-            echo "VERSION=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "value=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
           else
-            echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+            echo "value=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
           fi
-      
-      - name: Create Release
-        id: create_release
-        uses: actions/create-release@v1
+
+      # electron-builder 直接发布：zip + latest.yml（自动更新要的清单）都在这里生成
+      - name: Build & publish (zip)
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npx electron-builder --win zip --config electron-builder.yml --publish always
+
+      - name: Upload build artifact (for debugging)
+        uses: actions/upload-artifact@v4
         with:
-          tag_name: ${{ steps.get_version.outputs.VERSION }}
-          release_name: Release ${{ steps.get_version.outputs.VERSION }}
-          body: |
-            ## 更新内容
-            
-            ### 新功能
-            - ✨ 批量编辑标签功能
-            - ✨ 会话恢复（自动保存打开的标签页）
-            - ✨ 快捷键冲突检测
-            - 🎨 优化安装包体积
-            
-            ### 改进
-            - 📦 更好的批量操作体验
-            - 🚀 更快的启动速度
-            
-            ### 下载说明
-            - **安装版**: `SSH-Workbench-Setup-x.x.x.exe` - 需要管理员权限安装
-            - **免安装版**: `SSH-Workbench-x.x.x.exe` - 解压即用，适合绿色便携使用
-            - **解压版**: `SSH-Workbench-win32-x64-x.x.x.zip` - 完整文件夹，可自定义配置
-          draft: false
-          prerelease: false
-      
-      - name: Upload Setup Package
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./dist-v11/SSH Workbench Setup 1.4.0.exe
-          asset_name: SSH-Workbench-Setup-${{ steps.get_version.outputs.VERSION }}.exe
-          asset_content_type: application/octet-stream
-      
-      - name: Upload Portable Package
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./dist-v11/SSH Workbench-1.4.0-portable.exe
-          asset_name: SSH-Workbench-${{ steps.get_version.outputs.VERSION }}-portable.exe
-          asset_content_type: application/octet-stream
-      
-      - name: Upload ZIP Package
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./dist-v11/SSH Workbench-1.4.0-win.zip
-          asset_name: SSH-Workbench-${{ steps.get_version.outputs.VERSION }}-win.zip
-          asset_content_type: application/zip
+          name: win-zip-${{ steps.version.outputs.value }}
+          path: dist-v14/*.zip
+          if-no-files-found: error
+          retention-days: 7
