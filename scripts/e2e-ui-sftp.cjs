@@ -250,9 +250,18 @@ async function main() {
 
   /* 3. 起应用（E2E_APP 指向打包后的 exe，用来验证「真正要发出去的那个二进制」） */
   const electronPath = process.env.E2E_APP || require('electron')
-  const appArgs = process.env.E2E_APP
-    ? [`--user-data-dir=${USERDATA}`, `--remote-debugging-port=${APP_PORT}`, `--inspect=${MAIN_PORT}`]
-    : ['.', `--user-data-dir=${USERDATA}`, `--remote-debugging-port=${APP_PORT}`, `--inspect=${MAIN_PORT}`]
+  /*
+   * --disable-gpu / --no-sandbox：CI（GitHub windows runner）里没有可用的 GPU 与
+   * 桌面会话细节，默认参数下窗口可能根本起不来；本地行为不变。
+   */
+  const baseArgs = [
+    `--user-data-dir=${USERDATA}`,
+    `--remote-debugging-port=${APP_PORT}`,
+    `--inspect=${MAIN_PORT}`,
+    '--disable-gpu',
+    '--no-sandbox'
+  ]
+  const appArgs = process.env.E2E_APP ? baseArgs : ['.', ...baseArgs]
   const appEnv = { ...process.env }
   delete appEnv.ELECTRON_RUN_AS_NODE
   const app = spawn(electronPath, appArgs, {
@@ -267,6 +276,8 @@ async function main() {
     if (process.env.E2E_VERBOSE) process.stdout.write('[app] ' + d)
   })
   app.stderr.on('data', (d) => appLog.push(String(d)))
+  app.on('exit', (code, signal) => appLog.push(`[app exit] code=${code} signal=${signal}
+`))
 
   const pageUp = await waitFor(async () => {
     try {
@@ -276,7 +287,20 @@ async function main() {
       return false
     }
   }, 60000, 400)
-  if (!pageUp) throw new Error('应用 CDP 没起来：\n' + appLog.join('').slice(-2000))
+  if (!pageUp) {
+    let boot = ""
+    try {
+      boot = fs.readFileSync(path.join(USERDATA, "boot.log"), "utf8").slice(-3000)
+    } catch (e) {
+      boot = "(boot.log 不可读: " + e.message + ")"
+    }
+    throw new Error(
+      "应用 CDP 没起来:\n--- app stdout/stderr ---\n" +
+        appLog.join("").slice(-3000) +
+        "\n--- boot.log ---\n" +
+        boot
+    )
+  }
 
   const mainCdp = await attach(MAIN_PORT, 'main')
   let page = await attach(APP_PORT, 'page')
