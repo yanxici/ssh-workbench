@@ -288,17 +288,10 @@ async function main() {
     }
   }, 60000, 400)
   if (!pageUp) {
-    let boot = ""
-    try {
-      boot = fs.readFileSync(path.join(USERDATA, "boot.log"), "utf8").slice(-3000)
-    } catch (e) {
-      boot = "(boot.log 不可读: " + e.message + ")"
-    }
     throw new Error(
-      "应用 CDP 没起来:\n--- app stdout/stderr ---\n" +
-        appLog.join("").slice(-3000) +
-        "\n--- boot.log ---\n" +
-        boot
+      "应用 CDP 没起来（60s 内没有 page target）。请确认 out/main/index.js 已构建" +
+        "（npm run verify:prepackage 会先 electron-vite build）。" +
+        "\n--- app stdout/stderr ---\n" + appLog.join("").slice(-3000)
     )
   }
 

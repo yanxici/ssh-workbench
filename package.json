@@ -46,7 +46,7 @@
     "build:linux": "electron-vite build && electron-builder --linux --config electron-builder.yml",
     "test:ui": "node scripts/e2e-ui-sftp.cjs",
     "test:ui:stress": "node scripts/e2e-ui-sftp.cjs --stress",
-    "verify:prepackage": "npm run typecheck && npm run test:features && node scripts/e2e-ui-sftp.cjs"
+    "verify:prepackage": "npm run typecheck && npm run test:features && npm run test:uploadfolder && electron-vite build && node scripts/e2e-ui-sftp.cjs"
   },
   "dependencies": {
     "electron-updater": "^6.8.11",
