@@ -45,16 +45,20 @@ jobs:
             echo "value=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
           fi
 
-      # electron-builder 直接发布：zip + latest.yml（自动更新要的清单）都在这里生成
-      - name: Build & publish (zip)
+      # electron-builder 直接发布：nsis(Setup) + 解压版 zip + latest.yml（自动更新清单）
+      # 只打 zip 时 electron-builder 不产 latest.yml，客户端「检查更新」会 404。
+      - name: Build & publish (nsis + zip)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: npx electron-builder --win zip --config electron-builder.yml --publish always
+        run: npx electron-builder --win nsis zip --config electron-builder.yml --publish always
 
       - name: Upload build artifact (for debugging)
         uses: actions/upload-artifact@v4
         with:
           name: win-zip-${{ steps.version.outputs.value }}
-          path: dist-v14/*.zip
+          path: |
+            dist-v14/*.zip
+            dist-v14/*.exe
+            dist-v14/latest.yml
           if-no-files-found: error
           retention-days: 7
