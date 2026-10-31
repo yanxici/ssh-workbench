@@ -146,9 +146,39 @@ jobs:
             Write-Host "缺少发布产物，实际找到：$($assets -join ', ')" -ForegroundColor Red
             exit 1
           }
+          # Release 日志：必须是仓库里的 release-notes-<tag>.md，缺了直接失败。
+          # 历史问题：这里原本写的是 --notes "Release $tag"，CI 自动建 Release 时
+          # 正文就一行 "Release v1.8.0"，完整日志没有出口 —— 用户装到新版，
+          # Release 页面只有一行标题，等于没有更新说明。
+          #
+          # 不做「找不到就拿别的版本日志顶上」的回退：v1.7 的日志挂到 v1.8 的
+          # Release 上，比空日志更误导。宁可红在这里，让人去补文件。
+          $notesFile = "release-notes-$tag.md"
+          if (-not (Test-Path $notesFile)) {
+            Write-Host "缺少 $notesFile —— 发版必须带日志，先写这个文件再打 tag" -ForegroundColor Red
+            exit 1
+          }
+          $notesLen = (Get-Content $notesFile -Raw).Length
+          # 一行标题也算「有日志」就没意义了：低于 200 字符视为占位符。
+          if ($notesLen -lt 200) {
+            Write-Host "$notesFile 只有 $notesLen 字符，疑似占位符，拒绝发布" -ForegroundColor Red
+            exit 1
+          }
+          Write-Host "日志文件：$notesFile ($notesLen 字符)"
+
           gh release view $tag 2>$null | Out-Null
           if ($LASTEXITCODE -ne 0) {
-            gh release create $tag --title "SSH Workbench $tag" --target main --notes "Release $tag"
+            gh release create $tag --title "SSH Workbench $tag" --target main --notes-file $notesFile
+          } else {
+            # Release 已存在（人工先建、或上一轮 CI 半途失败）：
+            # 只在正文是占位符或为空时补写，不覆盖人工已写好的日志。
+            $body = gh release view $tag --json body -q .body
+            if ([string]::IsNullOrWhiteSpace($body) -or $body -match '^\s*Release\s+v?\d') {
+              gh release edit $tag --notes-file $notesFile
+              Write-Host "Release 正文是占位符，已用 $notesFile 覆盖"
+            } else {
+              Write-Host "Release 正文已是完整日志（$($body.Length) 字符），不覆盖"
+            }
           }
           gh release upload $tag @assets --clobber
 
