@@ -88,11 +88,21 @@ portable:
   # 同样不带空格，理由见 nsis.artifactName
   artifactName: ${name}-${version}-portable.${ext}
   requestExecutionLevel: user
-mac:
-  target:
-    - dmg
-  category: public.app-category.developer-tools
-linux:
-  target:
-    - AppImage
-  category: Development
+# mac / linux 暂不发布（用户 2026-10-31 决策：「mac版本不发」）。
+#
+# 不发布的原因不是配不出来 —— electron-builder 的 mac/linux target 一直是好的，
+# 而是 mac 要能用就得整条链路都在：Developer ID 证书（99 USD/年）+ notarytool 公证
+# + electron-updater 的 latest-mac.yml。只做半套（unsigned dmg + 更新元数据）
+# 在 Gatekeeper 下第一次打开要右键绕行、更新时还会弹「无法验证开发者」，
+# 比不发布更糟。
+#
+# 这两段配置保留但注释掉：将来要发时，取消注释 + 在 CI 加对应 job 即可，
+# 不用重新查 electron-builder 的字段名。现在它们不生效，打包只会产出 win 目标。
+# mac:
+#   target:
+#     - dmg
+#   category: public.app-category.developer-tools
+# linux:
+#   target:
+#     - AppImage
+#   category: Development
