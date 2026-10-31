@@ -680,7 +680,21 @@ export function ConnectionSidebar({
                       onDoubleClick={() => openConnection(c)}
                       onKeyDown={(e) => {
                         if (e.key === 'Enter') openConnection(c)
-                        if (e.key === 'Delete') setPendingBatchDelete(true)
+                        if (e.key === 'Delete') {
+                          /*
+                           * 焦点行不在选中集时，把它当作删除目标。
+                           * 单击不会选中（见上面的注释：高亮很干扰视线），
+                           * 所以 Tab 到某一行直接按 Delete 时 selectedIds 是空的，
+                           * 原来会弹出「删除选中的 0 条连接」—— 用户以为要删这行，
+                           * 确认后什么都没发生。
+                           * 有选中集时沿用选中集（删除多选是明确意图）。
+                           */
+                          if (!selectedIds.has(c.id)) {
+                            setSelectedIds(new Set([c.id]))
+                            anchorId.current = c.id
+                          }
+                          setPendingBatchDelete(true)
+                        }
                       }}
                       onContextMenu={(e) => {
                         // 右键未选中的行时先把它选中，避免「右键A删了B」
@@ -1024,6 +1038,10 @@ export function ConnectionSidebar({
           const ids = [...selectedIds]
           setPendingBatchDelete(false)
           setSelectedIds(new Set())
+          if (ids.length === 0) {
+            // 兜底：确实没有目标时不要弹「已删除 0 条」的成功提示
+            return
+          }
           // 一次 IPC + 一次落盘；逐个 remove 会是 N 次读改写
           void removeMany(ids).then((n) => {
             useToastStore.getState().push({

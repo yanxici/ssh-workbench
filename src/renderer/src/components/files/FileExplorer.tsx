@@ -839,12 +839,40 @@ export function FileExplorer({
               <div
                 key={file.path}
                 data-file-path={file.path}
+                /*
+                 * 键盘可达性。
+                 * 行原本是无 tabIndex 的 div，Tab 键永远落不到它上面 ——
+                 * §5.5 的 focus-visible 约束在文件树上等于摆设，
+                 * 而连接列表的行是有 tabIndex + Enter/Delete 的，两处不一致。
+                 * tabIndex={0} 让行进入 Tab 序列，Enter 展开/打开、Delete 删除，
+                 * 与连接列表保持同一套手感。
+                 */
+                tabIndex={0}
                 className={cn(
                   'group flex cursor-default items-center gap-1 py-[3px] pr-2 text-xs transition-colors duration-150',
+                  'focus-visible:bg-hover focus-visible:outline-none',
                   isSel ? 'bg-select text-ink' : 'text-ink-2 hover:bg-hover'
                 )}
                 style={{ paddingLeft: 6 + depth * 12 }}
                 onClick={() => setSelected(file.path)}
+                onKeyDown={(e) => {
+                  /*
+                   * Enter：目录则展开/收起，文件则打开编辑器。
+                   * Delete：走现有确认框（不直接删，远端删除不可撤销）。
+                   * 先选中再执行，保证「操作的是焦点这一行」。
+                   */
+                  if (e.key === 'Enter') {
+                    e.preventDefault()
+                    setSelected(file.path)
+                    if (isDir) toggleDir(file.path)
+                    else void openEditor(sessionId, file.path)
+                  } else if (e.key === 'Delete') {
+                    e.preventDefault()
+                    setSelected(file.path)
+                    setMenuTarget(file)
+                    setPendingDelete(file)
+                  }
+                }}
                 onContextMenu={(e) => {
                   // 先选中再开菜单：菜单项读的是同一个 target，避免右键后视觉选中不跟手
                   setSelected(file.path)
