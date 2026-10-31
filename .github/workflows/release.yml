@@ -114,7 +114,11 @@ jobs:
 
       # 只把 Setup、blockmap、latest.yml 传到 Release；zip/portable 走下面的 artifact。
       # 输出目录从 electron-builder.yml 解析，避免像 release.ps1 那样硬编码目录名后失联。
+      # 解析结果写进 step output，供下面的 artifact 步骤复用 —— 不在那边再解析一遍：
+      # 两处各解析一次，口径迟早分裂（切目录时 Publish 正常、artifact 直接红，
+      # 而 artifact 是排障时唯一能拿到 zip 的地方）。
       - name: Publish release assets (nsis + latest.yml only)
+        id: publish
         shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -124,6 +128,7 @@ jobs:
           $m = Select-String -Path "electron-builder.yml" -Pattern '^\s*output:\s*(\S+)\s*$' -AllMatches
           if (-not $m -or $m.Matches.Count -eq 0) { Write-Host "解析不到 directories.output" -ForegroundColor Red; exit 1 }
           $dist = $m.Matches[0].Groups[1].Value.Trim('"', "'")
+          "dir=$dist" >> $env:GITHUB_OUTPUT
           $assets = @(
             (Join-Path $dist "ssh-workbench-Setup-$ver.exe"),
             (Join-Path $dist "ssh-workbench-Setup-$ver.exe.blockmap"),
@@ -143,9 +148,10 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: win-zip-${{ steps.version.outputs.value }}
+          # 复用 Publish 步骤解析出的目录，避免两处各写一份硬编码
           path: |
-            dist-v15/*.zip
-            dist-v15/*.exe
-            dist-v15/latest.yml
+            ${{ steps.publish.outputs.dir }}/*.zip
+            ${{ steps.publish.outputs.dir }}/*.exe
+            ${{ steps.publish.outputs.dir }}/latest.yml
           if-no-files-found: error
           retention-days: 7
