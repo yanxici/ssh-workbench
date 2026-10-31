@@ -32,7 +32,7 @@ if (-not $env:GH_TOKEN) {
 $root = Split-Path -Parent $PSScriptRoot
 
 # ---- 输出目录从 electron-builder.yml 解析，不再硬编码 ----
-# 硬编码 dist-v13 而配置早已切到 dist-v14，每次发版都要手动改脚本，
+# 硬编码 dist-v13 而配置早已切到 dist-v15，每次发版都要手动改脚本，
 # 忘改就报「没有产物」，本身就是事故源。以配置里的 directories.output 为准。
 $builderYml = Join-Path $root "electron-builder.yml"
 $distName = $null

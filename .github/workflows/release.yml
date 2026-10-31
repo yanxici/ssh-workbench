@@ -144,8 +144,8 @@ jobs:
         with:
           name: win-zip-${{ steps.version.outputs.value }}
           path: |
-            dist-v14/*.zip
-            dist-v14/*.exe
-            dist-v14/latest.yml
+            dist-v15/*.zip
+            dist-v15/*.exe
+            dist-v15/latest.yml
           if-no-files-found: error
           retention-days: 7
