@@ -48,11 +48,17 @@ export {
 
 export { addHistory, clearHistory, listHistory } from './repo/history'
 
-export {
-  DEFAULT_SETTINGS,
-  getSettings,
-  setSettings
-} from './repo/settings'
+/*
+ * 设置出口刻意**不**导出 setSettings。
+ *
+ * 写设置必须走 app/settingsService.ts 的 updateSettings —— 它负责在落盘后
+ * 施加「更新偏好立刻生效」等副作用。如果这里也暴露 setSettings，
+ * 任何人都能绕过 service 直调，设置存下来了但副作用没跑，
+ * 表现为「改了代理地址要重启才生效」，而且这种错不会报任何警告。
+ * 摘掉之后，「改设置必须过副作用」从口头约定变成编译期约束：
+ * 直调会 import 不到。
+ */
+export { DEFAULT_SETTINGS, getSettings } from './repo/settings'
 
 export { deleteDiagSection, listDiagSections, saveDiagSection } from './repo/diagSections'
 

@@ -33,7 +33,13 @@ const stub = path.join(OUT_DIR, 'electron-stub.cjs')
 fs.writeFileSync(
   stub,
   `module.exports = {
-  app: { getPath: () => process.env.SW_TEST_USERDATA },
+  app: {
+    getPath: () => process.env.SW_TEST_USERDATA,
+    // settingsService 连带引入 updater，后者模块顶层读这些
+    getVersion: () => '0.0.0-test',
+    getName: () => 'ssh-workbench-test',
+    isPackaged: false
+  },
   safeStorage: { isEncryptionAvailable: () => false, encryptString: (s) => Buffer.from(s), decryptString: (b) => b.toString() }
 }`
 )
@@ -44,6 +50,8 @@ esbuild.buildSync({
       export { sessionManager } from './src/main/ssh/sessionManager'
       export { batchRunner } from './src/main/ssh/batchExec'
       export * from './src/main/store/repository'
+      // setSettings 已从 repository 出口摘除（强制走 service 层副作用），脚本预置数据要走这里
+      export { updateSettings } from './src/main/app/settingsService'
     `,
     resolveDir: ROOT,
     loader: 'ts'
@@ -177,7 +185,7 @@ async function main() {
     listen(slowServer), listen(fastServer), listen(gateServer)
   ])
 
-  await M.setSettings({ latencyProbe: false, autoLog: false, strictHostKey: true, autoReconnect: false })
+  await M.updateSettings({ latencyProbe: false, autoLog: false, strictHostKey: true, autoReconnect: false })
 
   const mkConn = (name, port) =>
     M.saveConnection({

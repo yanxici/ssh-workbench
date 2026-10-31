@@ -21,7 +21,13 @@ const stub = path.join(OUT_DIR, 'electron-stub.cjs')
 fs.writeFileSync(
   stub,
   `module.exports = {
-  app: { getPath: () => process.env.SW_TEST_USERDATA },
+  app: {
+    getPath: () => process.env.SW_TEST_USERDATA,
+    // settingsService 连带引入 updater，后者模块顶层读这些
+    getVersion: () => '0.0.0-test',
+    getName: () => 'ssh-workbench-test',
+    isPackaged: false
+  },
   safeStorage: { isEncryptionAvailable: () => false, encryptString: (s) => Buffer.from(s), decryptString: (b) => b.toString() }
 }`
 )
@@ -31,6 +37,8 @@ esbuild.buildSync({
     contents: `
       export { sessionManager } from './src/main/ssh/sessionManager'
       export * from './src/main/store/repository'
+      // setSettings 已从 repository 出口摘除（强制走 service 层副作用），脚本预置数据要走这里
+      export { updateSettings } from './src/main/app/settingsService'
     `,
     resolveDir: ROOT,
     loader: 'ts'
@@ -153,7 +161,7 @@ async function main() {
    * 开着它，断言会把正在重连的连接数当成泄漏，误报。
    * 重连本身的行为由 verify-errors-reconnect.cjs 覆盖。
    */
-  await M.setSettings({
+  await M.updateSettings({
     latencyProbe: false,
     autoLog: true,
     strictHostKey: true,
@@ -362,9 +370,9 @@ async function main() {
 
   /* 13. 设置并发写不互相覆盖 */
   await Promise.all([
-    M.setSettings({ commandGroups: ['空分组A', '空分组B'] }),
-    M.setSettings({ theme: 'light' }),
-    M.setSettings({ autoLog: false })
+    M.updateSettings({ commandGroups: ['空分组A', '空分组B'] }),
+    M.updateSettings({ theme: 'light' }),
+    M.updateSettings({ autoLog: false })
   ])
   const st = await M.getSettings()
   check('并发设置全部生效',

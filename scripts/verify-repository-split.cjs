@@ -34,11 +34,23 @@ async function bundle() {
     `const path = require('node:path')
 exports.app = { getPath: () => ${JSON.stringify(tmpRoot)} }
 exports.safeStorage = { isEncryptionAvailable: () => false, encryptString: (s) => Buffer.from(s), decryptString: (b) => b.toString() }
+// settingsService 会连带引入 updater，后者在模块顶层读 app.getVersion 等
+exports.app.getVersion = () => '0.0.0-test'
+exports.app.getName = () => 'ssh-workbench-test'
+exports.app.isPackaged = false
+exports.net = { request: () => ({ on() {}, end() {}, write() {}, abort() {} }) }
 `
   )
   const outfile = path.join(OUT, 'repo-bundle.cjs')
   await esbuild.build({
-    stdin: { contents: "export * from './src/main/store/repository'", resolveDir: ROOT, loader: 'ts' },
+    stdin: {
+      contents: [
+        "export * from './src/main/store/repository'",
+        "export { updateSettings } from './src/main/app/settingsService'"
+      ].join(String.fromCharCode(10)),
+      resolveDir: ROOT,
+      loader: 'ts'
+    },
     bundle: true,
     platform: 'node',
     format: 'cjs',
@@ -70,7 +82,7 @@ async function main() {
     'listCommands','saveCommand','deleteCommand','renameCommandGroup','deleteCommandGroup',
     'reorderCommands','touchCommand','importCommands','exportCommands','seedCommandsIfNeeded',
     'listHistory','addHistory','clearHistory',
-    'DEFAULT_SETTINGS','getSettings','setSettings',
+    'DEFAULT_SETTINGS','getSettings',
     'listDiagSections','saveDiagSection','deleteDiagSection',
     'listProfiles','saveProfile','deleteProfile',
     'listTunnels','getTunnel','saveTunnel','deleteTunnel',
@@ -78,6 +90,15 @@ async function main() {
   ]
   const missing = expected.filter((k) => typeof repo[k] === 'undefined')
   check(`全部 ${expected.length} 个导出存在`, missing.length === 0, missing)
+  /*
+   * setSettings 必须**不**在 repository 出口里。
+   * 写设置必须走 app/settingsService 的 updateSettings（它负责落盘后的副作用），
+   * 从公共出口摘掉之后，「绕过 service 直调」会 import 不到 ——
+   * 这是编译期约束，不是口头约定。
+   */
+  check('setSettings 已从公共出口摘除（强制走 settingsService）',
+    typeof repo.setSettings === 'undefined', typeof repo.setSettings)
+  check('updateSettings 可从 service 层取到', typeof repo.updateSettings === 'function')
 
   /* ---------------- 连接 ---------------- */
   console.log('\nconnections: 增删改查 + 凭据语义')
@@ -166,7 +187,7 @@ async function main() {
   check('默认开启严格主机校验', s0.strictHostKey === true)
   check('有 dangerPatterns 默认清单', Array.isArray(s0.dangerPatterns) && s0.dangerPatterns.includes('rm -rf'))
 
-  const s1 = await repo.setSettings({ terminal: { fontSize: 16 } })
+  const s1 = await repo.updateSettings({ terminal: { fontSize: 16 } })
   check('部分 patch 保留 terminal 其它字段', s1.terminal.fontSize === 16 && s1.terminal.scrollback === 5000, s1.terminal)
   check('未 patch 的设置保持不变', s1.theme === 'light')
 
