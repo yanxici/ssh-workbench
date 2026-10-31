@@ -65,15 +65,23 @@ jobs:
           node scripts/run-all-verify.cjs
 
       # 门禁第二步：真起 Electron 走 CDP 的 UI 级 SFTP e2e（含上传文件夹/空目录/链接）。
-      # 带超时与一次重试：历史上 3 连败都是这一步的 runner 环境抖动，
-      # 一次抖动不该报废整个发布（只能删 tag 重打）。
+      #
+      # build 单独成步、不进重试：electron-builder 不会自己编译（yml 里没有
+      # beforeBuild 钩子，files 只收 out/**），所以 e2e 之前必须有一个 out/。
+      # 但把 build 放进 retry 的 command 里，第二次尝试会把编译整个重跑一遍 ——
+      # 编译是确定性的，重跑没有意义，只烧时间。
+      # 产物留在工作区，后面的 electron-builder 直接复用它，不会重复编译。
+      - name: Build (for e2e)
+        shell: bash
+        run: npm run build
+
       - name: Verify (UI e2e)
         uses: nick-fields/retry@v3
         with:
           max_attempts: 2
           retry_wait_seconds: 20
           timeout_minutes: 15
-          command: npm run build && node scripts/e2e-ui-sftp.cjs
+          command: node scripts/e2e-ui-sftp.cjs
 
       - name: Determine version
         id: version

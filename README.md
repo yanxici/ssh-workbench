@@ -14,6 +14,7 @@ A lightweight desktop SSH client with a built-in workbench for embedded-device t
 - Encrypted connection export / import between machines
 - Auto-reconnect on connection drop with visible error logs
 - In-app auto update: a badge in the title bar advertises new versions, with a version diff, the release notes and a one-click install (differential download, usually a few MB)
+  > Only the NSIS installer supports auto-update. The portable exe and zip builds ship no update metadata — upgrade them by downloading the new version and overwriting.
 
 **Command panel**
 - One-click saved commands with `{{variables}}`, dangerous-command confirmation, groups, drag-and-drop, search, favorites and history
