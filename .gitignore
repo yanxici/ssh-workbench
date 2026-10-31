@@ -33,3 +33,7 @@ scripts/gen-rtu-commands.cjs
 
 # 一次性排查产物（上游包解压 / 抓包），不入库
 _piai_probe/
+
+# 本地发布产物归档（releases/v<ver>/ 只放当前最新版，旧版随发版清理）
+# 不纳入版本库：安装包 ~80MB，仓库里没必要存二进制。
+releases/
