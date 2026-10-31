@@ -1,6 +1,6 @@
 {
   "name": "ssh-workbench",
-  "version": "1.6.11",
+  "version": "1.6.12",
   "private": true,
   "description": "轻量级 SSH 客户端 + 嵌入式技术支持工作台",
   "author": "ssh-workbench",

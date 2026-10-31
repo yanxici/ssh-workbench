@@ -3,8 +3,19 @@
 
 set -e
 
-# 产物目录：与 electron-builder.yml 的 directories.output 保持一致
-OUTPUT_DIR="dist-v13"
+# 产物目录：从 electron-builder.yml 的 directories.output 解析，不在脚本里硬编码。
+#
+# 硬编码的历史教训：dist-v13 → dist-v14 → dist-v15 改了三次，
+# 每次忘改脚本就会去旧目录找产物 —— 要么报「找不到文件」，
+# 要么把旧版本残留的 Setup 误当成待发布文件传上去，后者是生产事故。
+OUTPUT_DIR="$(
+  awk '/^directories:/{d=1;next} d&&/^[^[:space:]]/{d=0} d&&/^[[:space:]]+output:/{print $2;exit}' \
+    "$(dirname "$0")/../electron-builder.yml" | tr -d '"'"'"
+)"
+if [ -z "$OUTPUT_DIR" ]; then
+  echo "❌ 无法从 electron-builder.yml 解析 directories.output"
+  exit 1
+fi
 
 echo "========================================="
 echo "  SSH Workbench 构建脚本"

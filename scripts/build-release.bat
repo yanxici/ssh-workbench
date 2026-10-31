@@ -2,8 +2,19 @@
 REM SSH Workbench 构建和发布脚本 (Windows)
 setlocal enabledelayedexpansion
 
-REM 产物目录：与 electron-builder.yml 的 directories.output 保持一致
-set "OUTPUT_DIR=dist-v13"
+REM Output dir: parsed from electron-builder.yml directories.output.
+REM Hardcoding this bit us three times (dist-v13 -> v14 -> v15): a stale
+REM value either fails to find artifacts or (worse) uploads leftovers
+REM from an older release.
+set "OUTPUT_DIR="
+for /f "tokens=2" %%a in ('findstr /r /c:"^  output:" "%~dp0..\electron-builder.yml"') do (
+  if not defined OUTPUT_DIR set "OUTPUT_DIR=%%a"
+)
+set "OUTPUT_DIR=%OUTPUT_DIR:"=%"
+if not defined OUTPUT_DIR (
+  echo [ERROR] cannot parse directories.output from electron-builder.yml
+  exit /b 1
+)
 
 echo =========================================
 echo   SSH Workbench 构建脚本
