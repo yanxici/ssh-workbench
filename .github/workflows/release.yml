@@ -52,17 +52,28 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      # 门禁：类型检查 + 功能自检 + 真·UI 级 SFTP 端到端（含上传文件夹/空目录/链接）
-      # 任何一项不过就不出包 —— 1.6.3 就是「测试全绿但功能坏了」的教训。
-      # 带超时与一次重试：e2e-ui-sftp 要在 runner 上真起 Electron 走 CDP，
-      # 历史上 3 连败都是这一步的环境抖动，一次抖动不该报废整个发布（只能删 tag 重打）。
-      - name: Verify (typecheck + features + UI e2e)
+      # 门禁第一步：类型检查 + 全部 verify 脚本（41 项，含 ssh2 lab server 用例）。
+      # 单独成步而不是塞进 verify:prepackage：串在一个 command 里时，
+      # 失败只看到整条命令红了，不知道是类型错、还是某个 verify 挂了；
+      # 而且这一步不需要 Electron 窗口，比 e2e 快得多，单独失败时能少等很久。
+      - name: Verify (typecheck + all unit checks)
+        shell: bash
+        run: |
+          npm run typecheck
+          npm run test:features
+          npm run test:uploadfolder
+          node scripts/run-all-verify.cjs
+
+      # 门禁第二步：真起 Electron 走 CDP 的 UI 级 SFTP e2e（含上传文件夹/空目录/链接）。
+      # 带超时与一次重试：历史上 3 连败都是这一步的 runner 环境抖动，
+      # 一次抖动不该报废整个发布（只能删 tag 重打）。
+      - name: Verify (UI e2e)
         uses: nick-fields/retry@v3
         with:
           max_attempts: 2
           retry_wait_seconds: 20
           timeout_minutes: 15
-          command: npm run verify:prepackage
+          command: npm run build && node scripts/e2e-ui-sftp.cjs
 
       - name: Determine version
         id: version
