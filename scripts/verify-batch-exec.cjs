@@ -271,9 +271,16 @@ async function main() {
     String(r6[0].stdout.length))
   check('带截断提示尾巴', r6[0].stdout.endsWith(NOTE))
 
-  /* ================= 7. timeoutMs=0 → timeout 而不是崩溃 ================= */
+  /* ================= 7. timeoutMs=0 / 负数 → timeout 而不是崩溃 ================= */
   const r7 = await br.run(uid(), [sFast2], 'x', 0)
   check('timeoutMs=0 返回 timeout', r7[0].status === 'timeout', r7[0].status)
+  /*
+   * 负数同 0：Node setTimeout 对负值按 1ms 处理，语义是「立即超时」。
+   * 本断言锁定修复前行为（Volt 要求按实际行为写）；exec.ts 夹紧落地后
+   * 改断言为 status=done 且耗时 >= 默认超时窗口。
+   */
+  const r7b = await br.run(uid(), [sFast2], 'x', -1)
+  check('timeoutMs=-1 返回 timeout（不崩溃）', r7b[0].status === 'timeout', r7b[0].status)
 
   /* ================= 8. 进度事件两段齐全 ================= */
   const runId8 = uid()
