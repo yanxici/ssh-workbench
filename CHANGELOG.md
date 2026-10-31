@@ -5,6 +5,93 @@ All notable changes to SSH Workbench will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.8] - 2026-10-31
+
+### Changed（CI 门禁，无运行时改动）
+
+原来 CI 只跑 `npm run verify:prepackage`，41 项 verify 是靠 `package.json` 里 `test:verify` 串接**间接**覆盖的。两个问题：改 `package.json` 的人不会意识到自己在动 CI 门禁；失败时只看到整条命令变红，区分不出是类型错还是某个 verify 挂了。
+
+拆成两个显式步骤：
+
+- **Verify (typecheck + all unit checks)** — typecheck + 功能自检 + 上传文件夹 + `run-all-verify`（41 项，含 ssh2 lab server 用例）。不需要 Electron 窗口，跑得快，单独失败时能立刻定位。
+- **Verify (UI e2e)** — `npm run build` + `e2e-ui-sftp`，单独带 2 次尝试 + 15 分钟超时。runner 环境抖动不该报废整个发布。
+
+## [1.6.7] - 2026-10-31
+
+### Fixed（修 1.6.6 自己引入的两处缺口）
+
+**P0：批量下载的同名文件仍会互相截断。** 1.6.6 加了 `uniqueLocalPath`，但判断依据只有 `existsSync`。批量下载时目标文件还没落盘，同一批里两个同名远端文件（不同目录下的 `config.bak`）会算出**同一个**目标路径，两个任务并发写就互相截断，内容混杂。
+
+现在支持传入批次级 `Set`，判断条件变成「磁盘上已存在 **或** 本批次已分配」，分配即占位。（ZMODEM 的 `uniquePath` 有同样问题但不暴露——它是单文件串行。）
+
+**P1：`allowLan` 保存后丢失，二次编辑被锁死。** 1.6.6 的 `allowLan` 只在保存时用一次就丢掉，没写进配置。用户勾选后成功保存 `0.0.0.0`，下次打开编辑框再保存时读不到该字段，后端重新校验直接抛错——**改个名字都存不了**。v1.6.5 及之前存下来的 `0.0.0.0` 隧道同样被锁死。
+
+现在 `TunnelConfig` 持久化 `allowLan`，并对存量配置做无感迁移：已存配置的监听地址非回环时视为已授权。
+
+### Added
+
+- **`src/shared/bindHost.ts`**：`isLoopbackHost` / `isWildcardHost` / `needsLanGrant` 三个纯函数，主进程与渲染层共用。两处各写一份必然漂移，后果是「UI 允许、后端拒绝」或更糟的「UI 没提示、后端放行」。
+- **`allowLan` 界面入口**：隧道编辑器在监听地址下方加复选框，只在非回环时出现。通配地址（`0.0.0.0`/`::`）单独强调「同网段任何机器都能借你的网络上外网」；未勾选直接提示「将无法保存」；编辑老隧道时按当前地址推断勾选状态；复制隧道时透传授权。
+- 测试扩到 **41 项**：新增 `verify-tunnel`（真实 ssh2 server 的 -L 穿透：数据穿透、幂等、端口释放、会话断置 error、删除前 dispose）与 `verify-batch-exec`（保序、单点失败不阻塞、取消双路径、256KB 截断、并发峰值 ≤ 8）。
+
+### Fixed（测试脚本自身）
+
+`verify-batch-exec` 两个 bug：ssh2 的 exec 回调命令在第三个参数 `info.command`（原来写成 `a.command`，`stream`/`big` 用例从未真正生效）；服务端通道的 `close` 事件在 `exit`/`end` 后往往不触发，并发计数只增不减，导致「峰值 12」误报成闸门失效。
+
+## [1.6.6] - 2026-10-31
+
+### Fixed（主进程 / SSH / SFTP 面，两条用户可感知的数据问题）
+
+**P0：下载覆盖本地文件。** 从双栏把远端 `config.bak` 拖到本地同名目录，**本地原文件被直接截断覆盖**——`download` 走的是 `fs.open(localPath, 'w')`。而同一进程里的 ZMODEM 接收早就有完整的重名编号，两条下载路径行为相反。现在统一：同名自动变 `config (1).bak`，目录下载同样生效。
+
+**P0：删除隧道配置留下幽灵转发。** 删除配置只从 JSON 里 filter 掉，运行时原样留着：状态还是 active、`net.Server` 继续监听本机端口、`forwardIn` 还绑在远端，但隧道列表里已经列不出它了——**失去关闭入口，只能重启应用**。`-D` 类型尤其危险：一个关不掉的免认证 SOCKS5 监听。现在删除会先 `dispose()` 运行时再删配置，`stop()`（保留配置、可重启）与 `dispose()`（配置已删、彻底移除）语义分开。
+
+**其余修复：**
+
+- **诊断巡检 / 批量执行的 runId 泄漏**：三个校验 throw 都在清理之前，`runs` 里永久残留 token。改成先校验后登记 + `finally` 清理。
+- **批量执行无并发闸门**：原来无闸门 `Promise.all`，批量 50 台 = 瞬间 50 个 exec 通道，服务端 MaxSessions 打满反而 `open failed`。加 8 路并发，结果顺序仍等于传入顺序。
+- **取消轮询改订阅制**：原来每个任务挂一个 120ms `setInterval` 查一个布尔值（50 任务 = 每秒 416 次空转）。现在一次 `cancel()` 广播给所有任务，与任务数无关。
+- **SFTP 通道缺 error 监听**：ssh2 协议层出错是 `emit('error')` + `destroy()`，没有监听会冒到进程级兜底，且缓存不失效——该会话后续所有 SFTP 调用都报 Channel not open 直到关标签。
+- **远程编辑的备份语义**：原来一个 `try` 把 `pStat`/`pUnlink`/`pRename` 全包住，服务器拒绝 rename 会被当成「目标不存在」然后直接覆盖。现在备份失败即中止，写入失败会把 `.bak` 搬回来。
+- **监听地址校验**：`bindHost` 原来只给默认值不校验范围，填 `0.0.0.0` 就把本机变成同网段可用的免认证代理。默认只允许回环，对外监听需显式 `allowLan`。
+- **目录上传上限**：`walkLocalTree` 不带 limit，10 万文件会先把整棵树建成数组再开始传、全程无反馈。加 20000 上限并显式提示已截断。
+
+## [1.6.5] - 2026-10-31
+
+### Fixed（发布链路）
+
+- **版本一致性门禁**：`release.yml` 新增 tag 与 `package.json` 比对。此前打 `v1.6.5` 却忘了 `npm version` 时，产物名和 `latest.yml` 仍是 1.6.4，客户端比对「1.6.4 ≤ 已装」判定无需更新，整条自动更新链路**静默失效**。
+- **CI 缓存**：加 Electron 运行时与 electron-builder 工具链缓存（必须先于 `npm ci`，Electron 在 postinstall 阶段拉取）。
+- **E2E 重试**：真起 Electron 走 CDP 的 e2e 步骤加 2 次尝试 + 15 分钟超时。
+- **产物策略统一**：CI 改为 `--publish never` 后只上传 Setup + blockmap + latest.yml，zip 仅作为排障 artifact。此前与 `release.ps1` 的「不上传 zip」禁令矛盾，Release 上多挂了一个 112MB 的冗余包。
+- **`release.ps1` 目录脱节**：输出目录改为从 `electron-builder.yml` 解析，去掉硬编码 `dist-v13`（配置早已是 `dist-v14`，直接跑脚本会报「没有产物」）。
+
+### Fixed（压测数据安全）
+
+`perf-group.cjs` **不再对用户真实连接做破坏性操作**。此前它取用户库里最大的真实分组做整组 rename 往返 + 12 路并发改名，中途异常就会脏写 `connections.json`。现在全程操作自建的 300 条测试数据，并在首尾比对 id 集合，确认用户数据一条未动。
+
+### Fixed（渲染层）
+
+- **终端快捷键死配置**：`terminalSearch` / `terminalCopy` / `terminalPaste` 在设置里可改，实际却是硬编码。现在三项都读设置，改完立即生效。
+- **Ctrl+Shift+Tab 恢复可达**：此前精确比对 shift 导致「上一个标签」的反向分支是死代码。
+- **大目录渲染上限**：文件树、远程栏、本地栏统一 300 行上限（与会话树口径一致）。
+- **选中判断 O(n²) → O(n)**：双栏文件列表原来每行都做 `includes` 全表查找，改为 Set。
+- **拖动窗口不再每帧重建会话数组**：`setSize` 对相同 cols/rows 短路。
+- **批量打标签**：新增 `conn:update-tags` 通道，一次读改写落盘，替代原来多选后逐条 `save()`（500 条 = 500 次 IPC + 500 次全量重渲染）。
+
+### Changed（主进程分层）
+
+- `store` 层不再反向依赖 `ssh`：配置备份的采集/对比/回写拆到 `ssh/configBackup.ts`，`store/backups.ts` 只留纯文件读写。`store → ssh → store` 的双向耦合解除。
+- 会话日志管理拆到 `store/sessionLogs.ts`，录制器归入 ssh 域。
+- 设置副作用下沉到 `app/settingsService.ts`，IPC 传输层不再承载域逻辑。
+- `handle()` 改泛型签名，实参与 handler 参数类型建立编译期关联。
+- **JsonStore 缓存可感知外部改动**：加 mtime 指纹校验，「手改 JSON 立即生效」这个卖点真正成立；同时保证读改写链内不被自己的异步写盘误判。
+
+### Added（测试体系）
+
+- `npm run test:verify`：36 个 verify 脚本一键跑，已知历史失败（cdsync / theme / zmodem）默认跳过。
+- 新增 `verify-shortcuts`、`verify-jsonstore-reload`、`verify-conn-tags-batch`。
+
 ## [1.6.4] - 2026-10-30
 
 ### Fixed（文件传输：三个真 bug + 一个测试盲区）

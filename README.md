@@ -94,9 +94,14 @@ Architecture, directory layout and roadmap (Chinese): [DESIGN.md](./DESIGN.md)
 
 ## Version
 
-Current: **v1.6.3**
+Current: **v1.6.8**
 
 Recent updates:
+- **v1.6.8** — CI gate split into two explicit steps: `typecheck + 41 verify scripts` and `UI e2e` (with retry). The 41 were previously covered only indirectly through a `package.json` chain, so editing that script silently changed the gate
+- **v1.6.7** — fixed two gaps v1.6.6 itself introduced: batch downloads of same-named files could still overwrite each other (the collision check only looked at disk, so files not yet written in the same batch resolved to one path); `allowLan` was dropped on save, locking users out of re-editing an existing tunnel. Added `shared/bindHost.ts` shared by both processes, and a "allow LAN access" switch in the tunnel editor
+- **v1.6.6** — two P0s: downloads silently truncated an existing local file (now uses the same `name (1).ext` scheme as ZMODEM); deleting a tunnel config left an orphaned runtime with a listening socket no UI could reach (a `-D` tunnel becomes an unattended, unauthenticated SOCKS5). Also: runId leak, an 8-way concurrency gate for batch execution, cancel switched from polling to subscription, an `error` listener on the SFTP channel, and remote-edit backup now aborts instead of overwriting
+- **v1.6.5** — release pipeline: version-consistency gate (a tag/`package.json` split makes auto-update fail silently), CI caching, e2e retry, unified artifact policy (no more redundant 112 MB zip on Releases), and `release.ps1` no longer hardcodes the output dir. Renderer: three dead-config shortcuts fixed, Ctrl+Shift+Tab made reachable, render caps for huge directories, a batch tag channel; `store` no longer depends back on `ssh`
+- **v1.6.4** — three real folder-upload bugs (empty dirs lost, junctions treated as files, one failing file aborting the batch) plus a selectable target directory; e2e grown to 18 real UI assertions
 - **v1.6.3** — split the last two "god files": `repository.ts` 764 → 70 lines (8 domains moved to `store/repo/`), `SettingsPanel.tsx` 959 → 118 (7 section components). Pure code moves, no behaviour change; added `npm run test:repository` which asserts behaviour (48 checks), not line counts
 - **v1.6.2** — added ESLint (type-aware) and fixed the 49 real issues its first run found, e.g. two components whose `?? []` fallback allocated a fresh array each render so `useMemo` never hit cache
 - **v1.6.1** — upload/download logic consolidated into the store (panels became UI-only; duplicated fragments 31 → 2), and `main/index.ts` split by domain (`src/main/ipc/`, 134 handlers across 12 files)
