@@ -111,6 +111,14 @@ Write-Host "[3/4] 校验 latest.yml 与 Setup..." -ForegroundColor DarkGray
 $ymlText = Get-Content $localYml -Raw
 # 注意：Select-String 默认按「行」匹配，对整段文本要显式用 -AllMatches + 多行锚点会失效，
 # 这里直接用 -match 取捕获组，行为可预期。
+#
+# (?m)^version: 只锚「行首」，没锚「顶层块」。当前 electron-builder 产出的
+# latest.yml 里 files 条目下只有 url/sha512/size，没有 version 子键，
+# 所以第一个 version: 就是顶层版本号，没问题。
+# 但若将来 latest-mac.yml / latest-linux.yml 也走这个脚本，或 electron-builder
+# 调整格式把 version 塞进 files 条目，这里可能匹配到非预期位置 ——
+# 那时改成显式切片（只取 files: 之前的文本）再匹配。
+# 现在不提前改，因为「多加一层切片」本身也会成为新的出错点。
 if ($ymlText -notmatch '(?m)^version:\s*(\S+)') {
   Write-Host "      latest.yml 里没有 version 字段" -ForegroundColor Red
   exit 1
