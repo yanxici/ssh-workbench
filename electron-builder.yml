@@ -17,11 +17,11 @@ publish:
   releaseType: release
 directories:
   buildResources: build
-  # 每次发版换一个输出目录，旧产物留着做对照（dist-v9…v14 → 本次 dist-v15）。
+  # 每次发版换一个输出目录，旧产物留着做对照（dist-v9…v15 → 本次 dist-v16）。
   # 不要写回 dist-final：那里是上一版的成品，混进新包后分不清哪个是哪个。
-  # v15 的原因：dist-v14 里的 win-unpacked 正在被运行中的实例占用，
+  # v16 的原因：dist-v15 里的 win-unpacked 正在被运行中的实例占用，
   # 换目录既避免「Access is denied」删不掉，也不打断用户手上的工作。
-  output: dist-v15
+  output: dist-v16
 # ssh2 的 cpu-features 为可选加密加速（纯 JS 回退即可），跳过 native rebuild 避免依赖本机 VS
 npmRebuild: false
 # 新增 ASAR 打包配置：启用压缩
