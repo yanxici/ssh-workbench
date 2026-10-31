@@ -62,13 +62,32 @@ function check(name, ok, detail = '') {
   }
 }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
-async function waitFor(fn, ms = 5000) {
+/**
+ * 轮询等待某个条件成立。
+ *
+ * @param describe 可选的现场采集函数。**失败时必须传**：
+ *   这个脚本在高负载下有偶发失败（全量跑里出现过 1 次，单独跑 128/128 稳定），
+ *   而原来失败只记一个名字、没有实际值，事后完全无法判断是「真没收到」
+ *   还是「收到了但内容对不上」—— 观察名单挂了两轮都没法定性。
+ *   现在失败时把实际内容打出来，一次复现就能定性。
+ */
+async function waitFor(fn, ms = 5000, describe) {
   const t0 = Date.now()
   while (Date.now() - t0 < ms) {
     if (fn()) return true
     await sleep(15)
   }
-  return fn()
+  const ok = fn()
+  if (!ok && describe) {
+    let snapshot
+    try {
+      snapshot = describe()
+    } catch (e) {
+      snapshot = `<采集失败: ${e && e.message}>`
+    }
+    console.log(`      [waitFor 超时 ${ms}ms] 实际: ${snapshot}`)
+  }
+  return ok
 }
 
 /* ---------- 事件采集 ---------- */
@@ -149,7 +168,14 @@ async function main() {
   const A = uid()
   await sm.open(A, conn.id, 80, 24)
   check('A 已连接', status.get(A) === 'connected')
-  check('A 收到 shell 输出', await waitFor(() => /READY#/.test(output.get(A) ?? '')))
+  check(
+    'A 收到 shell 输出',
+    await waitFor(
+      () => /READY#/.test(output.get(A) ?? ''),
+      5000,
+      () => `status=${status.get(A)} 输出=${JSON.stringify((output.get(A) ?? '').slice(-120))}`
+    )
+  )
   check('服务器连接数=1', liveConns.size === 1, `实际 ${liveConns.size}`)
 
   /* 2. 会话内新建终端（复用连接） */
@@ -159,7 +185,14 @@ async function main() {
   check('B/C 已连接', status.get(B) === 'connected' && status.get(C) === 'connected')
   check('新建终端不新增 SSH 连接', liveConns.size === 1, `实际 ${liveConns.size}`)
   sm.write(B, 'hello-B')
-  check('B 输入只回到 B', await waitFor(() => /hello-B/.test(output.get(B) ?? '')))
+  check(
+    'B 输入只回到 B',
+    await waitFor(
+      () => /hello-B/.test(output.get(B) ?? ''),
+      5000,
+      () => `status=${status.get(B)} 输出=${JSON.stringify((output.get(B) ?? '').slice(-120))}`
+    )
+  )
   await sleep(100)
   check('A/C 没串到 B 的输出', !/hello-B/.test((output.get(A) ?? '') + (output.get(C) ?? '')))
   let rejected = false
@@ -175,8 +208,22 @@ async function main() {
   await sleep(150)
   sm.write(A, 'still-A')
   sm.write(C, 'still-C')
-  check('关 B 后 A 正常', await waitFor(() => /still-A/.test(output.get(A) ?? '')))
-  check('关 B 后 C 正常', await waitFor(() => /still-C/.test(output.get(C) ?? '')))
+  check(
+    '关 B 后 A 正常',
+    await waitFor(
+      () => /still-A/.test(output.get(A) ?? ''),
+      5000,
+      () => `status=${status.get(A)} 输出=${JSON.stringify((output.get(A) ?? '').slice(-120))}`
+    )
+  )
+  check(
+    '关 B 后 C 正常',
+    await waitFor(
+      () => /still-C/.test(output.get(C) ?? ''),
+      5000,
+      () => `status=${status.get(C)} 输出=${JSON.stringify((output.get(C) ?? '').slice(-120))}`
+    )
+  )
   check('关 B 后连接仍在', liveConns.size === 1)
 
   /* 4. 关掉宿主 A，C 仍可用；最后一个关掉才断连接 */

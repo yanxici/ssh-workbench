@@ -1,7 +1,15 @@
 /**
- * 验证两处键盘可达性修复（纯静态断言 + 行为断言）。
+ * 验证两处键盘可达性修复 —— **静态源码断言，不是行为测试**。
  *
  * 用法：node scripts/verify-keyboard-a11y.cjs
+ *
+ * 定性（重要，别误读）：本脚本扫 FileExplorer.tsx / ConnectionSidebar.tsx 的源码
+ * 文字，断言「同一行元素内既有 tabIndex 又有 onKeyDown」「Delete 前先 setSelected」
+ * 这类结构事实。它能防住「改回去」的回归，成本极低；
+ * 但它**不验证键盘事件真能触发** —— 断言通过不代表按 Tab 真的落到了那一行。
+ * 真正的行为覆盖（CDP Input.dispatchKeyEvent：Tab 聚焦 → Enter 展开 → Delete 弹框）
+ * 要等 lab server 那轮和隧道 e2e 一起补。
+ * 另外它依赖具体写法：重构一次文件结构就可能误伤，误伤时优先核代码再看脚本。
  *
  * 背景（Prism 报的 P2-7 / P2-8）：
  *   P2-7 文件树行是不可聚焦的 div，Tab 键落不到上面，§5.5 的 focus-visible
