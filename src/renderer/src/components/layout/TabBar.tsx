@@ -12,6 +12,7 @@ import { useSessionStore } from '@/stores/sessionStore'
 import { useUiStore } from '@/stores/uiStore'
 import { cn } from '@/lib/utils'
 import { ContextMenu, useContextMenu, type MenuEntry } from '@/components/ui'
+import { isImeComposing } from '@/lib/ime'
 
 const STATUS_DOT: Record<ConnStatus, string> = {
   connecting: 'bg-warning animate-pulse-soft',
@@ -269,6 +270,7 @@ export function TabBar(): JSX.Element {
                   onChange={(e) => setEditText(e.target.value)}
                   onBlur={commitRename}
                   onKeyDown={(e) => {
+                    if (isImeComposing(e)) return
                     if (e.key === 'Enter') commitRename()
                     if (e.key === 'Escape') setEditingId(null)
                   }}

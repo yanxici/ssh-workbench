@@ -5,6 +5,7 @@ import { Modal, PromptDialog } from '@/components/ui'
 import { call } from '@/lib/ipc'
 import { cn, remoteDirname, remoteJoin } from '@/lib/utils'
 import { normalizeRemoteDir, rememberUploadDir } from '@/lib/uploadDir'
+import { isImeComposing } from '@/lib/ime'
 
 /**
  * 上传目标目录选择器。
@@ -145,6 +146,7 @@ export function UploadTargetDialog({
                 placeholder="例如 /home/user 或 /tmp"
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={(e) => {
+                  if (isImeComposing(e)) return
                   if (e.key === 'Enter') goInput()
                 }}
               />

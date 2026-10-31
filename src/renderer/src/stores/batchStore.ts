@@ -110,9 +110,25 @@ export const useBatchStore = create<BatchState>()((set, get) => ({
 
   applyProgress: (e) =>
     set((s) => {
-      const statuses = { ...s.statuses, [e.sessionId]: e.status }
-      if (e.result) {
-        return { statuses, results: { ...s.results, [e.sessionId]: e.result } }
+      /*
+       * 单调短路：批量执行时每个会话有多个阶段事件（connect → exec → done），
+       * N 个会话 × M 个阶段都会进这里。旧写法每次都 `{ ...s.statuses }` 浅拷整个
+       * 状态表，BatchPanel 每行又订阅 `s.results[sessionId]` / `s.statuses[sessionId]`，
+       * 对象一换新引用，所有行的 selector 全部重跑 —— 12 会话时是 12 倍的无效重渲染。
+       *
+       * 现在只有值真的变了才重建：
+       * - status 与已有值相同、且没有新 result → 原样返回 s，zustand 不做任何通知
+       * - status 变了 → 只重建 statuses，results 引用保持不变（没结果的行不会重跑）
+       * - 来了 result → 才重建 results
+       */
+      const prevStatus = s.statuses[e.sessionId]
+      const hasNewResult = e.result !== undefined && s.results[e.sessionId] !== e.result
+
+      if (prevStatus === e.status && !hasNewResult) return s
+
+      const statuses = prevStatus === e.status ? s.statuses : { ...s.statuses, [e.sessionId]: e.status }
+      if (hasNewResult) {
+        return { statuses, results: { ...s.results, [e.sessionId]: e.result! } }
       }
       return { statuses }
     })

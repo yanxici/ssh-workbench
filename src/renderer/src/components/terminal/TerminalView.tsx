@@ -25,6 +25,7 @@ import { call } from '@/lib/ipc'
 import { useConnectionStore } from '@/stores/connectionStore'
 import { useToastStore } from '@/stores/toastStore'
 import { ensureZmodem, detachZmodem, bytesToBase64, requestZmodemConfirm } from '@/lib/zmodem'
+import { isImeComposing } from '@/lib/ime'
 
 function ReconnectButton({ sessionId }: { sessionId: string }): JSX.Element {
   return (
@@ -364,6 +365,7 @@ export function TerminalView({
               runSearch(e.target.value)
             }}
             onKeyDown={(e) => {
+              if (isImeComposing(e)) return
               if (e.key === 'Enter') runSearch(searchText, e.shiftKey)
               if (e.key === 'Escape') closeSearch()
             }}

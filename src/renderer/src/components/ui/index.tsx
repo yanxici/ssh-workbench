@@ -17,6 +17,7 @@ import {
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useToastStore } from '@/stores/toastStore'
+import { isImeComposing } from '@/lib/ime'
 
 /* ------------------------------------------------------------------ *
  *  Modal
@@ -209,6 +210,8 @@ export function Combobox({
             if (!open) openList()
           }}
           onKeyDown={(e) => {
+            // 输入法组合态：Enter/↑↓ 属于候选词选择，不能当列表导航
+            if (isImeComposing(e)) return
             if (e.key === 'ArrowDown') {
               e.preventDefault()
               if (!open) openList()
@@ -433,6 +436,7 @@ export function PromptDialog({
               placeholder={placeholder}
               onChange={(e) => setValue(e.target.value)}
               onKeyDown={(e) => {
+                if (isImeComposing(e)) return
                 if (e.key === 'Enter') submit()
               }}
             />

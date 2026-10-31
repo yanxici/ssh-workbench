@@ -35,6 +35,7 @@ import { DynamicIcon } from '@/lib/icons'
 import { cn, formatRelativeTime } from '@/lib/utils'
 import { ConfirmDialog, ContextMenu, useContextMenu, type MenuEntry } from '@/components/ui'
 import { Highlight } from './Highlight'
+import { isImeComposing } from '@/lib/ime'
 
 /**
  * 按钮墙的列数。
@@ -190,6 +191,8 @@ export function CommandCenter({
   }
 
   const onKeyDown = (e: React.KeyboardEvent): void => {
+    // 输入法组合态：Enter 是确认候选词，不是「执行」。事件从搜索框冒泡上来，必须在这里挡。
+    if (isImeComposing(e)) return
     const mod = e.ctrlKey || e.metaKey
 
     if (e.key === 'Escape') {

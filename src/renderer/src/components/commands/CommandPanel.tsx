@@ -47,6 +47,7 @@ import {
   useContextMenu,
   type MenuEntry
 } from '@/components/ui'
+import { isImeComposing } from '@/lib/ime'
 
 /**
  * 常用命令面板（侧栏 / 底栏两种排布）：
@@ -375,6 +376,8 @@ export function CommandPanel({
    * 视觉上明明是横排三个按钮，按一下 ↓ 却只跳到右边那个 —— 手感是错的。
    */
   const onKeyDown = (e: React.KeyboardEvent): void => {
+    // 输入法组合态：Enter 是确认候选词，不是「执行」。事件从搜索框冒泡上来，必须在这里挡。
+    if (isImeComposing(e)) return
     if (e.key === 'Escape') {
       if (searching) {
         setKeyword('')
@@ -473,6 +476,8 @@ export function CommandPanel({
               setCursor(0)
             }}
             onKeyDown={(e) => {
+              // 输入法组合态：Enter/↑↓ 属于候选词选择，不能当列表导航
+              if (isImeComposing(e)) return
               // ↑↓ 从输入框直接跳到列表，不必先点空白处
               if (e.key === 'ArrowDown' || e.key === 'Enter') {
                 e.preventDefault()

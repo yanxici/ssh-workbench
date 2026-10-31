@@ -23,6 +23,7 @@ import {
   useContextMenu,
   type MenuEntry
 } from '@/components/ui'
+import { isImeComposing } from '@/lib/ime'
 
 /** 文件管理器右栏：远程设备文件系统（下载来源 / 上传目标） */
 export function RemotePane(): JSX.Element {
@@ -141,6 +142,7 @@ export function RemotePane(): JSX.Element {
           value={pathInput}
           onChange={(e) => setPathInput(e.target.value)}
           onKeyDown={(e) => {
+            if (isImeComposing(e)) return
             if (e.key === 'Enter') void nav(pathInput.trim())
           }}
           title={dir}
@@ -208,7 +210,7 @@ export function RemotePane(): JSX.Element {
             }}
             onContextMenu={(e) => openMenu(e, f.path)}
             className={cn(
-              'flex cursor-default items-center gap-2 rounded px-2 py-[3px] text-xs',
+              'file-row-cv flex cursor-default items-center gap-2 rounded px-2 py-[3px] text-xs',
               selSet.has(f.path) ? 'bg-accent/15 text-ink' : 'text-ink-2 hover:bg-hover/60'
             )}
             title={f.path}

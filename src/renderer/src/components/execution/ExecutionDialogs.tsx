@@ -2,6 +2,7 @@ import { AlertTriangle, Braces, Send } from 'lucide-react'
 import { activeSession } from '@/stores/sessionStore'
 import { renderTemplate, useExecutionStore } from '@/stores/executionStore'
 import { Field } from '@/components/ui'
+import { isImeComposing } from '@/lib/ime'
 
 /**
  * 执行流水线配套弹窗：
@@ -62,6 +63,7 @@ export function VariablePromptDialog(): JSX.Element | null {
                   value={values[v.name] ?? ''}
                   onChange={(e) => setValue(v.name, e.target.value)}
                   onKeyDown={(e) => {
+                    if (isImeComposing(e)) return
                     if (e.key === 'Enter') submit()
                   }}
                 />

@@ -27,6 +27,28 @@ export function ShortcutSection(): JSX.Element {
   // 检测当前快捷键映射中的冲突
   const conflicts = detectShortcutConflicts(settings.shortcuts)
 
+  /*
+   * 一键恢复「冲突涉及的动作」为默认值。
+   *
+   * 为什么需要：单行重置按钮早就有（下面每行的 RotateCcw），但一次改坏三四个键时，
+   * 冲突提示只列「哪个键被谁占了」，用户得逐行去点小图标，而且不知道点哪几行 ——
+   * 提示里给的是 label，行里显示的是组合键，两者对不上。
+   *
+   * 为什么只重置冲突项而不是全部恢复：用户可能有意把某几个键改成自己顺手的组合，
+   * 那些没冲突的自定义值不该被顺手抹掉。所以按 ConflictInfo.actions[].id 精确取集合。
+   */
+  const resetConflicts = (): void => {
+    const ids = new Set<string>()
+    for (const c of conflicts) {
+      for (const a of c.actions) ids.add(a.id)
+    }
+    if (ids.size === 0) return
+    const next = { ...settings.shortcuts }
+    for (const id of ids) delete next[id as ShortcutAction]
+    void update({ shortcuts: next })
+    setRecording(null)
+  }
+
   const commit = (action: ShortcutAction, combo: string | undefined): void => {
     // 检查冲突
     if (combo) {
@@ -106,6 +128,14 @@ export function ShortcutSection(): JSX.Element {
               </div>
             ))}
           </div>
+          <button
+            className="btn shrink-0 whitespace-nowrap px-2 py-0.5 text-2xs"
+            title="把上面这些冲突项全部恢复默认（不影响其它已自定义的键）"
+            onClick={resetConflicts}
+          >
+            <RotateCcw size={10} />
+            全部恢复默认
+          </button>
         </div>
       )}
 

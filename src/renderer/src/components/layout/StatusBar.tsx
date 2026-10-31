@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { useShallow } from 'zustand/react/shallow'
 import {
   ArrowDownToLine,
   ArrowUpFromLine,
@@ -6,12 +7,63 @@ import {
   GitBranch,
   Unplug
 } from 'lucide-react'
-import type { ConnStatus } from '@shared/types'
+import type { ConnStatus, TransferTask } from '@shared/types'
 import { useSessionById, useSessionStore } from '@/stores/sessionStore'
 import { useConnectionStore } from '@/stores/connectionStore'
 import { useSftpStore } from '@/stores/sftpStore'
 import { call } from '@/lib/ipc'
 import { cn, latencyLevel } from '@/lib/utils'
+
+/**
+ * 传输聚合。
+ *
+ * 为什么不能直接订阅 `s.transfers`：传输进行中主进程每 150ms 推一次进度
+ * （sftpManager.ts:67 的 PROGRESS_THROTTLE_MS），每次 applyProgress 都
+ * `[...s.transfers]` 重建数组（sftpStore.ts:424）。StatusBar 是常驻组件，
+ * 订阅整个数组等于每秒跟着重渲染 6.7 次，而且 filter + 两次 reduce 跑在
+ * 渲染函数体里，每次重渲染都要重算。
+ *
+ * 解法：把 filter/reduce 移进 selector，只返回渲染真正用到的四个标量，
+ * 用 useShallow 比较。进度推进时如果这四项没变（例如只有 speedBps 变了），
+ * 引用不变 → 不重渲染。传输结束、状态切换、百分比变化时才重渲染。
+ *
+ * 为什么保留 activeCount / activePct 两个派生值而不是订阅原始数组：
+ * 渲染只用到 `active.length`、`active[0].direction`、`activePct`，
+ * 数组本身从头到尾没被渲染 —— 订阅它就是纯浪费。
+ */
+interface TransferSummary {
+  activeCount: number
+  activePct: number
+  /** 第一个活动任务的传输方向，决定状态栏图标 */
+  firstDirection: TransferTask['direction'] | null
+}
+
+const IDLE: TransferSummary = { activeCount: 0, activePct: 0, firstDirection: null }
+
+function summarizeTransfers(list: TransferTask[]): TransferSummary {
+  let activeCount = 0
+  let knownTotal = 0
+  let knownDone = 0
+  let ratioSum = 0
+  let firstDirection: TransferTask['direction'] | null = null
+
+  for (const t of list) {
+    if (t.status !== 'running' && t.status !== 'pending' && t.status !== 'paused') continue
+    if (activeCount === 0) firstDirection = t.direction
+    activeCount++
+    if (t.total > 0) {
+      knownTotal += t.total
+      knownDone += Math.min(t.transferred, t.total)
+      ratioSum += Math.min(t.transferred / t.total, 1)
+    }
+  }
+
+  let activePct = 0
+  if (knownTotal > 0) activePct = Math.round((knownDone / knownTotal) * 100)
+  else if (activeCount > 0) activePct = Math.round((ratioSum / activeCount) * 100)
+
+  return { activeCount, activePct, firstDirection }
+}
 
 const STATUS_TEXT: Record<ConnStatus, string> = {
   connecting: '连接中',
@@ -64,7 +116,15 @@ export function StatusBar(): JSX.Element {
   // 不会像旧实现那样把整个 sessions 数组换掉、连带终端全量重跑
   const latencyMs = useSessionStore((s) => (s.activeId ? s.latencyById[s.activeId] : undefined))
   const savedCount = useConnectionStore((s) => s.connections.length)
-  const transfers = useSftpStore((s) => s.transfers)
+  // 只订阅聚合标量，不订阅 transfers 数组本身：进度事件每 150ms 重建数组，
+  // 订阅数组会让这个常驻组件跟着每秒重渲染 6.7 次（详见 summarizeTransfers 注释）
+  const transfer = useSftpStore(
+    useShallow((s): TransferSummary => {
+      const list = s.transfers
+      if (list.length === 0) return IDLE
+      return summarizeTransfers(list)
+    })
+  )
   const showDock = useSftpStore((s) => s.showDock)
 
   const sessionId = session?.id ?? null
@@ -92,27 +152,7 @@ export function StatusBar(): JSX.Element {
     }
   }, [sessionId, connected])
 
-  const active = transfers.filter(
-    (t) => t.status === 'running' || t.status === 'pending' || t.status === 'paused'
-  )
-  const activeKnownTotal = active.reduce((sum, t) => sum + (t.total > 0 ? t.total : 0), 0)
-  const activeKnownDone = active.reduce(
-    (sum, t) => sum + (t.total > 0 ? Math.min(t.transferred, t.total) : 0),
-    0
-  )
-  const activePct =
-    activeKnownTotal > 0
-      ? Math.round((activeKnownDone / activeKnownTotal) * 100)
-      : active.length > 0
-        ? Math.round(
-            (active.reduce(
-              (sum, t) => sum + (t.total > 0 ? Math.min(t.transferred / t.total, 1) : 0),
-              0
-            ) /
-              active.length) *
-              100
-          )
-        : 0
+  const { activeCount, activePct, firstDirection } = transfer
 
   return (
     <footer className="statusbar">
@@ -163,20 +203,20 @@ export function StatusBar(): JSX.Element {
       <span className="flex-1" />
 
       {/* ---------- 右：传输 · 编码 · 换行 · Shell · 尺寸 ---------- */}
-      {active.length > 0 && (
+      {activeCount > 0 && (
         <>
           <button
             className="flex items-center gap-1 rounded px-1 py-0.5 text-accent transition-colors duration-150 hover:bg-hover"
             title="查看传输进度"
             onClick={showDock}
           >
-            {active[0].direction === 'upload' ? (
+            {firstDirection === 'upload' ? (
               <ArrowUpFromLine size={10} />
             ) : (
               <ArrowDownToLine size={10} />
             )}
             <span className="tabular-nums">
-              {active.length} 项 · {activePct}%
+              {activeCount} 项 · {activePct}%
             </span>
           </button>
           <Sep />

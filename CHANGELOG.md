@@ -5,6 +5,46 @@ All notable changes to SSH Workbench will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.0] - 2026-10-31
+
+### Fixed（P1：中文输入法下 Enter 会执行半截命令）
+
+**问题**：全仓 `isComposing` 命中 0 处。拼音串还没上屏时按 Enter 是「确认候选词」，浏览器照样派发 keydown，React 的 `onKeyDown` 收到后直接 `preventDefault()` + 执行动作 —— 用户想选个字，结果命令中心跑了第一条命令、路径栏跳了目录、表单提交了半截内容。这个 bug 只在中文输入法下复现，英文输入法敲一辈子都撞不到。
+
+**证据**：`grep -rn "isComposing" src/` → 0 命中；`CommandCenter.tsx:240` 的 `if (e.key === 'Enter')` 后面直接 `runActive()`。
+
+**范围**：全仓 `key === 'Enter'` 共 15 个消费点，按「handler 挂载元素的子树是否含 input」判定，需要守卫的 **13 处**：
+
+- 直接挂在 `<input>` 上 11 处：`CommandPanel:482`、`ConnTransferDialog:308`、`ExecutionDialogs:67`、`LocalPane:135`、`RemotePane:146`、`UploadTargetDialog:150`、`TabBar:274`、`UpdateSection:156`、`TerminalView:369`、`ui/index:222/:440`
+- 挂在容器、子树含 input 2 处：`CommandCenter:243`、`CommandPanel:402`（事件从子输入框冒泡上来，容器 handler 照样执行）
+
+不需要的 2 处是行级键盘（`ConnectionSidebar:682`、`FileExplorer:864`，子树无 input），脚本里单独列出供人工复核，不静默跳过。
+
+**改法**：新增 `lib/ime.ts` 的 `isImeComposing(e)`，读 `e.nativeEvent.isComposing`。为什么不用 `e.isComposing`：React 合成事件没有这个字段，读它恒为 `undefined`，守卫永不生效而 TypeScript 不报错 —— 这是最典型的假绿写法。为什么不用 `keyCode === 229`：那是 Chrome 早期 IME 的历史 hack，只覆盖「被吞掉的按键」，行为不一致。
+
+### Fixed（P1：StatusBar 传输中每秒重渲染 6.7 次）
+
+**问题**：`StatusBar.tsx:67` 订阅整个 `s.transfers` 数组，`:95-112` 的 `filter` + 两次 `reduce` 写在渲染函数体里。主进程每 150ms 推一次进度（`sftpManager.ts:67`），`sftpStore.ts:424` 每次都 `[...s.transfers]` 重建数组 —— 常驻组件跟着每秒重渲染 6.7 次，每次还要重跑三遍数组遍历。同一个文件里 latency 早就改成 `latencyById` 单值订阅了，transfers 没跟上。
+
+**改法**：`filter`/`reduce` 移进 selector，用 `useShallow` 只比较 `{ activeCount, activePct, firstDirection }` 三个标量。进度推进但百分比没变时不重渲染。渲染函数体里不再有数组遍历。
+
+### Fixed（P2）
+
+- **`batchStore.applyProgress` 高频全量浅拷**：每事件 `{ ...s.statuses }` 重建整表，`BatchPanel` 每行订阅 `s.results[sessionId]`/`s.statuses[sessionId]`，对象一换引用所有行 selector 重跑。改成单调短路：status 与已有值相同且无新 result 时原样返回 `s`；只变 status 时 results 引用保持不变。
+- **文件树 / 双栏行未用 `content-visibility`**：`.conn-row-cv` 只在连接列表用，文件树三处 300 行（`ROW_LIMIT`）仍全量布局。新增 `.file-row-cv`（`contain-intrinsic-size: auto 22px`，与连接列表的 52px 分开写 —— 行高填错会让滚动条抖动）。
+- **快捷键冲突缺批量恢复**：单行重置按钮本来就有（`ShortcutSection.tsx:126-133`），缺的是冲突提示区的一键恢复。一次改坏三四个键时用户得逐行点图标，且提示里给的是 label、行里显示的是组合键，对不上。新增 `resetConflicts()`，按 `ConflictInfo.actions[].id` 精确取集合，只重置冲突项，不误伤其它自定义键。
+
+### Added（回归脚本，判据按 2.6）
+
+- **`scripts/verify-ime-guard.cjs`**：字符级 JSX 分词求 handler 宿主。不能用「向上找最近的 `<tag`」—— 本项目属性跨多行，会撞上相邻元素把 13 处里的 11 处误判成「不需要守卫」，脚本一片绿而实际漏修。容器子树用嵌套深度匹配闭标签，不能用 `indexOf('</div>')`（会截断在第一个内层闭标签，子树里明明有 input 却判成没有）。断言必须 grep `isImeComposing(e)` 而不是 `isComposing`。
+- **`scripts/verify-shortcut-reset.cjs`**：6 条断言，含「批量恢复按冲突集合取 id」。
+
+两条脚本都做了 stash 反向验证：`verify-ime-guard` stash 掉守卫后 13 处全红，`verify-shortcut-reset` stash 掉批量恢复后 2 条红。
+
+### 验证
+
+typecheck 干净、build 成功、`run-all-verify` **45/45**（含新增 2 条）、`e2e-ui-sftp` **18/18**。
+
 ## [1.7.2] - 2026-10-31
 
 ### Fixed（本地路径守卫两处绕过，均为 v1.7.0 引入）

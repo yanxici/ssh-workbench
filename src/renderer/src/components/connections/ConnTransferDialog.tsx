@@ -7,6 +7,7 @@ import { useToastStore } from '@/stores/toastStore'
 import { call } from '@/lib/ipc'
 import { cn } from '@/lib/utils'
 import { Field, Modal, Toggle } from '@/components/ui'
+import { isImeComposing } from '@/lib/ime'
 
 /**
  * 连接导出 / 导入：导出文件发给同事，对方导入后直接可用
@@ -303,6 +304,7 @@ function ImportDialog({ onClose }: { onClose: () => void }): JSX.Element | null 
               autoFocus
               onChange={(e) => setPass(e.target.value)}
               onKeyDown={(e) => {
+                if (isImeComposing(e)) return
                 if (e.key === 'Enter' && pass) void loadPreview(file.path, pass)
               }}
             />

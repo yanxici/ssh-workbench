@@ -849,7 +849,7 @@ export function FileExplorer({
                  */
                 tabIndex={0}
                 className={cn(
-                  'group flex cursor-default items-center gap-1 py-[3px] pr-2 text-xs transition-colors duration-150',
+                  'file-row-cv group flex cursor-default items-center gap-1 py-[3px] pr-2 text-xs transition-colors duration-150',
                   'focus-visible:bg-hover focus-visible:outline-none',
                   isSel ? 'bg-select text-ink' : 'text-ink-2 hover:bg-hover'
                 )}

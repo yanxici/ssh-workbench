@@ -5,6 +5,7 @@ import { useSettingsStore } from '@/stores/settingsStore'
 import { useUpdateStore, formatMB, formatRemaining } from '@/stores/updateStore'
 import { Toggle } from '@/components/ui'
 import { cn } from '@/lib/utils'
+import { isImeComposing } from '@/lib/ime'
 
 /**
  * 设置 → 软件更新。
@@ -151,6 +152,7 @@ export function UpdateSection(): JSX.Element {
           onChange={(e) => setProxyDraft(e.target.value)}
           onBlur={commitProxy}
           onKeyDown={(e) => {
+            if (isImeComposing(e)) return
             if (e.key === 'Enter') commitProxy()
             if (e.key === 'Escape') setProxyDraft(null)
           }}
