@@ -45,6 +45,12 @@ fs.writeFileSync(
   }`
 )
 
+const electronStub = path.join(OUT_DIR, 'electron-stub-progress.cjs')
+fs.writeFileSync(
+  electronStub,
+  'module.exports = { app: { getPath: () => require("node:os").tmpdir() } }\n'
+)
+
 const bundle = path.join(OUT_DIR, 'sftp-progress-bundle.cjs')
 const buildOptions = {
   stdin: {
@@ -67,6 +73,16 @@ const buildOptions = {
           if (args.importer.endsWith('sftpManager.ts')) return { path: stub }
           return null
         })
+      }
+    },
+    {
+      /*
+       * sftpManager 现在经 errorLog 间接依赖 electron（用于上报 SFTP 通道异常）。
+       * 这里注一个最小 stub：只有 app.getPath 会被 jsonStore.dataDir() 用到。
+       */
+      name: 'stub-electron',
+      setup(build) {
+        build.onResolve({ filter: /^electron$/ }, () => ({ path: electronStub }))
       }
     }
   ]

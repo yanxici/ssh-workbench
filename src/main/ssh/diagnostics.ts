@@ -1,7 +1,7 @@
-import type { DiagProgressEvent, DiagReport, DiagSectionResult } from '@shared/types'
+import type { DiagProgressEvent, DiagReport, DiagSection, DiagSectionResult } from '@shared/types'
 import { listDiagSections } from '../store/repository'
 import { saveReport } from '../store/reports'
-import { execCollect, type CancellationToken } from './exec'
+import { createCancelToken, execCollect, type CancellationToken } from './exec'
 import { sessionManager } from './sessionManager'
 
 /**
@@ -28,12 +28,22 @@ class DiagnosticsRunner {
 
   cancel(runId: string): void {
     const run = this.runs.get(runId)
-    if (run) run.token.cancelled = true
+    // 用 cancel() 广播给所有在跑的任务，而不是只置一个标志等它们自己轮询到
+    if (run && run.token.cancel) run.token.cancel()
+    else if (run) run.token.cancelled = true
   }
 
   async run(runId: string, sessionId: string, sectionIds: string[]): Promise<DiagReport> {
-    const token: CancellationToken = { cancelled: false }
-    this.runs.set(runId, { token })
+    /*
+     * 先校验、后登记。
+     *
+     * 原实现先 runs.set 再抛错，而清理只在正常路径末尾 —— 会话不存在 /
+     * 客户端不可用 / 没选项目这三个 throw 都发生在 delete 之前，
+     * 于是 runs 里永久残留一条 token：cancel(runId) 之后仍能命中但已无意义，
+     * 长跑下来是稳定的内存泄漏。saveReport 失败（正常路径内的抛错）同理。
+     * 现在所有退出路径都经过同一个 finally。
+     */
+    const token = createCancelToken()
 
     const session = sessionManager.list().find((s) => s.id === sessionId)
     if (!session) throw new Error('会话不存在，请先打开 SSH 连接')
@@ -49,6 +59,23 @@ class DiagnosticsRunner {
       .filter((s): s is NonNullable<typeof s> => Boolean(s))
     if (picked.length === 0) throw new Error('未选择任何诊断项')
 
+    // 校验全部通过，正式登记本次运行（此后任何退出路径都走 finally 清理）
+    this.runs.set(runId, { token })
+    try {
+      return await this.execute(runId, session, client, picked, token)
+    } finally {
+      this.runs.delete(runId)
+    }
+  }
+
+  /** 真正的执行体；由 run() 统一负责登记与清理 */
+  private async execute(
+    runId: string,
+    session: NonNullable<ReturnType<typeof sessionManager.list>[number]>,
+    client: NonNullable<ReturnType<typeof sessionManager.getClient>>,
+    picked: DiagSection[],
+    token: CancellationToken
+  ): Promise<DiagReport> {
     const startedAt = Date.now()
     const results: DiagSectionResult[] = []
     const total = picked.length
@@ -156,7 +183,6 @@ class DiagnosticsRunner {
     // 按原始顺序回收结果；理论上不会有空洞，兜底过滤掉防御性 undefined
     results.push(...slots.filter((r): r is DiagSectionResult => r !== undefined))
 
-    this.runs.delete(runId)
     const finishedAt = Date.now()
     const okCount = results.filter((r) => r.status === 'done').length
 

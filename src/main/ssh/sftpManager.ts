@@ -1,7 +1,7 @@
 import type { OpenMode, SFTPWrapper, Stats } from 'ssh2'
-import { promises as fs } from 'node:fs'
+import { existsSync, promises as fs } from 'node:fs'
 import type { FileHandle } from 'node:fs/promises'
-import { basename, dirname, join } from 'node:path'
+import { basename, dirname, extname, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import type {
   RemoteFile,
@@ -10,6 +10,7 @@ import type {
   UploadScanItem
 } from '@shared/types'
 import { sessionManager } from './sessionManager'
+import { recordError } from '../store/errorLog'
 
 /**
  * SFTP 文件管理 —— 在已建立的 SSH 会话上挂载 SFTP 子系统。
@@ -23,6 +24,26 @@ import { sessionManager } from './sessionManager'
  */
 
 type ProgressHandler = (event: TransferProgressEvent) => void
+
+/**
+ * 同名文件自动加序号，绝不覆盖已有文件。
+ *
+ * 与 ipc/zmodem.ts 的 uniquePath 保持同一套规则（`名字 (1).ext`）——
+ * 两条下载路径行为必须一致：ZMODEM 接收早就做了重名保护，
+ * 而 SFTP 下载此前是 `fs.open(localPath, 'w')` 直接截断，
+ * 用户把远端 config.bak 拖到本地同名目录，本地原文件当场没了。
+ */
+export function uniqueLocalPath(dir: string, name: string): string {  const candidate = join(dir, name)
+  if (!existsSync(candidate)) return candidate
+  const ext = extname(name)
+  const stem = name.slice(0, name.length - ext.length) || 'download'
+  let i = 1
+  for (;;) {
+    const next = join(dir, `${stem} (${i})${ext}`)
+    if (!existsSync(next)) return next
+    i += 1
+  }
+}
 
 const PROGRESS_THROTTLE_MS = 150
 const EDIT_SIZE_LIMIT = 2 * 1024 * 1024
@@ -42,6 +63,8 @@ const LIST_MANY_CONCURRENCY = 8
 
 /** 上传前扫描预览的文件数上限：超过就只报「至少这么多」，避免选中巨大目录时卡住 */
 const SCAN_FILE_LIMIT = 20000
+/** 目录上传的文件数上限（与扫描预览同源，但必须显式提示已截断） */
+const UPLOAD_FILE_LIMIT = 20000
 
 /**
  * 传输控制块：暂停/继续/取消都作用在这里。
@@ -405,6 +428,25 @@ export class SftpManager {
       sftp.on('close', () => {
         if (this.wrappers.get(sessionId) === sftp) this.wrappers.delete(sessionId)
       })
+      /*
+       * 必须监听 error。
+       *
+       * ssh2 在协议层出错时是 `emit('error')` 紧接着 `destroy()`
+       * （SFTP.js 里 sftp.emit('error', err); sftp.destroy()）。
+       * 没有 error 监听会冒到进程级 uncaughtException 兜底 —— 那边只写 boot.log，
+       * 既不会清 wrappers 缓存也不会清 homes 缓存。结果是这个会话后续所有
+       * SFTP 调用都拿到已销毁的 wrapper，报 Channel not open，
+       * 一直错到用户手动关标签为止。这里主动清缓存，下次调用自动重新挂载。
+       */
+      sftp.on('error', (err: Error) => {
+        if (this.wrappers.get(sessionId) === sftp) this.clearSession(sessionId)
+        void recordError({
+          level: 'warn',
+          source: 'sftp',
+          title: 'SFTP 通道异常，已重置',
+          detail: err.message
+        })
+      })
       return sftp
     })()
 
@@ -597,26 +639,52 @@ export class SftpManager {
   async writeText(sessionId: string, path: string, content: string): Promise<void> {
     const sftp = await this.getSftp(sessionId)
 
-    // 备份原文件（若存在）
-    try {
-      await pStat(sftp, path)
-      const bak = `${path}.bak`
+    /*
+     * 备份原文件（若存在）。
+     *
+     * 这里必须把「目标不存在」和「备份失败」分开：
+     * 原实现用一个 try 把 pStat / pUnlink / pRename 全包住，服务器拒绝 rename
+     * （权限不足、只读挂载、文件被占）会被当成「目标不存在」默默跳过，
+     * 然后直接覆盖写入 —— 原内容再无备份，与「先备份」的承诺相反。
+     * 现在 pStat 失败才算「不存在」，pRename 失败直接中止，
+     * 并把 rename 成成的 .bak 在写入失败时回滚，避免 path 位置留下半截新内容。
+     */
+    let backedUp = false
+    const bak = `${path}.bak`
+    const existed = await pStat(sftp, path).then(
+      () => true,
+      () => false
+    )
+    if (existed) {
       try {
         await pUnlink(sftp, bak, false)
       } catch {
-        /* 旧备份不存在 */
+        /* 旧备份不存在，正常 */
       }
-      await pRename(sftp, path, bak)
-    } catch {
-      /* 目标不存在：全新文件，无需备份 */
+      try {
+        await pRename(sftp, path, bak)
+        backedUp = true
+      } catch (err) {
+        throw new Error(
+          `无法备份原文件（${err instanceof Error ? err.message : String(err)}），已中止写入以免丢失内容`
+        )
+      }
     }
 
-    await new Promise<void>((resolve, reject) => {
-      sftp.writeFile(path, content, (err) => {
-        if (err) reject(new Error(`写入失败：${err.message}`))
-        else resolve()
+    try {
+      await new Promise<void>((resolve, reject) => {
+        sftp.writeFile(path, content, (err) => {
+          if (err) reject(new Error(`写入失败：${err.message}`))
+          else resolve()
+        })
       })
-    })
+    } catch (err) {
+      // 写入失败：把原文件搬回来，别让 path 位置变成半截内容
+      if (backedUp) {
+        await pRename(sftp, bak, path).catch(() => undefined)
+      }
+      throw err
+    }
   }
 
   /* ------------------------------ 传输 ------------------------------ */
@@ -709,7 +777,13 @@ export class SftpManager {
     for (const remotePath of remotePaths) {
       const taskId = randomUUID()
       taskIds.push(taskId)
-      const localPath = join(localDir, basename(remotePath))
+      /*
+       * 重名保护：target 在排队时就定下来，不能等真正下载时再算。
+       * 并发下若等到执行时才算，两个同名文件会算出同一个候选路径。
+       * 目录下载（isDir）保留用户指定的目录名，重名时同样加序号，
+       * 避免把两个同名目录的内容合并到一处。
+       */
+      const localPath = uniqueLocalPath(localDir, basename(remotePath))
       this.enqueue(
         async (ctl) => {
           const sftp = await this.getSftp(sessionId)
@@ -1037,6 +1111,8 @@ interface LocalTree {
   dirs: string[]
   /** 被跳过的符号链接 / junction（相对路径） */
   links: string[]
+  /** 是否因命中 limit 提前结束（调用方必须据此提示用户，不能静默漏传） */
+  truncated: boolean
 }
 
 /**
@@ -1071,11 +1147,13 @@ async function walkLocalTree(root: string, limit?: number): Promise<LocalTree> {
         stack.push({ dir: full, rel })
       } else {
         files.push({ rel, full })
-        if (limit !== undefined && files.length >= limit) return { files, dirs, links }
+        if (limit !== undefined && files.length >= limit) {
+          return { files, dirs, links, truncated: true }
+        }
       }
     }
   }
-  return { files, dirs, links }
+  return { files, dirs, links, truncated: false }
 }
 
 /** 只要文件清单（扫描预览用） */
@@ -1153,7 +1231,13 @@ async function transferUploadDir(
   const remoteDir = ctl.keepRoot
     ? ctl.remotePath
     : ctl.remotePath.slice(0, ctl.remotePath.lastIndexOf('/')) || '/'
-  const { files, dirs, links } = await walkLocalTree(localDir)
+  /*
+   * 走上限：10 万文件的目录若先把整棵树建成数组再开始传，用户会在
+   * 完全无反馈的情况下干等，且树本身要吃掉几 MB 内存。
+   * 与 scanFolders 的 SCAN_FILE_LIMIT 同源，但这里必须给「已截断」的明确提示，
+   * 不能静默漏传 —— 用户以为整个目录都传上去了才是真事故。
+   */
+  const { files, dirs, links, truncated } = await walkLocalTree(localDir, UPLOAD_FILE_LIMIT)
 
   // 目录里一个文件都没有时也要把目录本身建出来，否则「上传文件夹」看起来毫无反应
   if (ctl.keepRoot) await ensureRemoteDir(sftp, remoteDir)
@@ -1197,9 +1281,13 @@ async function transferUploadDir(
   if (links.length > 0) {
     notes.push(`跳过 ${links.length} 个符号链接/目录联接（例如 ${links.slice(0, 2).join('、')}）`)
   }
+  if (truncated) {
+    // 命中上限属于「用户必须知道」的情况：静默只传一半才是真事故
+    notes.push(`文件数超过 ${UPLOAD_FILE_LIMIT} 上限，已只上传前 ${UPLOAD_FILE_LIMIT} 个`)
+  }
   if (failed.length > 0) throw new Error(notes.join('；'))
-  if (links.length > 0) {
-    // 只跳过链接、文件全成功：不算失败，但也不能悄悄咽下去
+  if (links.length > 0 || truncated) {
+    // 只跳过链接/命中上限、文件全成功：不算失败，但也不能悄悄咽下去
     emit(eventOf(ctl, taskId, 'running', { note: notes.join('；') }))
   }
 }

@@ -32,7 +32,16 @@ export function registerBackupTunnelIpc(): void {
   /* ---------------- 端口转发 / 隧道 ---------------- */
   handle(IPC.TUNNEL_LIST, () => listTunnels())
   handle(IPC.TUNNEL_SAVE, (input: TunnelInput) => saveTunnel(input))
-  handle(IPC.TUNNEL_DELETE, (id: string) => deleteTunnel(id))
+  /*
+   * 删除配置前必须先摘掉运行时。
+   * 原实现只从 JSON 里 filter 掉这条记录，runtime 原样留在 Map 里：
+   * 状态还是 active、net.Server 继续监听、forwardIn 还绑在远端，
+   * 但 TUNNEL_LIST 已经列不出它 —— 用户失去关闭入口，只能重启应用。
+   */
+  handle(IPC.TUNNEL_DELETE, async (id: string) => {
+    tunnelManager.dispose(id)
+    return deleteTunnel(id)
+  })
   handle(IPC.TUNNEL_START, (tunnelId: string, sessionId: string) =>
     tunnelManager.start(tunnelId, sessionId)
   )

@@ -22,8 +22,46 @@ export interface ExecOutcome {
   error?: string
 }
 
+/**
+ * 取消令牌。
+ *
+ * 除了轮询 cancelled 标志，还支持 onCancel 订阅 —— 原来每个 exec 任务各挂一个
+ * 120ms 的 setInterval 去查 `token.cancelled`，批量 50 会话 + 巡检 4 并发 +
+ * 监控 N 台时，几十上百个定时器每秒空转几百次回调，只为读一个布尔值。
+ * 订阅制下取消只在真正发生时推一次，与任务数无关。
+ */
 export interface CancellationToken {
   cancelled: boolean
+  /** 订阅取消事件，返回退订函数 */
+  onCancel?: (cb: () => void) => () => void
+  /** 广播取消（createCancelToken 提供；纯布尔令牌没有） */
+  cancel?: () => void
+}
+
+/** 创建一个带订阅能力的取消令牌（批量/巡检共用，一处 cancel 广播给全部任务） */
+export function createCancelToken(): CancellationToken & { cancel: () => void } {
+  const listeners = new Set<() => void>()
+  const token: CancellationToken & { cancel: () => void } = {
+    cancelled: false,
+    onCancel: (cb) => {
+      const wrapped = (): void => cb()
+      listeners.add(wrapped)
+      return () => listeners.delete(wrapped)
+    },
+    cancel: () => {
+      if (token.cancelled) return
+      token.cancelled = true
+      for (const cb of listeners) {
+        try {
+          cb()
+        } catch {
+          /* 单个订阅者异常不影响其它任务收到取消 */
+        }
+      }
+      listeners.clear()
+    }
+  }
+  return token
 }
 
 const DEFAULT_MAX_OUTPUT = 512 * 1024
@@ -51,7 +89,7 @@ export function execCollect(
       if (settled) return
       settled = true
       clearTimeout(timer)
-      if (poll) clearInterval(poll)
+      unsubscribe?.()
       let out = stdout + decOut.end()
       let err = stderr + decErr.end()
       if (out.length > maxOutput) out = out.slice(0, maxOutput) + TRUNCATE_NOTE
@@ -72,14 +110,24 @@ export function execCollect(
       finish('timeout', null)
     }, timeoutMs)
 
-    const poll = token
-      ? setInterval(() => {
-          if (token.cancelled) {
-            closeStream()
-            finish('cancelled', null)
-          }
-        }, 120)
-      : null
+    /*
+     * 取消：订阅制，不再每任务一个 120ms 定时器。
+     * 令牌没实现 onCancel（老的纯布尔令牌）时，退回一次性检查 —— 
+     * 覆盖「调用方在 exec 之前就已经取消」的情形，不再持续轮询。
+     */
+    let unsubscribe: (() => void) | undefined
+    if (token) {
+      const doCancel = (): void => {
+        closeStream()
+        finish('cancelled', null)
+      }
+      if (token.cancelled) {
+        // 已取消：直接结算，别白开一个通道
+        finish('cancelled', null)
+        return
+      }
+      unsubscribe = token.onCancel?.(doCancel)
+    }
 
     try {
       client.exec(command, (err, s) => {

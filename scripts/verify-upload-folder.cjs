@@ -39,6 +39,12 @@ fs.writeFileSync(
   }`
 )
 
+const electronStub = path.join(OUT_DIR, 'electron-stub-folder.cjs')
+fs.writeFileSync(
+  electronStub,
+  'module.exports = { app: { getPath: () => require("node:os").tmpdir() } }' + String.fromCharCode(10)
+)
+
 const bundle = path.join(OUT_DIR, 'sftp-folder-bundle.cjs')
 async function buildBundle() {
   await esbuild.build({
@@ -61,6 +67,13 @@ async function buildBundle() {
         build.onResolve({ filter: /sessionManager$/ }, (args) =>
           args.importer.endsWith('sftpManager.ts') ? { path: stub } : null
         )
+      }
+    },
+    {
+      /* sftpManager 经 errorLog 间接依赖 electron：只需 app.getPath 的最小 stub */
+      name: 'stub-electron',
+      setup(build) {
+        build.onResolve({ filter: /^electron$/ }, () => ({ path: electronStub }))
       }
     }
   ]

@@ -653,6 +653,12 @@ export interface TunnelInput {
   targetPort?: number
   connectionId?: string
   remark?: string
+  /**
+   * 允许监听非回环地址（默认 false）。
+   * 不开这个开关时 bindHost 只能是 127.0.0.1 / ::1 / localhost，
+   * 避免用户随手填 0.0.0.0 就把本机变成同网段可用的免认证 SOCKS5 出口。
+   */
+  allowLan?: boolean
 }
 
 export type TunnelStatus = 'stopped' | 'starting' | 'active' | 'error'

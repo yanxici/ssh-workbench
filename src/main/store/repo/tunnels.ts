@@ -17,6 +17,29 @@ export async function getTunnel(id: string): Promise<TunnelConfig | undefined> {
   return list.find((t) => t.id === id)
 }
 
+/**
+ * 校验监听地址。
+ *
+ * 原来只给默认值不校验范围：用户填 0.0.0.0 就把整台机器的内网出口变成
+ * 同网段任一台机器可用的免认证代理（socks5.ts 明确实现的是无认证 CONNECT）。
+ * -L 同理，会让本机端口暴露到局域网。
+ * 默认只允许回环；确实需要对外暴露的，必须显式勾 allowLan（UI 上有明确提示）。
+ */
+function normalizeBindHost(raw: string | undefined, allowLan: boolean | undefined): string {
+  const host = (raw ?? '').trim() || '127.0.0.1'
+  const isLoopback =
+    host === '127.0.0.1' ||
+    host === '::1' ||
+    host === 'localhost' ||
+    /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host)
+  if (!isLoopback && !allowLan) {
+    throw new Error(
+      `监听地址 ${host} 会暴露到局域网，代理无认证等于给同网段开放出口。若要对外监听，请显式允许局域网访问`
+    )
+  }
+  return host
+}
+
 export async function saveTunnel(input: TunnelInput): Promise<TunnelConfig> {
   const now = Date.now()
   let saved!: TunnelConfig
@@ -25,7 +48,7 @@ export async function saveTunnel(input: TunnelInput): Promise<TunnelConfig> {
     const base = {
       name: input.name.trim() || '未命名隧道',
       type: input.type,
-      bindHost: input.bindHost.trim() || '127.0.0.1',
+      bindHost: normalizeBindHost(input.bindHost, input.allowLan),
       bindPort: input.bindPort,
       targetHost: input.targetHost?.trim() || undefined,
       targetPort: input.targetPort,

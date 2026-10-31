@@ -104,6 +104,24 @@ class TunnelManager {
     return this.snapshot(runtime)
   }
 
+  /**
+   * 停止并**彻底移除**运行时（配置被删除时用这个）。
+   *
+   * stop() 会保留 runtime 只为让 UI 显示「已停止」状态 —— 配置还在，
+   * 用户随时能再启动。但配置被删掉之后，留着 runtime 就是幽灵：
+   * TUNNEL_LIST 已经列不出这条配置，用户界面上再也找不到入口去关它，
+   * 而 net.Server 还在监听本机端口、forwardIn 还绑在远端，
+   * 只能重启应用才能释放。-D 类型尤其危险：一个关不掉的 SOCKS5 监听。
+   */
+  dispose(tunnelId: string): void {
+    const runtime = this.runtimes.get(tunnelId)
+    if (!runtime) return
+    this.releaseResources(runtime)
+    runtime.status = 'stopped'
+    this.emit(runtime)
+    this.runtimes.delete(tunnelId)
+  }
+
   stop(tunnelId: string): void {
     const runtime = this.runtimes.get(tunnelId)
     if (!runtime) return
