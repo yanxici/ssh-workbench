@@ -5,7 +5,7 @@ import { createZip, type ZipEntry } from '../util/zip'
 import { listConnections, listHistory, listProfiles } from './repository'
 import { backupStore } from './backups'
 import { readReport } from './reports'
-import { recorder } from './recorder'
+import { listSessionLogs } from './sessionLogs'
 
 /**
  * 诊断报告一键打包 —— 把「报告 + 会话日志 + 命令历史 + 配置备份 + 设备档案」
@@ -34,7 +34,7 @@ export async function bundlePreview(reportId: string): Promise<BundlePreview> {
   const { report, connectionId } = await resolveContext(reportId)
 
   // 会话日志：录制文件名形如 {时间戳}-{会话名}.cast，按连接名匹配
-  const logs = await recorder.list()
+  const logs = await listSessionLogs()
   const matchedLogs = logs.filter((l) => l.name.includes(report.connectionName))
 
   const history = connectionId ? await listHistory({ connectionId, limit: 5000 }) : []
@@ -120,7 +120,7 @@ export async function exportBundle(
 
   /* ---------- 会话日志 ---------- */
   if (options.includeLogs) {
-    const logs = (await recorder.list())
+    const logs = (await listSessionLogs())
       .filter((l) => l.name.includes(report.connectionName))
       .slice(0, 20)
     for (const log of logs) {

@@ -29,6 +29,7 @@ export {
   listConnections,
   renameConnectionGroup,
   saveConnection,
+  updateConnectionsTags,
   touchConnection
 } from './repo/connections'
 

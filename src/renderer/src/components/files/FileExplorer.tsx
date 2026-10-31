@@ -65,6 +65,12 @@ import {
  */
 const PREFETCH_DIRS = 6
 
+/**
+ * 单次渲染的行数上限，与会话树 SessionFileTree.tsx:434 的 LIMIT 保持一致。
+ * 两侧展示的是同一棵远端树，限额不一致会出现「同一目录在两处表现不同」。
+ */
+const ROW_LIMIT = 300
+
 const WORKSPACE_SPOTS: Array<{ label: string; get: (home: string) => string; icon: JSX.Element }> =
   [
     { label: '主目录', get: (h) => h || '/', icon: <Home size={13} /> },
@@ -95,6 +101,14 @@ export function FileExplorer({
   const [currentDir, setCurrentDir] = useState<string>('')
   const [openDirs, setOpenDirs] = useState<Set<string>>(new Set())
   const [selected, setSelected] = useState<string | null>(null)
+  /*
+   * 大目录截断开关。
+   * 侧栏文件树和会话树展示的是同一棵远端树，但会话树有 LIMIT=300 的保护
+   * （SessionFileTree.tsx:434），这里原本 rows.map 全量渲染 —— 展开 var-log
+   * 这类几千项的目录会把主线程卡住。两处保持一致，避免「同一个目录在侧栏卡、
+   * 在会话树流畅」的割裂。
+   */
+  const [showAllRows, setShowAllRows] = useState(false)
   const [loading, setLoading] = useState(false)
   const version = useSftpStore((s) => s.treeVersion)
   const bumpTree = useSftpStore((s) => s.bumpTree)
@@ -800,7 +814,9 @@ export function FileExplorer({
             <div className="text-2xs text-ink-3">这个目录是空的</div>
           </div>
         ) : (
-          (rows ?? []).map(({ file, depth, error: rowError }) => {
+          <>
+            {(showAllRows ? (rows ?? []) : (rows ?? []).slice(0, ROW_LIMIT)).map(
+              ({ file, depth, error: rowError }) => {
             /* 展开失败的行：不渲染成可操作的条目，避免用户对着点却没反应 */
             if (rowError) {
               return (
@@ -875,7 +891,18 @@ export function FileExplorer({
                 <span className="min-w-0 flex-1 truncate">{file.name}</span>
               </div>
             )
-          })
+              }
+            )}
+            {/* 超出行数上限时给一个显式展开入口，与会话树的交互一致 */}
+            {!showAllRows && (rows?.length ?? 0) > ROW_LIMIT && (
+              <button
+                className="w-full py-1 pl-2 text-left text-2xs text-ink-3 hover:text-ink"
+                onClick={() => setShowAllRows(true)}
+              >
+                还有 {(rows?.length ?? 0) - ROW_LIMIT} 项，点击展开全部
+              </button>
+            )}
+          </>
         )}
       </div>
 

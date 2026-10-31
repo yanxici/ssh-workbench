@@ -1,4 +1,4 @@
-import { useEffect, useState, type MouseEvent } from 'react'
+import { useEffect, useMemo, useState, type MouseEvent } from 'react'
 import {
   ArrowUp,
   Download,
@@ -54,9 +54,28 @@ export function RemotePane(): JSX.Element {
 
   useEffect(() => setPathInput(dir), [dir])
 
+  /*
+   * 选中集合转 Set。
+   * 原来每行都做 `sel.includes(f.path)`，n 行 × O(n) 查找 = O(n²)：
+   * 5000 文件的目录光判断选中状态就要遍历上千万次，首帧明显卡顿。
+   * Set 化之后每行 O(1)，整体降到 O(n)。
+   */
+  const selSet = useMemo(() => new Set(sel), [sel])
+
+  /*
+   * 渲染截断：5000 项的目录一次性铺开 DOM，光节点创建就够卡。
+   * 与 FileExplorer/SessionFileTree 用同一个上限口径（300），
+   * 超出部分给「还有 N 项」，用户主动点才全量渲染。
+   */
+  const ROW_LIMIT = 300
+  const shownFiles = useMemo(
+    () => (files.length > ROW_LIMIT ? files.slice(0, ROW_LIMIT) : files),
+    [files]
+  )
+
   const clickRow = (path: string, e: MouseEvent): void => {
     if (e.ctrlKey || e.metaKey) {
-      setSel(sel.includes(path) ? sel.filter((p) => p !== path) : [...sel, path])
+      setSel(selSet.has(path) ? sel.filter((p) => p !== path) : [...sel, path])
     } else {
       setSel([path])
     }
@@ -64,7 +83,7 @@ export function RemotePane(): JSX.Element {
 
   const menuItems = (path: string): MenuEntry[] => {
     const f = files.find((x) => x.path === path)
-    const targets = sel.includes(path) ? sel : [path]
+    const targets = selSet.has(path) ? sel : [path]
     return [
       {
         label: '编辑',
@@ -171,14 +190,14 @@ export function RemotePane(): JSX.Element {
             <Loader2 size={13} className="animate-spin" /> 读取中…
           </div>
         )}
-        {files.map((f) => (
+        {shownFiles.map((f) => (
           <div
             key={f.path}
             draggable
             onDragStart={(e) => {
               e.dataTransfer.setData(
                 'application/x-remote-paths',
-                JSON.stringify(sel.includes(f.path) ? sel : [f.path])
+                JSON.stringify(selSet.has(f.path) ? sel : [f.path])
               )
               e.dataTransfer.effectAllowed = 'copy'
             }}
@@ -190,7 +209,7 @@ export function RemotePane(): JSX.Element {
             onContextMenu={(e) => openMenu(e, f.path)}
             className={cn(
               'flex cursor-default items-center gap-2 rounded px-2 py-[3px] text-xs',
-              sel.includes(f.path) ? 'bg-accent/15 text-ink' : 'text-ink-2 hover:bg-hover/60'
+              selSet.has(f.path) ? 'bg-accent/15 text-ink' : 'text-ink-2 hover:bg-hover/60'
             )}
             title={f.path}
           >
@@ -213,6 +232,11 @@ export function RemotePane(): JSX.Element {
             </span>
           </div>
         ))}
+        {files.length > shownFiles.length && (
+          <div className="px-2 py-1 text-2xs text-ink-3">
+            仅显示前 {shownFiles.length} 项，共 {files.length} 项 —— 用上方的路径栏可直接进入目标目录
+          </div>
+        )}
       </div>
 
       {menu && <ContextMenu x={menu.x} y={menu.y} items={menuItems(menu.target)} onClose={closeMenu} />}

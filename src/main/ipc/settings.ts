@@ -2,31 +2,20 @@ import { app, clipboard } from 'electron'
 import { IPC } from '@shared/ipc'
 import { handle } from './handle'
 import { dataDir } from '../store/jsonStore'
-import {
-  deleteKnownHost,
-  getSettings,
-  listKnownHosts,
-  refreshKnownHost,
-  setSettings
-} from '../store/repository'
+import { deleteKnownHost, listKnownHosts, refreshKnownHost } from '../store/repository'
+import { getSettings, updateSettings } from '../app/settingsService'
 import { probeHostFingerprint } from '../ssh/connectConfig'
-import { applyUpdatePrefs } from '../updater'
 
 /** 应用设置 / 数据目录 / 已知主机指纹 / 剪贴板 */
 export function registerSettingsIpc(): void {
   handle(IPC.SETTINGS_GET, () => getSettings())
-  handle(IPC.SETTINGS_SET, async (patch: Parameters<typeof setSettings>[0]) => {
-    const next = await setSettings(patch)
-    // 更新相关偏好改完立刻生效，不用重启应用（含代理、自动检查、自动下载）
-    if (patch.update) {
-      applyUpdatePrefs({
-        autoCheck: patch.update.autoCheck,
-        autoDownload: patch.update.autoDownload,
-        proxyUrl: patch.update.proxyUrl
-      })
-    }
-    return next
-  })
+  /*
+   * 只做转发：落盘 + 「更新偏好立刻生效」的副作用统一收在
+   * app/settingsService.ts，传输层不再承载域逻辑。
+   */
+  handle(IPC.SETTINGS_SET, (patch: Parameters<typeof updateSettings>[0]) =>
+    updateSettings(patch)
+  )
   handle(IPC.STORE_PATHS, () => ({
     dataDir: dataDir(),
     userData: app.getPath('userData')

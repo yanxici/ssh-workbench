@@ -148,6 +148,12 @@ export const api = {
     /** 批量删除：一次读改写，返回实际删除条数 */
     removeMany: (ids: string[]): Promise<IpcResult<number>> =>
       invoke(IPC.CONN_DELETE_MANY, ids),
+    /** 批量改标签：一次读改写落盘，返回实际改动条数 */
+    updateTags: (
+      ids: string[],
+      tags: string[],
+      mode?: 'add' | 'remove' | 'replace'
+    ): Promise<IpcResult<number>> => invoke(IPC.CONN_UPDATE_TAGS, ids, tags, mode),
     hasSecret: (id: string): Promise<IpcResult<boolean>> => invoke(IPC.CONN_HAS_SECRET, id),
     parseSshCommand: (text?: string): Promise<IpcResult<ParsedSshCommand>> =>
       invoke(IPC.CONN_PARSE_SSH_CMD, text)

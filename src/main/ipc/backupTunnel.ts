@@ -6,24 +6,26 @@ import type { TunnelInput } from '@shared/types'
 import { dialogParent } from '../windowRef'
 import { handle } from './handle'
 import { backupStore } from '../store/backups'
+import { createBackup, diffBackup, restoreBackup } from '../ssh/configBackup'
 import { deleteTunnel, listTunnels, saveTunnel } from '../store/repository'
 import { tunnelManager } from '../ssh/portForward'
-import { recorder } from '../store/recorder'
+import { recorder } from '../ssh/recorder'
+import { listSessionLogs, readSessionLog, removeSessionLog } from '../store/sessionLogs'
 
 /** 配置备份对比 + 端口转发/隧道 + 会话日志（录制/回放） */
 export function registerBackupTunnelIpc(): void {
   /* ---------------- 配置备份对比 ---------------- */
   handle(IPC.BACKUP_LIST, () => backupStore.list())
   handle(IPC.BACKUP_CREATE, (sessionId: string, name: string, paths: string[]) =>
-    backupStore.create(sessionId, name, paths)
+    createBackup(sessionId, name, paths)
   )
   handle(IPC.BACKUP_DELETE, (id: string) => backupStore.remove(id))
   handle(IPC.BACKUP_DETAIL, (id: string) => backupStore.detail(id))
   handle(IPC.BACKUP_DIFF, (id: string, path: string, sessionId: string) =>
-    backupStore.diff(id, path, sessionId)
+    diffBackup(id, path, sessionId)
   )
   handle(IPC.BACKUP_RESTORE, (id: string, sessionId: string, paths: string[]) =>
-    backupStore.restore(id, sessionId, paths)
+    restoreBackup(id, sessionId, paths)
   )
   handle(IPC.BACKUP_OPEN_DIR, () => backupStore.openDir())
 
@@ -38,9 +40,9 @@ export function registerBackupTunnelIpc(): void {
   handle(IPC.TUNNEL_STATES, () => tunnelManager.states())
 
   /* ---------------- 会话日志（录制 / 回放） ---------------- */
-  handle(IPC.LOG_LIST, () => recorder.list())
-  handle(IPC.LOG_READ, (path: string) => recorder.read(path))
-  handle(IPC.LOG_DELETE, (path: string) => recorder.remove(path))
+  handle(IPC.LOG_LIST, () => listSessionLogs())
+  handle(IPC.LOG_READ, (path: string) => readSessionLog(path))
+  handle(IPC.LOG_DELETE, (path: string) => removeSessionLog(path))
   handle(IPC.LOG_OPEN_DIR, async () => {
     await shell.openPath(recorder.logDir())
   })

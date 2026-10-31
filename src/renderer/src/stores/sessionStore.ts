@@ -268,9 +268,22 @@ export const useSessionStore = create<SessionState>()((set, get) => ({
   latencyOf: (id) => get().latencyById[id],
 
   setSize: (id, cols, rows) =>
-    set((s) => ({
-      sessions: s.sessions.map((x) => (x.id === id ? { ...x, cols, rows } : x))
-    })),
+    set((s) => {
+      /*
+       * 值没变就不重建数组。
+       * doFit 跟着 ResizeObserver 每帧跑一次（TerminalView 里有合帧），
+       * 但 fit 出来的 cols/rows 大多数帧是一样的 —— 原来无条件 map 重建
+       * sessions，导致 App / TabBar / ConnectionSidebar 在拖动窗口期间
+       * 每帧全量重渲染。短路之后只有真正发生尺寸变化的帧才重建。
+       * （彻底的做法是像 latencyById 那样把尺寸拆成独立 store，
+       *   但 cols/rows 还被重连链路读取，先做零风险的短路。）
+       */
+      const target = s.sessions.find((x) => x.id === id)
+      if (!target || (target.cols === cols && target.rows === rows)) return s
+      return {
+        sessions: s.sessions.map((x) => (x.id === id ? { ...x, cols, rows } : x))
+      }
+    }),
 
   reorder: (from, to) =>
     set((s) => {

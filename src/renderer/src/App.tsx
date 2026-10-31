@@ -33,7 +33,7 @@ import { useDiscoveryStore } from '@/stores/discoveryStore'
 import { useBackupStore } from '@/stores/backupStore'
 import { useUpdateStore } from '@/stores/updateStore'
 import { useUiStore } from '@/stores/uiStore'
-import { matchShortcut, resolveShortcuts } from '@/lib/shortcuts'
+import { matchShortcut, matchShortcutIgnoringShift, resolveShortcuts } from '@/lib/shortcuts'
 import { isCommandDrag, readDraggedCommandId, stripDragPayload } from '@/lib/commandDrag'
 import { SettingsPanel } from '@/components/settings/SettingsPanel'
 import { DangerConfirmDialog, VariablePromptDialog } from '@/components/execution/ExecutionDialogs'
@@ -303,6 +303,15 @@ export function App(): JSX.Element {
       } else if (matchShortcut(e, map.nextTab)) {
         consume()
         useSessionStore.getState().cycle(e.shiftKey ? -1 : 1)
+      } else if (matchShortcutIgnoringShift(e, map.nextTab)) {
+        /*
+         * Ctrl+Shift+Tab = 上一个标签。
+         * 上面分支的精确比对要求 shift 一致，nextTab 默认是 Ctrl+Tab（无 shift），
+         * 所以 Ctrl+Shift+Tab 根本命中不了 —— 那个 `? -1 : 1` 的反向分支是死代码。
+         * 这里补一个忽略 shift 的兜底，专门承接反向切换。
+         */
+        consume()
+        useSessionStore.getState().cycle(-1)
       } else if (e.ctrlKey && e.shiftKey && !e.altKey && e.key.toLowerCase() === 't') {
         consume()
         const { activeId: current, openTerminal } = useSessionStore.getState()

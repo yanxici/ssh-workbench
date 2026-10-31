@@ -18,6 +18,7 @@ import type { SessionUi } from '@/stores/sessionStore'
 import { terminalRegistry, useSessionStore } from '@/stores/sessionStore'
 import { applyOsc7, feedTerminalInput } from '@/stores/cwdStore'
 import { resolveDark, useSettingsStore } from '@/stores/settingsStore'
+import { matchShortcut, resolveShortcuts } from '@/lib/shortcuts'
 import { getXtermTheme } from '@/theme/colorThemes'
 import { ContextMenu, useContextMenu, type MenuEntry } from '@/components/ui'
 import { call } from '@/lib/ipc'
@@ -196,22 +197,27 @@ export function TerminalView({
       setSearchCount({ index: resultIndex, count: resultCount })
     })
 
-    // 快捷键：Ctrl+Shift+C/V 复制粘贴；Ctrl+F 搜索
+    /*
+     * 快捷键：复制/粘贴/搜索。
+     * 组合键一律从 settingsStore 现取，不再写死 —— 设置页把它们列为可自定义项，
+     * 之前硬编码导致「改了没反应」。用 getState() 取而非闭包捕获 settings，
+     * 这样用户改完键位立刻生效，不必重建终端（init effect 只依赖 sessionId）。
+     */
     term.attachCustomKeyEventHandler((e) => {
       if (e.type !== 'keydown') return true
-      const key = e.key.toLowerCase()
-      if (e.ctrlKey && e.shiftKey && key === 'c') {
+      const map = resolveShortcuts(useSettingsStore.getState().settings.shortcuts)
+      if (matchShortcut(e, map.terminalCopy)) {
         const selection = term.getSelection()
         if (selection) void call(window.api.clip.write(selection), { silent: true })
         return false
       }
-      if (e.ctrlKey && e.shiftKey && key === 'v') {
+      if (matchShortcut(e, map.terminalPaste)) {
         void call(window.api.clip.read(), { silent: true }).then((text) => {
           if (text) term.paste(text)
         })
         return false
       }
-      if (e.ctrlKey && !e.shiftKey && key === 'f') {
+      if (matchShortcut(e, map.terminalSearch)) {
         setSearchOpen(true)
         return false
       }

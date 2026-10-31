@@ -27,13 +27,42 @@ jobs:
           node-version: '22'
           cache: npm
 
+      # 缓存 Electron 本体与 electron-builder 的二进制工具链。
+      # setup-node 的 cache: npm 只缓存 npm 包，Electron 的 110MB 运行时和
+      # winCodeSign/NSIS 每次都要重新下载 —— 历史连败里下载抖动是可疑因子。
+      # 必须放在 npm ci 之前：Electron 的运行时装在 postinstall 阶段拉取。
+      # key 带 Electron 版本，升级时自动失效，不会拿旧缓存配新运行时。
+      - name: Resolve Electron version
+        id: electron
+        shell: bash
+        run: |
+          echo "value=$(node -p 'require("./package.json").devDependencies.electron.replace(/[^0-9.]/g,"")')" >> $GITHUB_OUTPUT
+
+      - name: Cache Electron & builder binaries
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~\AppData\Local\electron\Cache
+            ~\AppData\Local\electron-builder\Cache
+          key: ${{ runner.os }}-electron-${{ steps.electron.outputs.value }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-electron-${{ steps.electron.outputs.value }}-
+            ${{ runner.os }}-electron-
+
       - name: Install dependencies
         run: npm ci
 
       # 门禁：类型检查 + 功能自检 + 真·UI 级 SFTP 端到端（含上传文件夹/空目录/链接）
       # 任何一项不过就不出包 —— 1.6.3 就是「测试全绿但功能坏了」的教训。
+      # 带超时与一次重试：e2e-ui-sftp 要在 runner 上真起 Electron 走 CDP，
+      # 历史上 3 连败都是这一步的环境抖动，一次抖动不该报废整个发布（只能删 tag 重打）。
       - name: Verify (typecheck + features + UI e2e)
-        run: npm run verify:prepackage
+        uses: nick-fields/retry@v3
+        with:
+          max_attempts: 2
+          retry_wait_seconds: 20
+          timeout_minutes: 15
+          command: npm run verify:prepackage
 
       - name: Determine version
         id: version
@@ -45,12 +74,59 @@ jobs:
             echo "value=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
           fi
 
-      # electron-builder 直接发布：nsis(Setup) + 解压版 zip + latest.yml（自动更新清单）
-      # 只打 zip 时 electron-builder 不产 latest.yml，客户端「检查更新」会 404。
-      - name: Build & publish (nsis + zip)
+      # 门禁：tag 与 package.json 的 version 必须一致。
+      # electron-builder 用 package.json 的 version 命名产物并写 latest.yml，
+      # 却用 tag 决定 Release 名。两者分裂时（打了 v1.6.5 却忘了 npm version），
+      # 产物叫 1.6.4-*.exe，latest.yml 写 1.6.4，客户端比对「1.6.4 <= 已装 1.6.4」
+      # 判定无需更新 —— 整条自动更新链路静默失效，没有任何报错。
+      - name: Assert version consistency
+        shell: bash
+        run: |
+          TAG_VER="${{ steps.version.outputs.value }}"
+          TAG_VER="${TAG_VER#v}"
+          PKG_VER="$(node -p "require('./package.json').version")"
+          echo "tag=$TAG_VER  package.json=$PKG_VER"
+          if [ "$TAG_VER" != "$PKG_VER" ]; then
+            echo "::error::版本不一致：tag 是 $TAG_VER，package.json 是 $PKG_VER。先跑 npm version $TAG_VER --no-git-tag-version 再打 tag。"
+            exit 1
+          fi
+
+      # 发布只传 NSIS(Setup) + latest.yml；zip 仅作为排障 artifact 留着。
+      # 之前 CI 用 `--win nsis zip --publish always`，而 scripts/release.ps1:83-89
+      # 明确禁止上传 zip —— 同一仓库两个出口规则对不上，导致 Release 上挂了一个
+      # 112.5MB 的 win.zip，与 Setup 解包内容完全一致，纯冗余。
+      # 所以改成 --publish never 自己控制上传清单：zip 只进 artifact。
+      - name: Build (nsis + zip, no implicit publish)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: npx electron-builder --win nsis zip --config electron-builder.yml --publish always
+        run: npx electron-builder --win nsis zip --config electron-builder.yml --publish never
+
+      # 只把 Setup、blockmap、latest.yml 传到 Release；zip/portable 走下面的 artifact。
+      # 输出目录从 electron-builder.yml 解析，避免像 release.ps1 那样硬编码目录名后失联。
+      - name: Publish release assets (nsis + latest.yml only)
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $ver = "${{ steps.version.outputs.value }}" -replace '^v',''
+          $tag = "v$ver"
+          $m = Select-String -Path "electron-builder.yml" -Pattern '^\s*output:\s*(\S+)\s*$' -AllMatches
+          if (-not $m -or $m.Matches.Count -eq 0) { Write-Host "解析不到 directories.output" -ForegroundColor Red; exit 1 }
+          $dist = $m.Matches[0].Groups[1].Value.Trim('"', "'")
+          $assets = @(
+            (Join-Path $dist "ssh-workbench-Setup-$ver.exe"),
+            (Join-Path $dist "ssh-workbench-Setup-$ver.exe.blockmap"),
+            (Join-Path $dist "latest.yml")
+          ) | Where-Object { Test-Path $_ }
+          if ($assets.Count -lt 3) {
+            Write-Host "缺少发布产物，实际找到：$($assets -join ', ')" -ForegroundColor Red
+            exit 1
+          }
+          gh release view $tag 2>$null | Out-Null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create $tag --title "SSH Workbench $tag" --target main --notes "Release $tag"
+          }
+          gh release upload $tag @assets --clobber
 
       - name: Upload build artifact (for debugging)
         uses: actions/upload-artifact@v4

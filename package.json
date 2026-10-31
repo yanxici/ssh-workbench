@@ -1,6 +1,6 @@
 {
   "name": "ssh-workbench",
-  "version": "1.6.4",
+  "version": "1.6.5",
   "private": true,
   "description": "轻量级 SSH 客户端 + 嵌入式技术支持工作台",
   "author": "ssh-workbench",
@@ -46,7 +46,9 @@
     "build:linux": "electron-vite build && electron-builder --linux --config electron-builder.yml",
     "test:ui": "node scripts/e2e-ui-sftp.cjs",
     "test:ui:stress": "node scripts/e2e-ui-sftp.cjs --stress",
-    "verify:prepackage": "npm run typecheck && npm run test:features && npm run test:uploadfolder && electron-vite build && node scripts/e2e-ui-sftp.cjs"
+    "test:verify": "node scripts/run-all-verify.cjs",
+    "test:verify:list": "node scripts/run-all-verify.cjs --list",
+    "verify:prepackage": "npm run typecheck && npm run test:features && npm run test:uploadfolder && npm run test:verify && electron-vite build && node scripts/e2e-ui-sftp.cjs"
   },
   "dependencies": {
     "electron-updater": "^6.8.11",

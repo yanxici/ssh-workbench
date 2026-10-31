@@ -30,7 +30,22 @@ if (-not $env:GH_TOKEN) {
 }
 
 $root = Split-Path -Parent $PSScriptRoot
-$dist = Join-Path $root "dist-v13"
+
+# ---- 输出目录从 electron-builder.yml 解析，不再硬编码 ----
+# 硬编码 dist-v13 而配置早已切到 dist-v14，每次发版都要手动改脚本，
+# 忘改就报「没有产物」，本身就是事故源。以配置里的 directories.output 为准。
+$builderYml = Join-Path $root "electron-builder.yml"
+$distName = $null
+if (Test-Path $builderYml) {
+  $m = Select-String -Path $builderYml -Pattern '^\s*output:\s*(\S+)\s*$' -AllMatches
+  if ($m -and $m.Matches.Count -gt 0) { $distName = $m.Matches[0].Groups[1].Value.Trim('"', "'") }
+}
+if (-not $distName) {
+  Write-Host "electron-builder.yml 里没解析到 directories.output，无法确定产物目录" -ForegroundColor Red
+  exit 1
+}
+$dist = Join-Path $root $distName
+Write-Host "产物目录：$distName（来自 electron-builder.yml）" -ForegroundColor DarkGray
 $tag = "v$Version"
 
 # ---- 上传清单：只传安装包 + 自动更新元数据 ----
@@ -60,7 +75,7 @@ if ($files.Count -eq 0) {
 }
 
 if ($files.Count -eq 0) {
-  Write-Host "dist-v13 里没有 $Version 的产物，先执行打包" -ForegroundColor Red
+  Write-Host "$distName 里没有 $Version 的产物，先执行打包" -ForegroundColor Red
   exit 1
 }
 

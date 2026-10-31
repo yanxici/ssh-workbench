@@ -1,7 +1,6 @@
-import { app } from 'electron'
 import { createWriteStream, promises as fs, type WriteStream } from 'node:fs'
-import { basename, join, resolve, sep } from 'node:path'
-import type { SessionLogFile } from '@shared/types'
+import { join } from 'node:path'
+import { sessionLogDir } from '../store/sessionLogs'
 
 /**
  * 会话日志录制器 —— 把终端输入/输出带时间戳落盘。
@@ -43,9 +42,9 @@ function sanitize(name: string): string {
 class Recorder {
   private recordings = new Map<string, Recording>()
 
-  /** 日志目录：userData/sessions/ */
+  /** 日志目录：userData/sessions/（与日志管理的读取逻辑共用同一约定） */
   logDir(): string {
-    return join(app.getPath('userData'), 'sessions')
+    return sessionLogDir()
   }
 
   async start(sessionId: string, title: string, cols: number, rows: number): Promise<void> {
@@ -123,44 +122,6 @@ class Recorder {
       return
     }
     rec.stream.write(line)
-  }
-
-  /* ------------------------------ 日志管理 ------------------------------ */
-
-  async list(): Promise<SessionLogFile[]> {
-    await fs.mkdir(this.logDir(), { recursive: true })
-    const names = await fs.readdir(this.logDir())
-    const out: SessionLogFile[] = []
-    for (const name of names) {
-      if (!name.endsWith('.cast')) continue
-      const full = join(this.logDir(), name)
-      try {
-        const st = await fs.stat(full)
-        out.push({ path: full, name, size: st.size, mtime: st.mtimeMs })
-      } catch {
-        /* 跳过读取失败的文件 */
-      }
-    }
-    return out.sort((a, b) => b.mtime - a.mtime)
-  }
-
-  async read(filePath: string): Promise<string> {
-    return fs.readFile(this.assertInside(filePath), 'utf-8')
-  }
-
-  async remove(filePath: string): Promise<void> {
-    await fs.rm(this.assertInside(filePath), { force: true })
-  }
-
-  /** 校验目标文件必须位于日志目录内（防路径逃逸） */
-  private assertInside(filePath: string): string {
-    const dir = resolve(this.logDir())
-    const target = resolve(filePath)
-    if (target !== dir && !target.startsWith(dir + sep)) {
-      throw new Error('非法日志路径')
-    }
-    if (basename(target).startsWith('.')) throw new Error('非法日志路径')
-    return target
   }
 }
 

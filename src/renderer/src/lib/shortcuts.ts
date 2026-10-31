@@ -54,6 +54,25 @@ export function matchShortcut(
   return parsed
 }
 
+/**
+ * 判断是否命中某快捷键，但**忽略 Shift**。
+ * 用于「正向/反向成对」的动作：nextTab 配的是 Ctrl+Tab，用户按 Ctrl+Shift+Tab
+ * 是同一动作的反向。精确比对会因为 shift 不匹配直接返回 null，
+ * 导致反向分支永远走不到。
+ */
+export function matchShortcutIgnoringShift(
+  e: KeyboardEvent,
+  combo: string
+): { ctrl: boolean; shift: boolean; alt: boolean; key: string } | null {
+  const parsed = parseShortcut(combo)
+  if (!parsed) return null
+  const key = e.key.toLowerCase()
+  const ctrl = e.ctrlKey || e.metaKey
+  if (ctrl !== parsed.ctrl || e.altKey !== parsed.alt) return null
+  if (key !== parsed.key) return null
+  return parsed
+}
+
 /** 解析设置里的快捷键映射，缺失项回退默认值 */
 export function resolveShortcuts(map: ShortcutMap | undefined): Record<ShortcutAction, string> {
   const out = {} as Record<ShortcutAction, string>

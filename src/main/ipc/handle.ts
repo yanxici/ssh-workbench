@@ -42,11 +42,20 @@ function channelTitle(channel: string): string {
  *
  * 在统一出口处记录的好处：不用每个 handler 各写一遍 try/catch，
  * 新增通道自动获得错误记录能力，也不会有人忘记加。
+ *
+ * 泛型签名的意义（原来是 `fn: (...args: never[]) => unknown`）：
+ * never[] 让实参类型信息彻底丢失，handler 内部把 args 当 unknown[] 强转，
+ * 于是「preload 传 arity/类型」与「主进程 handler 声明」之间没有任何类型关联 ——
+ * 改错一个参数类型，typecheck 也不会报。现在用 A 把实参元组透传下去：
+ * 声明 `handle<[string, string]>(CH, (a, b) => ...)` 时参数名与类型都会被检查。
  */
-export function handle(channel: string, fn: (...args: never[]) => unknown): void {
+export function handle<A extends unknown[] = never[], R = unknown>(
+  channel: string,
+  fn: (...args: A) => R | Promise<R>
+): void {
   ipcMain.handle(channel, async (_event, ...args: unknown[]) => {
     try {
-      const data = await fn(...(args as never[]))
+      const data = await fn(...(args as unknown as A))
       return { ok: true, data }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)

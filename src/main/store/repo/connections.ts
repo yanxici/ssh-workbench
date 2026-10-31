@@ -124,6 +124,45 @@ export async function deleteConnections(ids: string[]): Promise<number> {
 }
 
 /**
+ * 批量设置连接标签：一次读改写 + 一次落盘。
+ *
+ * 为什么需要它：渲染层多选后打标签原本逐条调 saveConnection，
+ * 500 条 = 500 次 IPC + 500 次「读全表 → 改一条 → 写全表」，
+ * 而且每写完一次都把整个连接数组换掉，侧栏跟着全量重渲染 500 次。
+ * 删除有 deleteConnections、移动分组有 renameConnectionGroup，唯独打标签漏了。
+ *
+ * mode：
+ *   'add'     追加（去重合并）
+ *   'remove'  移除指定标签
+ *   'replace' 整体替换
+ */
+export async function updateConnectionsTags(
+  ids: string[],
+  tags: string[],
+  mode: 'add' | 'remove' | 'replace' = 'add'
+): Promise<number> {
+  if (ids.length === 0) return 0
+  const want = new Set(ids)
+  const incoming = tags.map((t) => t.trim()).filter(Boolean)
+  if (mode !== 'remove' && incoming.length === 0) return 0
+
+  let count = 0
+  await connStore.update((list) =>
+    list.map((c) => {
+      if (!want.has(c.id)) return c
+      count++
+      const current = c.tags ?? []
+      let next: string[]
+      if (mode === 'replace') next = incoming
+      else if (mode === 'remove') next = current.filter((t) => !incoming.includes(t))
+      else next = Array.from(new Set([...current, ...incoming]))
+      return { ...c, tags: next, updatedAt: Date.now() }
+    })
+  )
+  return count
+}
+
+/**
  * 连接分组重命名：一次读改写完成。
  * 与命令分组同一套路 —— 逐条 saveConnection 会产生 N 次落盘，
  * 上千条连接时每次改名要等几秒，这里直接改字段。

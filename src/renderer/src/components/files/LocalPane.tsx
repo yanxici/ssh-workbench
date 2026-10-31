@@ -1,4 +1,4 @@
-import { useEffect, useState, type MouseEvent } from 'react'
+import { useEffect, useMemo, useState, type MouseEvent } from 'react'
 import {
   ArrowUp,
   FileText,
@@ -51,16 +51,26 @@ export function LocalPane(): JSX.Element {
     void call(window.api.local.drives(), { silent: true }).then((d) => setDrives(d ?? []))
   }, [])
 
+  /* 选中集合 Set 化：与 RemotePane 同理，原来的每行 includes 是 O(n²) */
+  const selSet = useMemo(() => new Set(sel), [sel])
+
+  /* 渲染截断：与 RemotePane / FileExplorer / SessionFileTree 统一 300 口径 */
+  const ROW_LIMIT = 300
+  const shownFiles = useMemo(
+    () => (files.length > ROW_LIMIT ? files.slice(0, ROW_LIMIT) : files),
+    [files]
+  )
+
   const clickRow = (path: string, e: MouseEvent): void => {
     if (e.ctrlKey || e.metaKey) {
-      setSel(sel.includes(path) ? sel.filter((p) => p !== path) : [...sel, path])
+      setSel(selSet.has(path) ? sel.filter((p) => p !== path) : [...sel, path])
     } else {
       setSel([path])
     }
   }
 
   const menuItems = (path: string): MenuEntry[] => {
-    const targets = sel.includes(path) ? sel : [path]
+    const targets = selSet.has(path) ? sel : [path]
     return [
       {
         label: '上传到远端目录…',
@@ -162,14 +172,14 @@ export function LocalPane(): JSX.Element {
             <Loader2 size={13} className="animate-spin" /> 读取中…
           </div>
         )}
-        {files.map((f) => (
+        {shownFiles.map((f) => (
           <div
             key={f.path}
             draggable
             onDragStart={(e) => {
               e.dataTransfer.setData(
                 'application/x-local-paths',
-                JSON.stringify(sel.includes(f.path) ? sel : [f.path])
+                JSON.stringify(selSet.has(f.path) ? sel : [f.path])
               )
               e.dataTransfer.effectAllowed = 'copy'
             }}
@@ -180,7 +190,7 @@ export function LocalPane(): JSX.Element {
             onContextMenu={(e) => openMenu(e, f.path)}
             className={cn(
               'flex cursor-default items-center gap-2 rounded px-2 py-[3px] text-xs',
-              sel.includes(f.path)
+              selSet.has(f.path)
                 ? 'bg-accent/15 text-ink'
                 : 'text-ink-2 hover:bg-hover/60'
             )}
@@ -200,6 +210,11 @@ export function LocalPane(): JSX.Element {
             </span>
           </div>
         ))}
+        {files.length > shownFiles.length && (
+          <div className="px-2 py-1 text-2xs text-ink-3">
+            仅显示前 {shownFiles.length} 项，共 {files.length} 项 —— 用上方的路径栏可直接进入目标目录
+          </div>
+        )}
       </div>
 
       {menu && <ContextMenu x={menu.x} y={menu.y} items={menuItems(menu.target)} onClose={closeMenu} />}

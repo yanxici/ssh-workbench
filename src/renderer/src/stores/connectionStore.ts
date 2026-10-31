@@ -41,6 +41,11 @@ interface ConnectionState {
   remove: (id: string) => Promise<boolean>
   /** 批量删除，返回实际删除条数 */
   removeMany: (ids: string[]) => Promise<number>
+  /**
+   * 批量改标签：一次 IPC + 一次落盘 + 一次重渲染。
+   * 原来多选打标签是逐条 save()，500 条 = 500 次 IPC 与 500 次全量重渲染。
+   */
+  updateTags: (ids: string[], tags: string[], mode?: 'add' | 'remove' | 'replace') => Promise<number>
   setKeyword: (kw: string) => void
   /** 「只看这组」：限定只渲染某个分组，null = 不限制 */
   onlyGroup: string | null
@@ -114,8 +119,36 @@ export const useConnectionStore = create<ConnectionState>()((set, get) => ({
     return n
   },
 
-  setKeyword: (keyword) => set({ keyword }),
+  updateTags: async (ids, tags, mode = 'add') => {
+    if (ids.length === 0) return 0
+    const n = await call(window.api.conn.updateTags(ids, tags, mode), {
+      errorTitle: '批量改标签失败'
+    })
+    if (n === null) return 0
+    /*
+     * 本地只改标签字段，不整表重取。
+     * 主进程返回的条数用于判断是否有变化；实际标签值按同一规则本地合并，
+     * 保证界面与落盘一致（add 去重 / remove 剔除 / replace 覆盖）。
+     */
+    const want = new Set(ids)
+    const clean = tags.map((t) => t.trim()).filter(Boolean)
+    set((s) => ({
+      connections: s.connections.map((c) => {
+        if (!want.has(c.id)) return c
+        const current = c.tags ?? []
+        const next =
+          mode === 'replace'
+            ? clean
+            : mode === 'remove'
+              ? current.filter((t) => !clean.includes(t))
+              : Array.from(new Set([...current, ...clean]))
+        return { ...c, tags: next }
+      })
+    }))
+    return n
+  },
 
+  setKeyword: (keyword) => set({ keyword }),
   setOnlyGroup: (onlyGroup) => set({ onlyGroup }),
 
   setGroupColor: async (group, color) => {

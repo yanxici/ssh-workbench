@@ -8,7 +8,7 @@ import type {
   SessionInfo
 } from '@shared/types'
 import { getConnection, getSettings, touchConnection } from '../store/repository'
-import { recorder } from '../store/recorder'
+import { recorder } from './recorder'
 import { getSecret } from '../store/vault'
 import {
   buildConnectConfig,

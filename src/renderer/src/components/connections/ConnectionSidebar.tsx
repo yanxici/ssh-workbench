@@ -72,7 +72,7 @@ function BatchTagsEditor({
   onClose: () => void
   onConfirm: () => void
 }): JSX.Element {
-  const save = useConnectionStore((s) => s.save)
+  const updateTags = useConnectionStore((s) => s.updateTags)
   const selectedConns = connections.filter((c) => selectedIds.has(c.id))
   const existingTags = Array.from(new Set(selectedConns.flatMap((c) => c.tags)))
   
@@ -125,28 +125,18 @@ function BatchTagsEditor({
                 .split(',')
                 .map((t) => t.trim())
                 .filter(Boolean)
-              
-              const promises = selectedConns.map((conn) => {
-                const finalTags = addMode === 'replace' 
-                  ? newTags
-                  : Array.from(new Set([...conn.tags, ...newTags]))
-                
-                return save({
-                  id: conn.id,
-                  name: conn.name,
-                  host: conn.host,
-                  port: conn.port,
-                  username: conn.username,
-                  authType: conn.authType,
-                  privateKeyPath: conn.privateKeyPath,
-                  group: conn.group,
-                  tags: finalTags,
-                  color: conn.color,
-                  remark: conn.remark
-                })
-              })
-              
-              void Promise.all(promises).then(() => {
+
+              /*
+               * 一次批量 IPC，不再逐条 save()。
+               * 旧写法对每条连接调一次 save：500 条 = 500 次 IPC，
+               * 且每次 save 都会把整个 connections 数组换掉，
+               * 侧栏跟着全量重渲染 500 次（每个分组、每行都要重算）。
+               */
+              void updateTags(
+                Array.from(selectedIds),
+                newTags,
+                addMode === 'replace' ? 'replace' : 'add'
+              ).then(() => {
                 useToastStore.getState().push({
                   kind: 'success',
                   title: `已更新 ${selectedIds.size} 条连接的标签`

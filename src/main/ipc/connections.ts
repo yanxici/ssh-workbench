@@ -15,7 +15,8 @@ import {
   deleteConnections,
   listConnections,
   renameConnectionGroup,
-  saveConnection
+  saveConnection,
+  updateConnectionsTags
 } from '../store/repository'
 import {
   applyImport,
@@ -33,6 +34,10 @@ export function registerConnectionIpc(): void {
   handle(IPC.CONN_RENAME_GROUP, (from: string, to: string) => renameConnectionGroup(from, to))
   handle(IPC.CONN_DELETE_GROUP, (group: string) => deleteConnectionGroup(group))
   handle(IPC.CONN_DELETE_MANY, (ids: string[]) => deleteConnections(ids))
+  // 批量改标签：一次读改写落盘，避免渲染层多选后逐条 save（N 次 IPC + N 次全表重渲染）
+  handle(IPC.CONN_UPDATE_TAGS, (ids: string[], tags: string[], mode?: 'add' | 'remove' | 'replace') =>
+    updateConnectionsTags(ids, tags, mode ?? 'add')
+  )
   handle(IPC.CONN_TEST, (input: Parameters<typeof testConnection>[0]) => testConnection(input))
 
   // 连接导出：选保存位置后打包（可带密码 / 私钥，可加口令）

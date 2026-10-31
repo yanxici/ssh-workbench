@@ -24,6 +24,8 @@ export const IPC = {
   CONN_DELETE_GROUP: 'conn:delete-group',
   /** 批量删除连接（多选后一次删掉） */
   CONN_DELETE_MANY: 'conn:delete-many',
+  /** 批量改标签（多选后一次读写落盘，替代逐条 save） */
+  CONN_UPDATE_TAGS: 'conn:update-tags',
 
   /* ---------------- 会话 / 终端 ---------------- */
   SESSION_OPEN: 'session:open',
