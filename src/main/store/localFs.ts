@@ -25,7 +25,10 @@ export async function localList(dir: string): Promise<LocalFile[]> {
     const batch = entries.slice(i, i + CONCURRENCY)
     const stats = await Promise.all(
       batch.map(async (e) => {
-        const full = join(dir, e.name)
+        // 必须用校验清洗后的 target，不能用原始 dir：
+        // dir 带前后空格时 readdir(target) 能读到条目，lstat(join(dir,...)) 全 ENOENT，
+        // 结果是静默空目录；dir 带 \\?\ 前缀时返回的 path 会把前缀漏给渲染层。
+        const full = join(target, e.name)
         try {
           const st = await fs.lstat(full)
           return {
@@ -35,7 +38,12 @@ export async function localList(dir: string): Promise<LocalFile[]> {
             size: st.size,
             mtime: st.mtimeMs
           } satisfies LocalFile
-        } catch {
+        } catch (err) {
+          // ENOENT 是「目录静默变空」的唯一成因（路径清洗不一致导致条目全被跳过），必须留痕；
+          // EPERM/EACCES 是列 C:\ 根时的常态（pagefile.sys 等），不刷屏。
+          if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') {
+            console.warn('[localFs] lstat ENOENT，条目被跳过:', full, err)
+          }
           return null
         }
       })

@@ -57,6 +57,40 @@ function isForbiddenTarget(path: string): boolean {
 }
 
 /**
+ * 剥离 Windows 扩展长度 / 设备路径前缀。
+ *
+ * 为什么必须做（Volt 实测的 P0）：`\\?\` 前缀会让整条位置黑名单失效。
+ * `path.resolve('//?/C:/Windows/System32/config')` 返回的就是
+ * `\\?\C:\Windows\System32\config` —— 前缀原样保留，与黑名单里的
+ * `c:\windows\system32` 永远不相等，于是全部放行。
+ * 攻击者只需给任意路径加四个字符就能绕过守卫：
+ *   \\?\C:\Windows\System32\config      → 放行
+ *   \\?\C:\Users\<me>                  → 放行（home 本身）
+ *   \\?\GLOBALROOT\Device\...ShadowCopy → 放行（读阴影副本绕文件锁）
+ * 配合 localDelete 的 recursive + force，`\\?\D:\projects` 一次删掉整棵树。
+ *
+ * @returns 剥离后的路径；遇到 GLOBALROOT 或非 C:\ 形态的设备路径时抛错
+ */
+function stripExtendedPrefix(raw: string, action: string): string {
+  // \\?\ 与 //?/ 等价（前者是后者的规范化形式），统一用正则覆盖
+  const isExtended = /^[\\/]{2}[?.][\\/]/.test(raw)
+  if (!isExtended) return raw
+
+  // GLOBALROOT 是通往设备命名空间的入口（阴影副本、物理磁盘），
+  // 剥离后也没有合法的文件语义，直接拒绝。
+  if (/^[\\/]{2}[?.][\\/]GLOBALROOT/i.test(raw)) {
+    throw new Error(`${action}：拒绝设备路径 ${raw}`)
+  }
+  const stripped = raw.replace(/^[\\/]{2}[?.][\\/]/, '')
+  // 剥离后必须是带盘符的绝对路径（\\?\C:\...）。\\.\PhysicalDrive0 这类
+  // 剥离后是 PhysicalDrive0，没有盘符 —— 它不是文件系统路径，拒绝。
+  if (!/^[a-zA-Z]:[\\/]/.test(stripped)) {
+    throw new Error(`${action}：拒绝设备路径 ${raw}`)
+  }
+  return stripped
+}
+
+/**
  * 校验一个「删除 / 重命名目标」路径。
  * @throws 路径形状不合法或落在禁止位置时抛错（消息面向用户，可直接展示）
  */
@@ -64,7 +98,20 @@ export function assertSafeLocalPath(path: string, action: string): string {
   if (typeof path !== 'string' || path.trim() === '') {
     throw new Error(`${action}：路径为空`)
   }
-  const raw = path.trim()
+  let raw = path.trim()
+
+  /*
+   * UNC 网络路径（\\server\share）：浏览可以，破坏性操作拒绝。
+   * 位置黑名单对网络路径没有意义 —— 黑名单里的都是本机系统目录，
+   * 而 \\attacker\share\x 既不等于它们也不在其下，会一路放行。
+   * 删除/重命名落到别人的共享目录上，风险与收益完全不对等，直接拒绝。
+   */
+  if (/^[\\/]{2}(?![?.][\\/])/.test(raw)) {
+    throw new Error(`${action}：不支持对网络路径执行破坏性操作`)
+  }
+
+  // 必须在 normalize 之前剥前缀：normalize 会保留 \\?\ 前缀
+  raw = stripExtendedPrefix(raw, action)
 
   // 必须是绝对路径：相对路径的含义取决于主进程 cwd，与用户看到的目录无关
   if (!isAbsolute(raw)) {
@@ -128,7 +175,12 @@ export function assertSafeName(name: string, action: string): string {
  */
 export function assertBrowsableDir(dir: string): string {
   if (typeof dir !== 'string' || dir.trim() === '') throw new Error('浏览目录：路径为空')
-  const raw = dir.trim()
+  /*
+   * 浏览也要剥设备前缀：`\\?\C:\Windows\System32` 与 `C:\Windows\System32`
+   * 是同一个目录，不剥的话 localList 会把前者当成另一条路径绕过去。
+   * 浏览不拦位置（文件管理器要能列盘符根），但设备路径不该出现在浏览里。
+   */
+  const raw = stripExtendedPrefix(dir.trim(), '浏览目录')
   if (!isAbsolute(raw)) throw new Error('浏览目录：只接受绝对路径')
   if (/(^|[\\/])\.\.([\\/]|$)/.test(raw)) throw new Error('浏览目录：路径包含 .. 穿越')
   return normalize(raw)

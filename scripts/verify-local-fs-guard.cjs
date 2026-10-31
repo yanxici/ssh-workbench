@@ -45,7 +45,10 @@ fs.writeFileSync(
 const bundle = path.join(OUT_DIR, 'localfs-bundle.cjs')
 esbuild.buildSync({
   stdin: {
-    contents: `export * from './src/main/store/localFs'`,
+    contents: `
+      export * from './src/main/store/localFs'
+      export { assertBrowsableDir, assertSafeLocalPath } from './src/main/store/pathGuard'
+    `,
     resolveDir: ROOT,
     loader: 'ts'
   },
@@ -81,6 +84,24 @@ async function expectThrow(name, fn) {
     check(name, false, '（未抛错：守卫缺失，修复后应拒绝）')
   } catch (e) {
     check(name, true)
+  }
+}
+
+/*
+ * 「被守卫拒绝」判据（2.6 节教训）：不能只看「抛错了」——
+ * \\?\\ 路径删 System32 时 Windows ACL 自己就会抛 EPERM，
+ * naive expect-throw 会假绿。必须断言错误来自守卫：
+ * 守卫错误无 code 且 message 含关键字。
+ */
+const BS = String.fromCharCode(92)
+const j = (...parts) => parts.join(BS)
+async function expectGuardReject(name, fn, keyword) {
+  try {
+    await fn()
+    check(name, false, '（未抛错：守卫缺失）')
+  } catch (e) {
+    const isGuard = !e.code && typeof e.message === 'string' && e.message.includes(keyword)
+    check(name, isGuard, isGuard ? '' : `抛的不是守卫错误：${e.code || ''} ${e.message}`)
   }
 }
 
@@ -147,17 +168,39 @@ async function main() {
    * 守卫的 `..` 正则在折叠后的字符串里什么都看不到。
    * 用户在「新建文件夹」输入框填 `..\..\Windows\Temp\evil` 就能在系统目录建目录。
    */
-  const beforeMkdir = fs.readdirSync(path.dirname(work)).length
-  await expectThrow('localMkdir 拒绝含路径分隔符的名字',
-    () => M.localMkdir(work, '..' + path.sep + 'outside'))
-  await expectThrow('localMkdir 拒绝含 / 的名字', () => M.localMkdir(work, 'a/b'))
-  await expectThrow('localMkdir 拒绝 .. 作为名字', () => M.localMkdir(work, '..'))
+  /*
+   * mkdir 形状用例的判据（2.6 节教训）：不能只 expect-throw ——
+   * 无守卫时 Windows 对 'a/b' 自己抛 ENOENT、'..' 抛 EEXIST、'a<b' 抛 EINVAL，
+   * naive 断言会假绿。判据改为「错误来自守卫」：守卫错误无 code 且文案含关键字。
+   * '   ' 和 'CON' 是真判据（无守卫时真建出目录），保留 expectThrow 即可。
+   */
+  const expectNameReject = (name, keyword) =>
+    expectGuardReject(name, () => M.localMkdir(work, name), keyword)
+
+  /*
+   * 穿越目标用 mkdtempSync 出来的专属子目录：
+   * 原来用 work 的上级（os.tmpdir() 下），被拒前会真创建 'outside'，
+   * 跨轮残留污染下一轮（Volt 实测踩过）。
+   */
+  const outsideParent = fs.mkdtempSync(path.join(os.tmpdir(), 'sw-lfs-outside-'))
+  const beforeMkdir = fs.readdirSync(outsideParent).length
+  /*
+   * 穿越落点指到 outsideParent 下的 deep：work 和 outsideParent 同在 tmpdir 下，
+   * '..' + basename(outsideParent) 正好跳过去。无守卫时这里会真建出目录，
+   * 下面的条目计数会变 —— 副作用判据因此有区分度。
+   */
+  const traversalName = '..' + path.sep + path.basename(outsideParent) + path.sep + 'deep'
+  await expectGuardReject('localMkdir 拒绝含路径分隔符的名字',
+    () => M.localMkdir(work, traversalName), '路径分隔符')
+  await expectNameReject('a/b', '路径分隔符')
+  await expectGuardReject('localMkdir 拒绝 .. 作为名字',
+    () => M.localMkdir(work, '..'), '名称无效')
   await expectThrow('localMkdir 拒绝空名字', () => M.localMkdir(work, '   '))
-  await expectThrow('localMkdir 拒绝 Windows 保留字符', () => M.localMkdir(work, 'a<b'))
+  await expectNameReject('a<b', '非法字符')
   await expectThrow('localMkdir 拒绝保留设备名', () => M.localMkdir(work, 'CON'))
-  check('被拒绝的 mkdir 没有在上级目录留下痕迹',
-    fs.readdirSync(path.dirname(work)).length === beforeMkdir,
-    `${beforeMkdir} -> ${fs.readdirSync(path.dirname(work)).length}`)
+  check('被拒绝的 mkdir 没有在目标目录留下痕迹',
+    fs.readdirSync(outsideParent).length === beforeMkdir,
+    `${beforeMkdir} -> ${fs.readdirSync(outsideParent).length}`)
 
   // 正常名字必须能建
   await M.localMkdir(work, '新建文件夹-正常')
@@ -174,6 +217,68 @@ async function main() {
   check('localList 允许列盘符根（不误拦正常浏览）', Array.isArray(rootList),
     Array.isArray(rootList) ? String(rootList.length) : typeof rootList)
 
+  /* ================= 3b. localList 的 target/dir 不一致（Volt 报的 P1） ================= */
+  /*
+   * localFs.ts:19 用 assertBrowsableDir 的返回值 target 读目录，
+   * :28 却用原始未清洗的 dir 拼子项路径。两条都是「修复未落地会红」：
+   *   ① 带前后空格的目录：readdir(target) 读得到，但 join(带空格 dir, name)
+   *      全部 lstat ENOENT 被空 catch 吞掉 → 静默返回空列表。
+   *   ② \\?\ 前缀目录：返回的 path 字段带前缀，渲染层回传给删除/重命名时
+   *      依赖守卫剥前缀才碰巧一致 —— 巧合不是设计。
+   */
+  const realCount = fs.readdirSync(work).length
+  const paddedList = await M.localList('  ' + work + '  ')
+  check('localList 带前后空格仍返回全部条目（当前红：静默空列表）',
+    Array.isArray(paddedList) && paddedList.length === realCount,
+    `期望 ${realCount} 条，实际 ${Array.isArray(paddedList) ? paddedList.length : typeof paddedList}`)
+
+  const prefixedList = await M.localList(BS + BS + '?' + BS + work)
+  const prefixedPaths = Array.isArray(prefixedList) ? prefixedList.map((e) => e.path) : []
+  check('localList 前缀形态返回的 path 不带 \\\\?\\ 前缀（当前红：原样回传）',
+    Array.isArray(prefixedList) && prefixedList.length === realCount
+      && prefixedPaths.every((p) => !p.startsWith(BS + BS + '?' + BS)),
+    `${prefixedPaths.length} 条，带前缀 ${prefixedPaths.filter((p) => p.startsWith(BS + BS + '?' + BS)).length} 条`)
+
+  /* UNC 口径：浏览放行、破坏性操作拒绝（pathGuard.ts:104-111 已写明） */
+  try {
+    M.assertBrowsableDir(j('', '', 'attacker', 'share'))
+    check('assertBrowsableDir 放行 UNC 浏览（不真访问）', true)
+  } catch (e) {
+    check('assertBrowsableDir 放行 UNC 浏览（不真访问）', false, e.message)
+  }
+  await expectGuardReject('assertSafeLocalPath 拒绝 UNC 破坏性操作',
+    () => Promise.resolve().then(() => M.assertSafeLocalPath(j('', '', 'attacker', 'share', 'x'), '删除')),
+    '网络路径')
+
+  /* ================= 4. \?\ 设备前缀绕过（Volt 报的 P0） ================= */
+  /*
+   * 判据按 2.6 节的规矩：不能只看「抛错了」——
+   * \?\ 路径删 System32 时 Windows ACL 自己就会抛 EPERM，
+   * naive expect-throw 会假绿。必须断言错误来自守卫。
+   * 所以判据是「抛错且 message 含守卫字样」。
+   * （helper 已提升到文件顶部，供第 3 节形状用例复用）
+   */
+
+  // 扩展前缀包裹本应被拒的位置 —— 前缀不能成为绕过黑名单的通道
+  await expectGuardReject('\?\ + System32 被守卫拒绝',
+    () => M.localDelete([j('', '', '?', 'C:', 'Windows', 'System32', 'config')]), '关键位置')
+  await expectGuardReject('//?/ 斜杠形态同样被拒',
+    () => M.localDelete(['//?/C:/Windows/System32/config']), '关键位置')
+  // home 本身：只断言抛错，绝不真执行
+  const home = os.homedir()
+  const homeExtended = j('', '', '?') + BS + home
+  await expectGuardReject('\?\ + 用户主目录被守卫拒绝',
+    () => M.localDelete([homeExtended]), '关键位置')
+  // GLOBALROOT 设备命名空间（阴影副本绕文件锁）
+  await expectGuardReject('GLOBALROOT 设备路径被拒',
+    () => M.localDelete([j('', '', '?', 'GLOBALROOT', 'Device', 'HarddiskVolumeShadowCopy1', 'Windows')]),
+    '设备路径')
+  await expectGuardReject('\\.\ 设备路径被拒',
+    () => M.localDelete([j('', '', '.', 'PhysicalDrive0')]), '设备路径')
+  // UNC：浏览放行、删除拒绝
+  await expectGuardReject('UNC 网络路径不允许删除',
+    () => M.localDelete([j('', '', 'attacker', 'share', 'x')]), '网络路径')
+
   // Windows 系统关键目录（不存在于任何正常访问场景的伪路径，但形态是系统目录）
   const sysPath = process.platform === 'win32'
     ? path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'no-such-guard-test')
@@ -182,6 +287,7 @@ async function main() {
 
   /* ---------- 清理 ---------- */
   fs.rmSync(work, { recursive: true, force: true })
+  fs.rmSync(outsideParent, { recursive: true, force: true })
   fs.rmSync(userData, { recursive: true, force: true })
 
   console.log(`\n结果：${pass} 通过 / ${fail} 失败`)
