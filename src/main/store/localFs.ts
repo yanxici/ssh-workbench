@@ -1,7 +1,7 @@
 import { promises as fs } from 'node:fs'
 import { join } from 'node:path'
 import type { LocalFile } from '@shared/types'
-import { assertSafeLocalPath, assertSafeLocalPaths } from './pathGuard'
+import { assertBrowsableDir, assertSafeLocalPath, assertSafeLocalPaths, assertSafeName } from './pathGuard'
 
 /**
  * 本地文件系统操作（文件管理器左栏）。
@@ -11,7 +11,13 @@ import { assertSafeLocalPath, assertSafeLocalPaths } from './pathGuard'
 const CONCURRENCY = 32
 
 export async function localList(dir: string): Promise<LocalFile[]> {
-  const entries = await fs.readdir(dir, { withFileTypes: true })
+  /*
+   * 浏览是只读的，危害比删除轻，但它能把任意目录的内容枚举回渲染层 ——
+   * 配合别的通道可以做信息收集。用 assertBrowsableDir 而不是 assertSafeLocalPath：
+   * 后者拒绝盘符根，而文件管理器必须能列 C:\ 。
+   */
+  const target = assertBrowsableDir(dir)
+  const entries = await fs.readdir(target, { withFileTypes: true })
   const results: LocalFile[] = []
 
   // 分批 lstat，控制并发（大目录下避免 EMFILE）
@@ -45,7 +51,19 @@ export async function localList(dir: string): Promise<LocalFile[]> {
 }
 
 export async function localMkdir(dir: string, name: string): Promise<void> {
-  await fs.mkdir(join(dir, name))
+  /*
+   * 两道校验，缺一不可 —— 这是 Volt 实测发现的缺口：
+   * `join(dir, name)` 会先把 `..` 折叠掉，例如
+   * `join('/home/u', '../../etc/evil')` → `\etc\evil`，
+   * 交给路径守卫时 `..` 已经从字符串里消失了，位置判断可能放行。
+   * 所以名字的形状必须在 join 之前验；join 之后再过一次路径守卫兜位置。
+   * 否则用户在「新建文件夹」输入框里填 `..\..\Windows\Temp\evil`，
+   * 主进程就在系统目录下建目录。
+   */
+  const safeName = assertSafeName(name, '新建文件夹')
+  const parent = assertBrowsableDir(dir)
+  const target = assertSafeLocalPath(join(parent, safeName), '新建文件夹')
+  await fs.mkdir(target)
 }
 
 export async function localDelete(paths: string[]): Promise<void> {

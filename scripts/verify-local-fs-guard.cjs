@@ -140,6 +140,40 @@ async function main() {
   await expectThrow('localRename 拒绝 from 端穿越',
     () => M.localRename(rawTraversal, path.join(work, 'z.txt')))
 
+  /* ================= 3. localMkdir / localList 也必须过守卫 ================= */
+  /*
+   * Volt 实测的缺口：localMkdir 原来直接 `fs.mkdir(join(dir, name))`，
+   * 而 join 会先把 `..` 折叠掉（join('/home/u','../../etc/evil') → '\etc\evil'），
+   * 守卫的 `..` 正则在折叠后的字符串里什么都看不到。
+   * 用户在「新建文件夹」输入框填 `..\..\Windows\Temp\evil` 就能在系统目录建目录。
+   */
+  const beforeMkdir = fs.readdirSync(path.dirname(work)).length
+  await expectThrow('localMkdir 拒绝含路径分隔符的名字',
+    () => M.localMkdir(work, '..' + path.sep + 'outside'))
+  await expectThrow('localMkdir 拒绝含 / 的名字', () => M.localMkdir(work, 'a/b'))
+  await expectThrow('localMkdir 拒绝 .. 作为名字', () => M.localMkdir(work, '..'))
+  await expectThrow('localMkdir 拒绝空名字', () => M.localMkdir(work, '   '))
+  await expectThrow('localMkdir 拒绝 Windows 保留字符', () => M.localMkdir(work, 'a<b'))
+  await expectThrow('localMkdir 拒绝保留设备名', () => M.localMkdir(work, 'CON'))
+  check('被拒绝的 mkdir 没有在上级目录留下痕迹',
+    fs.readdirSync(path.dirname(work)).length === beforeMkdir,
+    `${beforeMkdir} -> ${fs.readdirSync(path.dirname(work)).length}`)
+
+  // 正常名字必须能建
+  await M.localMkdir(work, '新建文件夹-正常')
+  check('正常名字仍可新建', fs.existsSync(path.join(work, '新建文件夹-正常')))
+  // 中文、空格、点号、连字符都应放行
+  await M.localMkdir(work, '带 空格.和-连字符')
+  check('含空格/点/连字符的名字可建', fs.existsSync(path.join(work, '带 空格.和-连字符')))
+
+  /* localList：只拦形状，不拦位置（文件管理器必须能列盘符根） */
+  await expectThrow('localList 拒绝相对路径', () => M.localList('relative/dir'))
+  await expectThrow('localList 拒绝 .. 穿越',
+    () => M.localList(work + path.sep + '..' + path.sep + '..'))
+  const rootList = await M.localList(path.parse(work).root)
+  check('localList 允许列盘符根（不误拦正常浏览）', Array.isArray(rootList),
+    Array.isArray(rootList) ? String(rootList.length) : typeof rootList)
+
   // Windows 系统关键目录（不存在于任何正常访问场景的伪路径，但形态是系统目录）
   const sysPath = process.platform === 'win32'
     ? path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'no-such-guard-test')

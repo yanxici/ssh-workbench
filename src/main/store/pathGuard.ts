@@ -92,3 +92,44 @@ export function assertSafeLocalPaths(paths: string[], action: string): string[] 
   if (paths.length === 0) throw new Error(`${action}：没有选中任何文件`)
   return paths.map((p) => assertSafeLocalPath(p, action))
 }
+
+/**
+ * 校验「新建」用的**文件名**（不是路径）。
+ *
+ * 为什么必须单独校验名字：`join(dir, name)` 会先把 `..` 折叠掉再交给
+ * assertSafeLocalPath —— 那时 `..` 已经从字符串里消失了，路径级的守卫
+ * 就看不见它。实测 `join('/home/u', '../../etc/evil')` → `\etc\evil`，
+ * 看起来是个合法的绝对路径，位置校验也可能放行。
+ * 所以名字的形状必须在 join **之前**验。
+ */
+export function assertSafeName(name: string, action: string): string {
+  if (typeof name !== 'string') throw new Error(`${action}：名称无效`)
+  const trimmed = name.trim()
+  if (trimmed === '') throw new Error(`${action}：名称不能为空`)
+  // 路径分隔符：新建文件夹/文件本来就不该接受，它意味着调用方在拼路径而不是给名字
+  if (/[\\/]/.test(trimmed)) throw new Error(`${action}：名称不能包含路径分隔符`)
+  // `..` / `.` 作为名字没有意义，且是穿越的原料
+  if (trimmed === '.' || trimmed === '..') throw new Error(`${action}：名称无效`)
+  // Windows 文件名保留字符（与资源管理器一致；跨平台也一并拒绝，避免同名文件在别的系统上出错）
+  if (/[<>:"|?*]/.test(trimmed)) throw new Error(`${action}：名称包含非法字符 < > : " | ? *`)
+  // Windows 保留设备名：即使在普通目录下也不该创建
+  if (/^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\.|$)/i.test(trimmed)) {
+    throw new Error(`${action}：${trimmed} 是系统保留名称`)
+  }
+  return trimmed
+}
+
+/**
+ * 只校验形状、**不拦位置**的路径检查（供 localList 这类只读浏览用）。
+ *
+ * 为什么不能复用 assertSafeLocalPath：文件管理器必须能列 `C:\` 和 `/`，
+ * 而 assertSafeLocalPath 明确拒绝盘符根。这里只拦「相对路径」与「带 .. 字面量」，
+ * 位置合法性交给系统权限，不人为限制。
+ */
+export function assertBrowsableDir(dir: string): string {
+  if (typeof dir !== 'string' || dir.trim() === '') throw new Error('浏览目录：路径为空')
+  const raw = dir.trim()
+  if (!isAbsolute(raw)) throw new Error('浏览目录：只接受绝对路径')
+  if (/(^|[\\/])\.\.([\\/]|$)/.test(raw)) throw new Error('浏览目录：路径包含 .. 穿越')
+  return normalize(raw)
+}
