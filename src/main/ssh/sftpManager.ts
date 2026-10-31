@@ -33,14 +33,33 @@ type ProgressHandler = (event: TransferProgressEvent) => void
  * 而 SFTP 下载此前是 `fs.open(localPath, 'w')` 直接截断，
  * 用户把远端 config.bak 拖到本地同名目录，本地原文件当场没了。
  */
-export function uniqueLocalPath(dir: string, name: string): string {  const candidate = join(dir, name)
-  if (!existsSync(candidate)) return candidate
+export function uniqueLocalPath(
+  dir: string,
+  name: string,
+  /**
+   * 本批次已分配的路径（可选）。
+   * 只靠 existsSync 判断是不够的：批量下载时文件还没落盘，同一批里两个同名
+   * 远端文件（不同目录下的 config.bak）会算出同一个候选路径，
+   * 两个任务并发 `fs.open(localPath,'w')` 互相截断，内容混杂。
+   * 调用方在同一批里传同一个 Set，分配即占位。
+   */
+  allocated?: Set<string>
+): string {
+  const taken = (p: string): boolean => existsSync(p) || (allocated?.has(p) ?? false)
+  const candidate = join(dir, name)
+  if (!taken(candidate)) {
+    allocated?.add(candidate)
+    return candidate
+  }
   const ext = extname(name)
   const stem = name.slice(0, name.length - ext.length) || 'download'
   let i = 1
   for (;;) {
     const next = join(dir, `${stem} (${i})${ext}`)
-    if (!existsSync(next)) return next
+    if (!taken(next)) {
+      allocated?.add(next)
+      return next
+    }
     i += 1
   }
 }
@@ -774,6 +793,13 @@ export class SftpManager {
 
   download(sessionId: string, remotePaths: string[], localDir: string): string[] {
     const taskIds: string[] = []
+    /*
+     * 本批次已分配的目标路径。
+     * 必须在循环外建：同一批里两个同名远端文件（/a/config.bak、/b/config.bak）
+     * 此时都还没落盘，单靠 existsSync 会算出同一个候选路径，
+     * 两个任务并发写同一路径就会互相截断。
+     */
+    const allocated = new Set<string>()
     for (const remotePath of remotePaths) {
       const taskId = randomUUID()
       taskIds.push(taskId)
@@ -783,7 +809,7 @@ export class SftpManager {
        * 目录下载（isDir）保留用户指定的目录名，重名时同样加序号，
        * 避免把两个同名目录的内容合并到一处。
        */
-      const localPath = uniqueLocalPath(localDir, basename(remotePath))
+      const localPath = uniqueLocalPath(localDir, basename(remotePath), allocated)
       this.enqueue(
         async (ctl) => {
           const sftp = await this.getSftp(sessionId)

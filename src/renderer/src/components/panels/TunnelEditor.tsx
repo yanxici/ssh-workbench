@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { TunnelConfig, TunnelInput, TunnelType } from '@shared/types'
+import { isWildcardHost, needsLanGrant } from '@shared/bindHost'
 import { cn } from '@/lib/utils'
 import { Field, Modal } from '@/components/ui'
 import { useConnectionStore } from '@/stores/connectionStore'
@@ -37,6 +38,8 @@ interface FormState {
   targetHost: string
   targetPort: string
   remark: string
+  /** 允许监听非回环地址（后端 needsLanGrant 为真时才有意义） */
+  allowLan: boolean
 }
 
 const EMPTY: FormState = {
@@ -47,7 +50,8 @@ const EMPTY: FormState = {
   bindPort: '8080',
   targetHost: '127.0.0.1',
   targetPort: '80',
-  remark: ''
+  remark: '',
+  allowLan: false
 }
 
 function fromConfig(t: TunnelConfig): FormState {
@@ -59,7 +63,13 @@ function fromConfig(t: TunnelConfig): FormState {
     bindPort: String(t.bindPort),
     targetHost: t.targetHost ?? '',
     targetPort: t.targetPort !== undefined ? String(t.targetPort) : '',
-    remark: t.remark ?? ''
+    remark: t.remark ?? '',
+    /*
+     * 存量配置兼容：v1.6.6 之前没有 allowLan 字段，但 bindHost 可能已经是
+     * 0.0.0.0（那时没有任何校验）。按当前 bindHost 反推初值，
+     * 否则用户打开老隧道不重新勾选直接保存，会被后端拒绝 —— 改个名字都存不了。
+     */
+    allowLan: t.allowLan ?? needsLanGrant(t.bindHost)
   }
 }
 
@@ -130,7 +140,8 @@ export function TunnelEditor({
       targetHost: form.type === 'dynamic' ? undefined : form.targetHost,
       targetPort: form.type === 'dynamic' ? undefined : Number(form.targetPort),
       connectionId: form.connectionId || undefined,
-      remark: form.remark
+      remark: form.remark,
+      allowLan: form.allowLan
     }
     const saved = await useTunnelStore.getState().save(input)
     setSaving(false)
@@ -228,6 +239,42 @@ export function TunnelEditor({
             />
           </Field>
         </div>
+
+        {/*
+          局域网监听授权。
+          只在监听地址非回环时出现 —— 回环地址本来就不需要授权，
+          常显这个开关反而让人以为「默认就对外暴露」。
+          后端 saveTunnel 会再校验一次，这里提前给出可行动的解释，
+          而不是等保存失败才报错。
+        */}
+        {needsLanGrant(form.bindHost) && (
+          <div
+            className={cn(
+              'rounded-md border px-3 py-2 text-2xs leading-relaxed',
+              form.allowLan
+                ? 'border-warning/40 bg-warning/5 text-warning'
+                : 'border-edge bg-hover/40 text-ink-2'
+            )}
+          >
+            <label className="flex items-start gap-2">
+              <input
+                type="checkbox"
+                className="mt-0.5"
+                checked={form.allowLan}
+                onChange={(e) => set('allowLan', e.target.checked)}
+              />
+              <span>
+                允许局域网访问
+                <span className="block text-ink-3">
+                  {isWildcardHost(form.bindHost)
+                    ? `当前监听 ${form.bindHost} 表示所有网卡。动态代理无认证，开启后同网段的任何机器都能借你的网络上外网。`
+                    : `当前监听 ${form.bindHost}，不在本机回环范围内。开启后同网段可访问该端口。`}
+                  {!form.allowLan && ' 不勾选将无法保存。'}
+                </span>
+              </span>
+            </label>
+          </div>
+        )}
 
         {form.type !== 'dynamic' && (
           <div className="grid grid-cols-2 gap-x-3 gap-y-3.5">

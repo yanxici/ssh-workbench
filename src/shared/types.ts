@@ -639,6 +639,13 @@ export interface TunnelConfig {
   /** 关联的连接（启动时优先用该连接的在线会话；留空则用当前活动会话） */
   connectionId?: string
   remark?: string
+  /**
+   * 是否已授权非回环监听（持久化字段）。
+   * 必须存下来：否则用户勾选保存 0.0.0.0 成功后，下次打开编辑框再保存时
+   * allowLan 已丢失，saveTunnel 会重新校验并抛错 —— 改个名字都存不了。
+   * 旧版本（v1.6.5 及之前无校验）已存的 0.0.0.0 配置同样依赖它放行。
+   */
+  allowLan?: boolean
   createdAt: number
   updatedAt: number
 }

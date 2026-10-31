@@ -48,7 +48,8 @@ async function main() {
   const bundle = path.join(stubDir, 'tunnel.cjs')
   await esbuild.build({
     stdin: {
-      contents: `export { tunnelManager } from './src/main/ssh/portForward'`,
+      contents: `export { tunnelManager } from './src/main/ssh/portForward'
+export { saveTunnel, listTunnels } from './src/main/store/repo/tunnels'`,
       resolveDir: ROOT,
       loader: 'ts'
     },
@@ -128,7 +129,82 @@ async function main() {
   check('会话断开后该隧道仍在 states 里（便于用户看到原因）', Boolean(t3))
   check('会话断开后 status = error', t3 && t3.status === 'error', t3 && t3.status)
 
+  // ---- allowLan: 非回环监听必须显式授权，且授权要能持久化 ----
+  const { saveTunnel, listTunnels } = require(bundle)
+  check('saveTunnel 已导出', typeof saveTunnel === 'function')
+
+  let threwNoLan = null
+  try {
+    await saveTunnel({ name: 'LAN-REFUSED', type: 'dynamic', bindHost: '0.0.0.0', bindPort: 1080 })
+  } catch (e) {
+    threwNoLan = e
+  }
+  check('0.0.0.0 且未授权 → 抛错', threwNoLan !== null, threwNoLan && threwNoLan.message)
+  check('抛错文案提到局域网', threwNoLan && /局域网/.test(threwNoLan.message),
+    threwNoLan && threwNoLan.message)
+
+  const lanOk = await saveTunnel({
+    name: 'LAN-OK',
+    type: 'dynamic',
+    bindHost: '0.0.0.0',
+    bindPort: 1080,
+    allowLan: true
+  })
+  check('0.0.0.0 + allowLan=true → 保存成功', Boolean(lanOk && lanOk.id))
+  check('allowLan 被持久化到配置里', lanOk.allowLan === true, lanOk.allowLan)
+
+  // 二次编辑：不带 allowLan 也要能保存（读回配置原样再存）
+  let reSaveThrew = null
+  try {
+    await saveTunnel({
+      id: lanOk.id,
+      name: 'LAN-OK-改名',
+      type: lanOk.type,
+      bindHost: lanOk.bindHost,
+      bindPort: lanOk.bindPort,
+      allowLan: lanOk.allowLan
+    })
+  } catch (e) {
+    reSaveThrew = e
+  }
+  check('读回配置原样再存不抛错（二次编辑）', reSaveThrew === null, reSaveThrew && reSaveThrew.message)
+
+  // 存量兼容：v1.6.6 前存下的 0.0.0.0 没有 allowLan 字段，编辑时不能被锁死
+  let legacyThrew = null
+  let legacy = null
+  try {
+    legacy = await saveTunnel({
+      id: lanOk.id,
+      name: 'LAN-OK-老配置',
+      type: lanOk.type,
+      bindHost: '0.0.0.0',
+      bindPort: lanOk.bindPort
+      // 刻意不传 allowLan：模拟旧版本存下的配置
+    })
+  } catch (e) {
+    legacyThrew = e
+  }
+  check('存量 0.0.0.0 配置不带 allowLan 也能编辑（不被锁死）',
+    legacyThrew === null, legacyThrew && legacyThrew.message)
+  check('存量配置编辑后 allowLan 被补写', legacy && legacy.allowLan === true,
+    legacy && legacy.allowLan)
+
+  // 回环地址永远不需要授权
+  const local = await saveTunnel({
+    name: 'LOOPBACK',
+    type: 'local',
+    bindHost: '127.0.0.1',
+    bindPort: 18081,
+    targetHost: '127.0.0.1',
+    targetPort: 80
+  })
+  check('回环地址无需授权即可保存', Boolean(local && local.id))
+  check('回环配置的 allowLan 为 false', local.allowLan === false, local.allowLan)
+
   // 清理
+  const all = await listTunnels()
+  check('tunnels.json 里确实有这些记录', all.length >= 2, all.length)
+
   tunnelManager.dispose('T1')
   tunnelManager.dispose('T3')
   fs.rmSync(tmp, { recursive: true, force: true })

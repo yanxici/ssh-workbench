@@ -12,6 +12,7 @@ import {
   Zap
 } from 'lucide-react'
 import type { TunnelConfig, TunnelRuntimeInfo } from '@shared/types'
+import { needsLanGrant } from '@shared/bindHost'
 import { cn } from '@/lib/utils'
 import {
   ConfirmDialog,
@@ -96,7 +97,14 @@ export function TunnelPanel(): JSX.Element {
             targetHost: t.targetHost,
             targetPort: t.targetPort,
             connectionId: t.connectionId,
-            remark: t.remark
+            remark: t.remark,
+            /*
+             * 必须透传 allowLan。
+             * 复制一条监听 0.0.0.0 的隧道时，原配置可能因为 allowLan=false
+             * 而本来就不该存在（存量的老配置），但既然它已经在用，
+             * 副本也应当按同一授权保存；否则复制动作会被后端拒绝。
+             */
+            allowLan: t.allowLan ?? needsLanGrant(t.bindHost)
           })
       },
       {
