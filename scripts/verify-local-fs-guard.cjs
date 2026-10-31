@@ -103,26 +103,42 @@ async function main() {
   const listing = await M.localList(work)
   check('正常列目录成功', Array.isArray(listing) && listing.length >= 2, String(listing.length))
 
-  /* ================= 2. 穿越路径必须被拒绝（当前无守卫 → 红） ================= */
-  // 全部指向不存在的路径：fs.rm force:true 静默成功无副作用，
-  // 守卫落地后应抛错。用 resolve 后的绝对路径，避免「相对路径被 join 拼进合法目录」的歧义。
-  const traversalDelete = path.resolve(work, '..', '..', 'no-such-dir-guard-test', 'x')
-  await expectThrow('localDelete 拒绝 .. 穿越路径', () => M.localDelete([traversalDelete]))
+  /* ================= 2. 穿越路径必须被拒绝 ================= */
+  /*
+   * 注意：不能用 path.resolve(work, '..', '..', 'x') 造用例 ——
+   * resolve 会把 `..` 折叠掉，传进 localDelete 的字符串里根本没有 `..`，
+   * 落点变成 os.tmpdir() 下的另一个合法路径，守卫**正确地**放行了它。
+   * 断言那种路径会抛错是写错了期望。
+   *
+   * 所以要直接构造带 `..` 字面量的字符串（模拟渲染层恶意传入），
+   * 并直接测守卫函数本身。
+   */
+  const rawTraversal = work + path.sep + '..' + path.sep + '..' + path.sep + 'no-such-guard-test'
+  await expectThrow('localDelete 拒绝含 .. 字面量的路径', () => M.localDelete([rawTraversal]))
+
+  // 相对路径：含义取决于主进程 cwd，与用户看到的目录无关，必须拒绝
+  await expectThrow('localDelete 拒绝相对路径', () => M.localDelete(['relative/path.txt']))
+
+  // 空列表 / 空字符串
+  await expectThrow('localDelete 拒绝空列表', () => M.localDelete([]))
+  await expectThrow('localDelete 拒绝空字符串路径', () => M.localDelete(['']))
 
   /*
-   * rename 的 to 端穿越：不能用 expectThrow —— 无守卫时 fs.rename 对不存在的
-   * 目标父目录自己就抛 ENOENT，会假绿。判据改为「抛错且不是 fs 的 ENOENT」：
-   * 修复前 fs 抛 ENOENT → 红；守卫落地后抛守卫错误（无 code 或非 ENOENT）→ 绿。
+   * rename 的 to 端：同样用字面量 `..`，且判据是「抛错且不是 fs 的 ENOENT」——
+   * 若只靠 fs，不存在的目标父目录自己就抛 ENOENT，会假绿。
    */
-  const traversalRenameTo = path.resolve(work, '..', '..', 'no-such-dir-guard-test', 'y')
+  const rawRenameTo = work + path.sep + '..' + path.sep + 'no-such-guard-test' + path.sep + 'y'
   try {
-    await M.localRename(path.join(work, 'b2.txt'), traversalRenameTo)
+    await M.localRename(path.join(work, 'b2.txt'), rawRenameTo)
     check('localRename 拒绝 to 端穿越', false, '（未抛错：守卫缺失）')
   } catch (e) {
     const isFsEnoent = e && e.code === 'ENOENT'
     check('localRename 拒绝 to 端穿越（且不是 fs ENOENT 假象）', !isFsEnoent,
-      isFsEnoent ? '（抛的是 fs ENOENT，不是守卫：修复后应由守卫先拒绝）' : '')
+      isFsEnoent ? '（抛的是 fs ENOENT，不是守卫）' : '')
   }
+  // 源端也要校验
+  await expectThrow('localRename 拒绝 from 端穿越',
+    () => M.localRename(rawTraversal, path.join(work, 'z.txt')))
 
   // Windows 系统关键目录（不存在于任何正常访问场景的伪路径，但形态是系统目录）
   const sysPath = process.platform === 'win32'

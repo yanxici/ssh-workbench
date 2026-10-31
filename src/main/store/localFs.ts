@@ -1,6 +1,7 @@
 import { promises as fs } from 'node:fs'
 import { join } from 'node:path'
 import type { LocalFile } from '@shared/types'
+import { assertSafeLocalPath, assertSafeLocalPaths } from './pathGuard'
 
 /**
  * 本地文件系统操作（文件管理器左栏）。
@@ -48,13 +49,23 @@ export async function localMkdir(dir: string, name: string): Promise<void> {
 }
 
 export async function localDelete(paths: string[]): Promise<void> {
-  for (const p of paths) {
+  /*
+   * 先过守卫。这里不是保险，是必需品：
+   * 渲染层一旦被污染，`local:delete` 就是任意路径的 rm -rf（recursive + force）。
+   * 守卫拦「形状不对 + 危险位置」，正常操作照旧放行 —— 详见 pathGuard.ts 的说明。
+   */
+  const safe = assertSafeLocalPaths(paths, '删除')
+  for (const p of safe) {
     await fs.rm(p, { recursive: true, force: true })
   }
 }
 
 export async function localRename(from: string, to: string): Promise<void> {
-  await fs.rename(from, to)
+  // from 是用户选中的现有文件，to 是同目录下的新名字：两端都要校验，
+  // 否则可以把一个文件「重命名」到 C:\Windows\System32 去覆盖系统文件。
+  const safeFrom = assertSafeLocalPath(from, '重命名')
+  const safeTo = assertSafeLocalPath(to, '重命名')
+  await fs.rename(safeFrom, safeTo)
 }
 
 /** Windows 下枚举存在的盘符；其他平台返回根 */

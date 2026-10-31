@@ -271,16 +271,32 @@ async function main() {
     String(r6[0].stdout.length))
   check('带截断提示尾巴', r6[0].stdout.endsWith(NOTE))
 
-  /* ================= 7. timeoutMs=0 / 负数 → timeout 而不是崩溃 ================= */
-  const r7 = await br.run(uid(), [sFast2], 'x', 0)
-  check('timeoutMs=0 返回 timeout', r7[0].status === 'timeout', r7[0].status)
+  /* ================= 7. timeoutMs=0 / 负数 → 被夹紧到合法窗口，不立即超时 ================= */
   /*
-   * 负数同 0：Node setTimeout 对负值按 1ms 处理，语义是「立即超时」。
-   * 本断言锁定修复前行为（Volt 要求按实际行为写）；exec.ts 夹紧落地后
-   * 改断言为 status=done 且耗时 >= 默认超时窗口。
+   * exec.ts 已加 clampTimeout：非有限值或 <=0 一律取 20000ms，上下界 1000~600000。
+   * 修复前的行为是「0 和负数在 setTimeout 里按 1ms 处理 → 立即超时」，
+   * 一条 invoke('batch:run', id, ids, cmd, 0) 就能让全部会话瞬间超时。
+   * 现在应当正常跑完。断言翻成 done，并核对耗时远大于 1ms（证明没走立即超时）。
    */
+  /*
+   * 判据只能看 status：用「耗时」判不出来 —— 测试服务器的 x 命令本来 8ms 就返回，
+   * 夹紧成 20000 和夹紧成 1ms 都是 done。真正会立即超时的是「命令比超时窗口还慢」的场景，
+   * 所以用 slow 命令（服务端 1200ms）配 timeoutMs=0：
+   * 夹紧到 20000 应当 done；没夹紧（按 1ms）必然 timeout。
+   */
+  const r7slow = await br.run(uid(), [sFast2], 'slow', 0)
+  check('timeoutMs=0 + 慢命令仍完成（证明被夹到 20000 而非 1ms）',
+    r7slow[0].status === 'done', r7slow[0].status)
+
+  const r7 = await br.run(uid(), [sFast2], 'x', 0)
+  check('timeoutMs=0 被夹紧，命令正常完成', r7[0].status === 'done', r7[0].status)
+
   const r7b = await br.run(uid(), [sFast2], 'x', -1)
-  check('timeoutMs=-1 返回 timeout（不崩溃）', r7b[0].status === 'timeout', r7b[0].status)
+  check('timeoutMs=-1 被夹紧，命令正常完成', r7b[0].status === 'done', r7b[0].status)
+
+  // 超大值也要夹到上限，不能变成永久 hang
+  const r7c = await br.run(uid(), [sFast2], 'x', Number.MAX_SAFE_INTEGER)
+  check('timeoutMs 超大值被夹到上限，仍能完成', r7c[0].status === 'done', r7c[0].status)
 
   /* ================= 8. 进度事件两段齐全 ================= */
   const runId8 = uid()

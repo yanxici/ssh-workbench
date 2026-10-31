@@ -68,6 +68,22 @@ const DEFAULT_MAX_OUTPUT = 512 * 1024
 /** 超限截断时的提示尾巴 */
 const TRUNCATE_NOTE = '\n\n...（输出超过上限，已截断）'
 
+/**
+ * 超时夹紧。
+ *
+ * 四处 IPC handler（diagnostics / devices ×3）把渲染层传来的 timeoutMs 原样透传，
+ * 主进程零校验：传 0 或负数在 Node 的 setTimeout 里是合法值，语义却是「立即超时」——
+ * 一条 `invoke('batch:run', id, ids, cmd, 0)` 就能让全部会话瞬间超时。
+ * 渲染层 BatchPanel 自己夹在 1000~300000，但那是渲染层自律，不是主进程防线。
+ *
+ * 这里夹一次，所有调用点自动覆盖；上下界取渲染层同口径。
+ */
+function clampTimeout(ms: number): number {
+  const n = Number(ms)
+  if (!Number.isFinite(n) || n <= 0) return 20000
+  return Math.min(Math.max(n, 1000), 600000)
+}
+
 export function execCollect(
   client: Client,
   command: string,
@@ -77,6 +93,7 @@ export function execCollect(
   /** 实时输出回调（固件升级等长任务用来推送进度日志） */
   onChunk?: (stream: 'out' | 'err', chunk: string) => void
 ): Promise<ExecOutcome> {
+  const timeout = clampTimeout(timeoutMs)
   return new Promise<ExecOutcome>((resolve) => {
     let settled = false
     let stream: ClientChannel | null = null
@@ -108,7 +125,7 @@ export function execCollect(
     const timer = setTimeout(() => {
       closeStream()
       finish('timeout', null)
-    }, timeoutMs)
+    }, timeout)
 
     /*
      * 取消：订阅制，不再每任务一个 120ms 定时器。
