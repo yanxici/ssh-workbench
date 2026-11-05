@@ -5,6 +5,53 @@ All notable changes to SSH Workbench will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.1] - 2026-11-05
+
+### Fixed（P0：sz 传输到一半终端被乱码刷屏并中断）
+
+**问题**：用 `sz` 从远端下载时，进度走到某个百分比后终端突然刷出一屏二进制乱码，传输随即停住，进度面板卡在 56% 之类的数字上不再变化。乱码不是 "打印错了"，而是 **ZMODEM 报文本身被直接写进了终端**。
+
+**三条独立的根因**（都在 `src/renderer/src/lib/zmodem.ts` 与 zmodem.js 0.1.10 的交互之间）：
+
+1. **接收方从不对 ZCRCW 回 ZACK**。`zsession.js:659` 的条件是 `subpacket.ack_expected() && !subpacket.frame_end()`，而 ZCRCW 恰好 `ack_expected()===true` 且 `frame_end()===true`，被这个组合排除 —— lrzsz 的 `sz` 在窗口边界发的正是 ZCRCW，等不到 ZACK 就停在当前百分比。
+2. **一帧解析失败就把会话判死**。库在 `_consume_header` 里找不到处理器时抛 `Unhandled header: ZDATA`；`feedZmodem` 的 catch 只有 `isPeerRetransmit`（ZRQINIT）这一条窄豁免，其余一律 `recoverFromError` → `abort()`。而 abort 之后 Sentry 会把远端仍在推的每一帧原样交给 `to_terminal` —— 这就是那屏乱码。
+3. **ZRPOS 续传没有落地路径**。库的 `_consume_ZDATA` 遇到 offset 不等就抛 `Error correction is unimplemented.`，而真 `sz` 收到 ZRPOS 后经常把整帧从头重发 —— 位置本就该以对端为准。
+
+**改法**：
+
+- `attachZmodem` 挂 `session.on('data_in')`，对 `ack_expected() && frame_end()` 的子包按库自身 `_file_offset` 补发 ZACK（`Header.build('ZACK', pack_u32_le(offset))`），不改 node_modules。
+- `to_terminal` 增加 `suppressUntil` 抑制窗：协议态或刚出过错的一段时间内，残渣只记账不下发，终端不再被报文刷屏。
+- 新增 `resyncReceive()`：命中可恢复协议错误（`Unhandled header: ZDATA` / `Error correction is unimplemented` / `offset not ok` / `CRC check failed`）时清 `_input_buffer`、清 `_next_subpacket_handler`、调 `_accept(fileOffset)` 重发 ZRPOS，让对端从断点续传，而不是 abort。
+- `relaxDataOffset()`：包一层 `_consume_ZDATA`，offset 不一时把本地 `_file_offset` 对齐到对端而不是抛错 —— 重复字节交给下面的去重循环丢弃。
+- `ensureEofHandler()`：`_accept()` 装的处理表只有 `{ZDATA}`，对端若正好发到文件尾会直接给 ZEOF 而被判成 `Unhandled header: ZEOF`，这里补上 ZEOF 并按库自己的流程收尾（多文件时继续回 ZRINIT）。
+- `handleOffer` 的 `on_input` 改为带文件内偏移对账：维护 `expected`（对端下一位落在文件哪里）与 `cursor`（已排队落盘），重叠部分只保留尾巴、超出文件尾的截断。落盘接口是「只追加」，所以续传后对端从 0 重来也只能跳过已认下的前缀。
+- 完成判定从 `await offer.accept()` 改为 `Promise.race([accepted, offer.on('complete')])`：走了续传之后 `_accept()` 会另起一条 promise，原来那条永远不会兑现。
+
+**回归**：`scripts/verify-zmodem-renderer.cjs` 新增三个场景（手搓 lrzsz 风格字节流，因为 zmodem.js 的发送端永远只发 ZCRCG/ZCRCE，造不出 ZCRCW 与重复 ZDATA 头）—— ZCRCW 补 ZACK、重复 ZDATA 头触发 ZRPOS 并完整收完、abort 之后继续喷 4000 字节垃圾时终端长度为 0。`verify-zmodem-e2e` 14/0、`verify-zmodem-decode` 10/0、`verify-zmodem` 88/0（其中 6 项断言原本指向已迁走的 `src/main/index.ts` 与 `App.tsx`，已跟着代码搬到 `src/main/ipc/zmodem.ts` 与 `MainWorkspace.tsx`）。
+
+### Fixed（P0：rz 上传卡在 0 字节 / 传完后又弹一次确认）
+
+**问题**：远端执行 `rz` 之后从本机选文件上传，三种表现都是「传不上去」——(a) 进度条一直停在 0，一个字节都不走；(b) 文件其实传完了，但界面又冒出一次 ZMODEM 确认弹窗，再点一次还是没有反应；(c) 大文件传输期间整个窗口卡死，连中断按钮都点不动。
+
+**三条独立的根因**（全在 `src/renderer/src/lib/zmodem.ts` 与 zmodem.js 0.1.10 的发送态之间）：
+
+1. **`_ensure_receiver_escapes_ctrl_chars()` 死等 ZACK**。`zsession.js:1327-1348` 在 `!ZRINIT.escape_ctrl_chars() && !_got_ZSINIT_ZACK` 时发一帧 ZSINIT 然后 `new Promise(res => { _next_header_handler = { ZACK: () => res() } })`，**没有任何超时**。对端不回这个 ZACK（rz 视其为冗余，或者根本没在跑），`send_offer` 就永远进不了发 ZFILE 的那一步 —— 表现就是 0 字节。
+2. **迟到 / 重复的 ZACK 会把会话判死**。发送完一个文件后 `_prepare_to_receive_ZRINIT` 把处理器表换成 `{ ZRINIT }`，此时进来的 ZACK 命中 `_consume_header` 的 `throw Unhandled header`；`feedZmodem` 里只有 `isPeerRetransmit`（ZRQINIT）这一条窄豁免，于是走到 `recoverFromError` → `abort()`。会话对象仍挂在 Sentry 上，下一次 `rz` 的起始帧被它当成未知头部吞掉 —— 用户看到的就是「传完又让我重来一遍，而且再也不动」。
+3. **发送是同步死循环、无限等**。`transfer.send()` 在 `for` 里一口气塞完整个文件，几 MB 就能让渲染进程整段冻结；`send_offer` / `transfer.end()` / `close()` 三个 promise 都只在收到对应头部时兑现，对端一旦不配合就是永久挂起，界面没有任何出路。
+
+**改法**：
+
+- 新增 `primeSendSession()`：进传输前直接停掉库的保活链（`clearTimeout(_keepalive_timeout)` + `_keepalive_promise = null` + 把 `_start_keepalive` 固定成空函数，因为库的 `_stop_keepalive` 拼错字段名 `_keep_alive_promise`，永远清不掉），并置 `_got_ZSINIT_ZACK = true` 跳过上面那条死等，自己补发一帧 ZSINIT 把控制字符协商做完。
+- 新增 `installSendHeaderFallback()`：包一层 `_consume_header`，只在「表里没人认领」时吞掉 ZACK/ZRINIT/ZSINIT/ZFIN/ZRQINIT 这类噪声；**不清处理器表**（第一版顺手清了，紧随其后的 ZRPOS 于是无处安放，探针立刻炸出 `Unhandled header! ZRPOS_HEADER`、收到 0 字节）。
+- 新增 `startSendKeepalive()`：等 ZFILE 期间每 5 秒补一帧 ZSINIT，把远端 `rz` 按住（lrzsz 等 ZFILE 有自己的超时，用户挑几 MB 文件很容易超过），真正开始发数据前停掉。
+- 新增 `awaitSendStep()`：给 `send_offer` / `transfer.end()` / `close()` 各套一层 `SEND_RESPONSE_TIMEOUT_MS`（20 秒）竞速，超时返回可控失败而不是永久挂起，文案如「等待远端接受 x：远端 20 秒无回应」，随后 abort 让远端退出。
+- `runSend` 改按 `SEND_CHUNK_BYTES`（32KB）分片、每 `SEND_YIELD_BYTES`（128KB）`await` 一次 setTimeout(0) 让出事件循环，大文件传输期间界面保持可点。
+- 收尾 `close()` 失败时补一次 `abort()`：否则旧会话继续挂在 Sentry 上，下一次 rz 的起始帧被吞，表现为「再传完全没反应」。文件已传完的事实不受影响，失败原因只作为 `done` 事件的 `message` 附注。
+
+- 保活在「用户还没选完文件」时就要开着：原先等文件选完才起保活，而远端 `rz` 的重试窗口只有几秒到十几秒，挑一个几 MB 的文件很容易跨过去 —— 等保活起来时 rz 已经退出。现在一进 `runSend` 就补 ZSINIT，选完文件、真正开始发数据前再停。
+
+**回归**：`scripts/verify-zmodem-renderer.cjs` 新增场景 12~16，用真的 `Zmodem.Session.Receive()` 当对端跑完整上传链路 —— 正常上传 120000 字节、对端吞掉所有 ZACK、传输结束后注入迟到 ZACK、对端完全不理（20 秒超时路径）、在文件选择框停留 12 秒后取消。当前 **66 通过 / 0 失败**。
+
 ## [1.8.0] - 2026-10-31
 
 ### Fixed（P1：中文输入法下 Enter 会执行半截命令）

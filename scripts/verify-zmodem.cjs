@@ -198,12 +198,14 @@ function makeSentry() {
   }
 
   const main = fs.readFileSync(path.join(ROOT, 'src/main/index.ts'), 'utf8')
+  // zmodem 的 IPC 处理已从 index.ts 拆到 ipc/zmodem.ts，断言要跟着走
+  const zmIpc = fs.readFileSync(path.join(ROOT, 'src/main/ipc/zmodem.ts'), 'utf8')
   check('主进程推送 raw（base64）', /raw: raw\?\.length \? raw\.toString\('base64'\)/.test(main))
-  check('接收目录用一次性文件夹令牌，禁止任意路径', /zmDirTokens\.get\(token\)/.test(main))
-  check('接收按块追加落盘（不再整份驻留内存）', /appendFileSync\(rec\.path, buf\)/.test(main))
-  check('文件名做 basename 与保留字符清洗', /const safeFileName = \(name: string\)/.test(main))
-  check('同名文件自动加序号，不覆盖', /while \(existsSync\(candidate\)\)/.test(main))
-  check('pickFiles 返回 base64 内容', /data: buf\.toString\('base64'\)/.test(main))
+  check('接收目录用一次性文件夹令牌，禁止任意路径', /zmDirTokens\.get\(token\)/.test(zmIpc))
+  check('接收按块追加落盘（不再整份驻留内存）', /appendFileSync\(rec\.path, buf\)/.test(zmIpc))
+  check('文件名做 basename 与保留字符清洗', /const safeFileName = \(name: string\)/.test(zmIpc))
+  check('同名文件自动加序号，不覆盖', /while \(existsSync\(candidate\)\)/.test(zmIpc))
+  check('pickFiles 返回 base64 内容', /data: buf\.toString\('base64'\)/.test(zmIpc))
 })()
 
 /* ---------- 5. 渲染层模块结构 ---------- */
@@ -238,7 +240,12 @@ function makeSentry() {
   const app = fs.readFileSync(path.join(ROOT, 'src/renderer/src/App.tsx'), 'utf8')
   check('App 数据路径按 ZMODEM 分支', /isZmodemAttached\(sessionId\)/.test(app))
   check('App 喂入原始字节', /feedZmodem\(sessionId, raw, data\)/.test(app))
-  check('渲染 ZmodemOverlay', /<ZmodemOverlay \/>/.test(app))
+  // 浮层已从 App.tsx 移到 MainWorkspace.tsx，两处都认，避免再次因搬家误报
+  const workspace = fs.readFileSync(
+    path.join(ROOT, 'src/renderer/src/components/layout/MainWorkspace.tsx'),
+    'utf8'
+  )
+  check('渲染 ZmodemOverlay', /<ZmodemOverlay \/>/.test(app) || /<ZmodemOverlay \/>/.test(workspace))
 })()
 
 /* ---------- 6. 方向映射：role -> direction 必须不取反 ---------- */

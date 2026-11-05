@@ -95,9 +95,11 @@ Architecture, directory layout and roadmap (Chinese): [DESIGN.md](./DESIGN.md)
 
 ## Version
 
-Current: **v1.6.8**
+Current: **v1.8.1**
 
 Recent updates:
+- **v1.8.1** — ZMODEM both directions. Downloads: `sz` no longer floods the terminal with protocol bytes and stalls mid-file (the receiver never ACKed ZCRCW; one unparseable frame aborted the whole session; ZRPOS resume had no landing path). Uploads: `rz` no longer sits at 0 bytes (the library waits for a ZSINIT ACK that never arrives, with no timeout), no longer kills the session on a late ZACK after a finished file, and no longer freezes the renderer (chunked sends with yields, 20 s timeouts on every wait). Verified by 5 new scenarios driving a real `Zmodem.Session.Receive()` peer
+- **v1.8.0** — IME composition guard across 13 Enter handlers (pinyin Enter ran half-typed commands), StatusBar transfer subscription collapsed to three scalar selectors, batch shortcut-conflict reset
 - **v1.6.8** — CI gate split into two explicit steps: `typecheck + 41 verify scripts` and `UI e2e` (with retry). The 41 were previously covered only indirectly through a `package.json` chain, so editing that script silently changed the gate
 - **v1.6.7** — fixed two gaps v1.6.6 itself introduced: batch downloads of same-named files could still overwrite each other (the collision check only looked at disk, so files not yet written in the same batch resolved to one path); `allowLan` was dropped on save, locking users out of re-editing an existing tunnel. Added `shared/bindHost.ts` shared by both processes, and a "allow LAN access" switch in the tunnel editor
 - **v1.6.6** — two P0s: downloads silently truncated an existing local file (now uses the same `name (1).ext` scheme as ZMODEM); deleting a tunnel config left an orphaned runtime with a listening socket no UI could reach (a `-D` tunnel becomes an unattended, unauthenticated SOCKS5). Also: runId leak, an 8-way concurrency gate for batch execution, cancel switched from polling to subscription, an `error` listener on the SFTP channel, and remote-edit backup now aborts instead of overwriting

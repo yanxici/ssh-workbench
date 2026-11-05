@@ -8,6 +8,12 @@
  *   3) 远端重发起始帧（retract 旧 Detection）时不会卡死，也不会二次弹窗；
  *   4) 传输中 abortZmodem 能中断并给出提示；
  *   5) 选目录被取消时走「已取消」，不会静默挂起。
+ *   6) 上传（rz）：选文件 -> 发完 -> ZFIN 收尾，会话不残留；
+ *   7) 上传：对端不回 ZSINIT 的 ZACK 也要照常发出文件；
+ *   8) 上传：文件收尾后才到的迟到 ZACK 不能打死会话；
+ *   9) 上传：对端完全不回应时 20 秒超时报错，不会无限挂在 0 字节；
+ *  10) 上传：用户在文件选择框里停留很久时，靠我们自己补的 ZSINIT 把远端 rz 撑住，
+ *      取消后能干净 abort，不留下活动会话。
  *
  * 用法：node scripts/verify-zmodem-renderer.cjs
  * 输出：结果：N 通过 / M 失败
@@ -36,9 +42,13 @@ const Zmodem = require('zmodem.js')
 const tick = () => new Promise((r) => setImmediate(r))
 
 /** 造一个「假主进程 + 假 UI」，并把 lib 的导出接进这套环境 */
-function loadLib() {
+function loadLib(opts = {}) {
   const state = {
     dirToken: 'tok-1',
+    uploadFiles: opts.uploadFiles || null,
+    // 模拟「用户在文件选择框里停留了 pickDelayMs 才取消」：远端 rz 在此期间无人搭理
+    pickDelayMs: opts.pickDelayMs || 0,
+    pickFilesCalls: 0,
     pickDirCalls: 0,
     pickDirCanceled: false,
     saves: new Map(),
@@ -51,7 +61,12 @@ function loadLib() {
   globalThis.window = {
     api: {
       zmodem: {
-        pickFiles: async () => ({ ok: true, data: { canceled: true, files: [] } }),
+        pickFiles: async () => {
+          state.pickFilesCalls++
+          if (state.pickDelayMs) await new Promise((r) => setTimeout(r, state.pickDelayMs))
+          if (!state.uploadFiles) return { ok: true, data: { canceled: true, files: [] } }
+          return { ok: true, data: { canceled: false, files: state.uploadFiles } }
+        },
         pickDir: async () => {
           state.pickDirCalls++
           if (state.pickDirCanceled) return { ok: true, data: { canceled: true } }
@@ -250,6 +265,245 @@ async function runSz(o) {
   return { events, confirmCalls, remote, toRemote }
 }
 
+/**
+ * 手搓 lrzsz 风格的字节流驱动接收端。
+ * 不能用 zmodem.js 的发送端：它的发送侧永远只发 ZCRCG/ZCRCE，
+ * 造不出真 sz 的 ZCRCW（帧尾等 ZACK）和重复的 ZDATA 头。
+ *
+ * @param {object} o
+ * @param {object} o.lib 打包出来的渲染层模块
+ * @param {number} [o.total] 文件大小（默认 1600）
+ * @param {'end_ack'|'no_end_ack'} [o.frameEnd] 帧尾类型：end_ack 即 ZCRCW
+ * @param {boolean} [o.duplicateFrame] 先塞一个重复的 ZDATA 头，模拟丢帧/重传
+ * @param {boolean} [o.splitFrame] 把一帧拆成两帧：前半只发 ZCRCG 就不发了，
+ *   模拟真 sz 在丢帧时的实际形态（此时 offset 才落后于对端，ZRPOS 才会报半程）
+ */
+async function frameSz(o) {
+  const { lib } = o
+  const total = o.total || 1600
+  const frameEnd = o.frameEnd || 'end_ack'
+  const half = total >> 1
+  const sessionId = 's-frame-' + Math.random().toString(36).slice(2)
+  const term = []
+  const sent = []
+  const events = []
+
+  lib.ensureZmodem(sessionId, {
+    write: (t) => term.push(t),
+    send: (bytes) => sent.push(Buffer.from(bytes)),
+    confirm: async () => true,
+    afterTransfer: () => {}
+  })
+  lib.watchZmodem(sessionId, (p) => events.push(p))
+
+  const enc = new Zmodem.ZDLE()
+  enc.set_escape_ctrl_chars(true)
+  const hex = (name, args) => Buffer.from(Zmodem.Header.build(name, args || []).to_hex())
+  const sub = (payload, fe) =>
+    Buffer.from(Zmodem.Subpacket.build(Array.from(payload), fe).encode16(enc))
+  const info = (name, size) =>
+    Buffer.concat([Buffer.from(name), Buffer.from([0]), Buffer.from(size + ' 0 100644 0')])
+  const feed = (buf) => lib.feedZmodem(sessionId, buf.toString('base64'), buf.toString('latin1'))
+  const pump = async (n = 40) => {
+    for (let i = 0; i < n; i++) await tick()
+  }
+  const parsed = () =>
+    sent.map((b) => {
+      try {
+        return Zmodem.Header.parse_hex(Array.from(b))
+      } catch {
+        return null
+      }
+    })
+  const names = () => parsed().map((h) => (h ? h.NAME : '?'))
+  // ZACK 不是 ZOffsetHeader（没有 get_offset），只能自己按 4 字节小端解
+  const offsets = (name) =>
+    parsed()
+      .filter((h) => h && h.NAME === name)
+      .map((h) => {
+        if (typeof h.get_offset === 'function') return h.get_offset()
+        return Zmodem.ENCODELIB.unpack_u32_le(h._bytes4)
+      })
+
+  feed(hex('ZRQINIT', [0, 0, 0, 0]))
+  await pump()
+  feed(Buffer.concat([hex('ZFILE', [0]), sub(info('frame.bin', total), 'end_ack')]))
+  await pump()
+
+  if (o.splitFrame) {
+    // 前半帧单独成一个 ZDATA 帧（ZCRCG 结尾），链路在这里断掉：
+    // 此时我们只认下 half 字节，对端却以为整帧都发出去了
+    feed(Buffer.concat([hex('ZDATA', [0]), sub(Buffer.alloc(half, 0x31), 'no_end_no_ack')]))
+    await pump()
+    // 重传的同一个头：库里 ZDATA 处理器已被消费 → Unhandled header: ZDATA
+    feed(Buffer.concat([hex('ZDATA', [0]), sub(Buffer.alloc(half, 0x31), 'no_end_no_ack')]))
+    await pump()
+    // 对端按我们重发的 ZRPOS(half) 从断点续传后半程
+    feed(Buffer.concat([hex('ZDATA', [half]), sub(Buffer.alloc(total - half, 0x32), frameEnd)]))
+    await pump()
+  } else {
+    // 一帧里两个子包：ZCRCG 续发 + ZCRCW 帧尾等确认（真 sz 的窗口边界就是这样）
+    feed(
+      Buffer.concat([
+        hex('ZDATA', [0]),
+        sub(Buffer.alloc(half, 0x31), 'no_end_no_ack'),
+        sub(Buffer.alloc(total - half, 0x32), frameEnd)
+      ])
+    )
+    await pump()
+  }
+
+  feed(hex('ZEOF', [total]))
+  await pump(80)
+
+  const doneEv = events.filter((e) => e.phase === 'done').pop()
+  const errs = events.filter((e) => e.phase === 'error')
+  lib.detachZmodem(sessionId)
+  return {
+    doneBytes: doneEv ? doneEv.bytesDone : 0,
+    errors: errs.map((e) => e.message),
+    sentNames: names(),
+    zrposOffsets: offsets('ZRPOS'),
+    zackOffset: offsets('ZACK').pop(),
+    termLength: term.join('').length,
+    termHead: JSON.stringify(term.join('').slice(0, 40))
+  }
+}
+
+/**
+ * 上传方向（rz）回归：用真实的 zmodem.js 接收端当对端，跑一次完整的
+ * 「选文件 -> ZFILE -> ZDATA -> ZEOF -> ZFIN」流程。
+ *
+ * 覆盖历史上把上传彻底卡死或打死会话的三种情形：
+ *  1) 对端不回 ZSINIT 的 ZACK（老库会无限等，一个字节都发不出去）；
+ *  2) 对端完全不回应（老库没有超时，界面永远停在 0 字节）；
+ *  3) 文件收尾之后才对上的迟到 ZACK（老库当未知头部抛错，会话被打死，rz 被重新识别一轮）。
+ *
+ * @param {object} o
+ * @param {object} o.lib 打包出来的渲染层模块
+ * @param {Uint8Array} o.payload 要上传的内容
+ * @param {boolean} [o.dropZack] 对端吞掉所有 ZACK（模拟不回 ZSINIT 确认）
+ * @param {boolean} [o.strayZack] 文件收完后往我方案里多塞一帧迟到 ZACK
+ * @param {boolean} [o.deadPeer] 对端只发一帧 ZRINIT，之后彻底哑掉
+ * @param {boolean} [o.timeoutMs] deadPeer 场景的最长等待
+ */
+async function runRz(o) {
+  const { lib } = o
+  const sessionId = 's-up-' + Math.random().toString(36).slice(2)
+  const events = []
+  const sent = []
+  const toRemote = []
+  const toUs = []
+  let received = 0
+  let fileEnd = false
+  let sessionEnd = false
+  let offerName = null
+
+  lib.ensureZmodem(sessionId, {
+    write: () => {},
+    send: (bytes) => {
+      const buf = Buffer.from(bytes)
+      sent.push(buf)
+      toRemote.push(buf)
+    },
+    confirm: async () => true,
+    afterTransfer: () => {}
+  })
+  lib.watchZmodem(sessionId, (p) => events.push(p))
+
+  const remote = new Zmodem.Session.Receive()
+  remote.set_sender((oct) => {
+    const buf = Buffer.from(oct)
+    if (o.dropZack && nameOf(buf) === 'ZACK') return
+    toUs.push(buf)
+  })
+  remote.on('offer', (offer) => {
+    offerName = (offer._file_info && offer._file_info.name) || null
+    offer.accept({ on_input: (piece) => (received += piece.length) })
+  })
+  remote.on('file_end', () => (fileEnd = true))
+  remote.on('session_end', () => (sessionEnd = true))
+
+  const pump = async (rounds = 400) => {
+    for (let i = 0; i < rounds; i++) {
+      let moved = false
+      while (toRemote.length) {
+        const buf = toRemote.shift()
+        if (o.deadPeer) {
+          // 对端已经走了：没人读我们发出去的东西
+          moved = true
+          continue
+        }
+        // 一次性喂 64KB 会爆栈，按 4KB 切片
+        for (let off = 0; off < buf.length; off += 4096) {
+          try {
+            remote.consume(Array.from(buf.subarray(off, off + 4096)))
+          } catch (err) {
+            o.remoteError = o.remoteError || String(err)
+          }
+        }
+        moved = true
+      }
+      while (toUs.length) {
+        const buf = toUs.shift()
+        lib.feedZmodem(sessionId, buf.toString('base64'), buf.toString('latin1'))
+        moved = true
+        await tick()
+      }
+      await tick()
+      if (!moved && !toRemote.length && !toUs.length) return
+    }
+  }
+
+  const settled = () => events.some((e) => e.phase === 'done' || e.phase === 'error')
+  const deadline = Date.now() + (o.deadPeer ? (o.timeoutMs || 26000) : 15000)
+
+  if (o.deadPeer) {
+    // rz 只留下起始帧就走了：之后无论我方补多少 ZSINIT 都没有任何回应
+    toUs.push(Buffer.from(Zmodem.Header.build('ZRINIT', ['CANFDX', 'CANOVIO', 'CANFC32']).to_hex()))
+  } else {
+    remote.start()
+  }
+
+
+  while (Date.now() < deadline && !settled()) {
+    await pump(200)
+    await new Promise((r) => setTimeout(r, 2))
+  }
+
+  if (o.strayZack && !o.deadPeer) {
+    // 收尾之后才到的 ZACK：老库此时处理器表已换成 {ZRINIT}，会抛 Unhandled header
+    const zack = Buffer.from(Zmodem.Header.build('ZACK', [0, 1, 0, 0]).to_hex())
+    lib.feedZmodem(sessionId, zack.toString('base64'), zack.toString('latin1'))
+    await pump(60)
+  }
+
+  await pump(200)
+  for (let i = 0; i < 20; i++) await tick()
+
+  const active = lib.isZmodemActive(sessionId)
+  lib.detachZmodem(sessionId)
+  return {
+    events,
+    sentNames: sent.map((b) => nameOf(b) || '?'),
+    received,
+    fileEnd,
+    sessionEnd,
+    active,
+    offerName,
+    remoteError: o.remoteError
+  }
+}
+
+/** 从一帧字节里读头部名（读不出就是子包/数据） */
+function nameOf(buf) {
+  try {
+    return Zmodem.Header.parse_hex(Array.from(buf)).NAME
+  } catch {
+    return null
+  }
+}
+
 ;(async () => {
   /* ---------- 1 + 2：正常接收一个文件，逐字节一致 ---------- */
   {
@@ -443,6 +697,154 @@ async function runSz(o) {
     lib.detachZmodem(sessionId)
     check('会话销毁后快照一并清理', lib.getZmodemProgress(sessionId) === null,
       JSON.stringify(lib.getZmodemProgress(sessionId)))
+  }
+
+  /* ---------- 9：真 sz 用 ZCRCW 帧尾等 ZACK，库自己不回，必须由我们补 ---------- */
+  {
+    const { lib, state } = loadLib()
+    const h = await frameSz({ lib, total: 1600, frameEnd: 'end_ack' })
+    check('收到 ZCRCW 帧后主动补发 ZACK', h.sentNames.includes('ZACK'), h.sentNames.join(','))
+    check('ZACK 的 offset 与实际收下的字节数一致', h.zackOffset === 1600,
+      'zackOffset=' + h.zackOffset + ' sent=' + h.sentNames.join(','))
+    check('补 ZACK 不影响文件收完', h.doneBytes === 1600, 'doneBytes=' + h.doneBytes)
+    check('补 ZACK 期间不写终端', h.termLength === 0, 'termLength=' + h.termLength)
+    check('补 ZACK 时只落盘一份文件', state.finishCalls === 1, 'finishCalls=' + state.finishCalls)
+    check('落盘字节数与文件大小一致', (state.files.get('save-1') || { length: -1 }).length === 1600,
+      'saved=' + (state.files.get('save-1') || { length: -1 }).length)
+  }
+
+  /* ---------- 10：重复的 ZDATA 头（丢帧/重传）要续传，不能 abort 也不能乱码 ---------- */
+  {
+    const { lib, state } = loadLib()
+    const h = await frameSz({ lib, total: 1600, duplicateFrame: true, splitFrame: true })
+    check('解析器抛错后重发 ZRPOS 请求续传', h.zrposOffsets.includes(800),
+      'zrpos=' + h.zrposOffsets.join(','))
+    check('续传期间不向终端写协议字节（无乱码瀑布）', h.termLength === 0,
+      'termLength=' + h.termLength + ' head=' + h.termHead)
+    check('续传后不再报错结束', h.errors.length === 0, JSON.stringify(h.errors))
+    check('续传后文件完整收完', h.doneBytes === 1600, 'doneBytes=' + h.doneBytes)
+    check('续传后落盘字节数正确（重发块不能重复追加）',
+      (state.files.get('save-1') || { length: -1 }).length === 1600,
+      'saved=' + (state.files.get('save-1') || { length: -1 }).length)
+  }
+
+  /* ---------- 11：abort 之后远端继续喷二进制，不能刷进终端 ---------- */
+  {
+    const { lib } = loadLib()
+    const sessionId = 's-garble-' + Math.random().toString(36).slice(2)
+    const term = []
+    lib.ensureZmodem(sessionId, {
+      write: (t) => term.push(t),
+      send: () => {},
+      confirm: async () => true,
+      afterTransfer: () => {}
+    })
+    const zrq2 = Buffer.from(Zmodem.Header.build('ZRQINIT', [0, 0, 0, 0]).to_hex())
+    lib.feedZmodem(sessionId, zrq2.toString('base64'), zrq2.toString('latin1'))
+    for (let i = 0; i < 20; i++) await tick()
+    lib.abortZmodem(sessionId)
+    for (let i = 0; i < 10; i++) await tick()
+    const junk = Buffer.alloc(4000, 0xab)
+    lib.feedZmodem(sessionId, junk.toString('base64'), junk.toString('latin1'))
+    lib.feedZmodem(sessionId, junk.toString('base64'), junk.toString('latin1'))
+    for (let i = 0; i < 10; i++) await tick()
+    check('中断后远端仍在推的二进制不写进终端', term.join('').length === 0,
+      'len=' + term.join('').length + ' head=' + JSON.stringify(term.join('').slice(0, 40)))
+    lib.detachZmodem(sessionId)
+  }
+
+  /* ---------- 12：上传（rz）正常路径：选文件 -> 发完 -> 收尾干净 ---------- */
+  {
+    const payload = new Uint8Array(120000)
+    for (let i = 0; i < payload.length; i++) payload[i] = (i * 7 + 11) & 0xff
+    const { lib } = loadLib({
+      uploadFiles: [{ name: 'rsync', size: payload.length, data: Buffer.from(payload).toString('base64') }]
+    })
+    const r = await runRz({ lib, payload })
+
+    check('上传：对端收到完整文件', r.received === payload.length, `received=${r.received}/${payload.length}`)
+    check('上传：文件名传到对端', r.offerName === 'rsync', String(r.offerName))
+    check('上传：跑完 ZFIN 结束会话', r.sentNames.includes('ZFIN'), r.sentNames.join(','))
+    check('上传：对端确认文件结束', r.fileEnd === true, String(r.fileEnd))
+    check('上传：对端确认会话结束', r.sessionEnd === true, String(r.sessionEnd))
+    check('上传：结束后不残留活动会话', r.active === false, String(r.active))
+    const last = r.events[r.events.length - 1]
+    check('上传：进度收在 done 且字节数对得上',
+      last && last.phase === 'done' && last.bytesDone === payload.length,
+      JSON.stringify(last))
+  }
+
+  /* ---------- 13：对端不回 ZSINIT 的 ZACK 也不能卡死 ---------- */
+  {
+    const payload = new Uint8Array(60000)
+    for (let i = 0; i < payload.length; i++) payload[i] = (i * 13 + 5) & 0xff
+    const { lib } = loadLib({
+      uploadFiles: [{ name: 'rsync', size: payload.length, data: Buffer.from(payload).toString('base64') }]
+    })
+    const r = await runRz({ lib, payload, dropZack: true })
+
+    check('上传：对端不回 ZACK 时仍能发出文件', r.received === payload.length,
+      `received=${r.received}/${payload.length}`)
+    check('上传：不回 ZACK 也能正常收尾', r.fileEnd === true && r.sessionEnd === true,
+      `fileEnd=${r.fileEnd} sessionEnd=${r.sessionEnd}`)
+    check('上传：不回 ZACK 时进度仍以 done 收尾',
+      r.events[r.events.length - 1]?.phase === 'done',
+      JSON.stringify(r.events[r.events.length - 1]))
+  }
+
+  /* ---------- 14：文件收完之后的迟到 ZACK 不能打死会话 ---------- */
+  {
+    const payload = new Uint8Array(40000, 0x5a)
+    const { lib } = loadLib({
+      uploadFiles: [{ name: 'rsync', size: payload.length, data: Buffer.from(payload).toString('base64') }]
+    })
+    const r = await runRz({ lib, payload, strayZack: true })
+
+    check('上传：迟到 ZACK 不影响文件完整性', r.received === payload.length,
+      `received=${r.received}/${payload.length}`)
+    check('上传：迟到 ZACK 不产生 error 事件',
+      r.events.filter((e) => e.phase === 'error').length === 0,
+      JSON.stringify(r.events.filter((e) => e.phase === 'error')))
+    check('上传：迟到 ZACK 不重新触发「检测到传输」',
+      r.events.filter((e) => e.phase === 'detected').length === 1,
+      JSON.stringify(r.events.map((e) => e.phase)))
+    check('上传：迟到 ZACK 后会话仍然是结束态', r.active === false, String(r.active))
+  }
+
+  /* ---------- 15：对端完全不回应时必须超时退出，不能无限挂在 0 字节 ---------- */
+  {
+    const payload = new Uint8Array(100000, 7)
+    const { lib } = loadLib({
+      uploadFiles: [{ name: 'rsync', size: payload.length, data: Buffer.from(payload).toString('base64') }]
+    })
+    const t0 = Date.now()
+    const r = await runRz({ lib, payload, deadPeer: true, timeoutMs: 26000 })
+    const elapsed = Date.now() - t0
+    const err = r.events.filter((e) => e.phase === 'error').pop()
+
+    check('上传：对端无回应时 25 秒内报错退出', elapsed < 25000, `elapsed=${elapsed}`)
+    check('上传：超时报错文案说明是远端无回应', !!err && /无回应/.test(err.message),
+      JSON.stringify(err))
+    check('上传：超时后不残留活动会话', r.active === false, String(r.active))
+  }
+
+  /* ---------- 16：用户在文件选择框里待很久，远端 rz 不能被晾死 ---------- */
+  {
+    // 不提供文件（最终取消），但让 pickFiles 挂 12 秒：
+    // 这段时间远端 rz 一直在等 ZFILE，靠我们自己补的 ZSINIT 撑着
+    const { lib } = loadLib({ pickDelayMs: 12000 })
+    const t0 = Date.now()
+    const r = await runRz({ lib, payload: new Uint8Array(0), timeoutMs: 16000 })
+    const elapsed = Date.now() - t0
+    const zsinits = r.sentNames.filter((n) => n === 'ZSINIT').length
+    const err = r.events.filter((e) => e.phase === 'error').pop()
+
+    check('上传：选文件期间持续给远端补 ZSINIT（≥2 帧）', zsinits >= 2, 'zsinits=' + zsinits)
+    check('上传：取消选文件后走 abort，不留下活动会话', r.active === false, String(r.active))
+    check('上传：取消选文件报「未选择文件」', !!err && err.message === '未选择文件',
+      JSON.stringify(err))
+    check('上传：等用户选文件的 12 秒期间远端仍在线（未超时崩掉）', elapsed >= 11000,
+      'elapsed=' + elapsed)
   }
 
   console.log('')
