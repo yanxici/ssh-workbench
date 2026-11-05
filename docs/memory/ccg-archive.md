@@ -61,6 +61,28 @@
 
 ---
 
+## ⚠️ 纪律条款 2（用户明确要求）— `sshwb-rule-net-check-before-remote`
+
+- **功能名**：任何走 GitHub 的动作（push / tag / Release / 拉 asset）之前的**网络前置检查**
+- **生效条件**：即将执行 `git push`、`git ls-remote`、`git fetch`、`release.ps1`、`gh release *`、下载 release 资产 —— 一律先跑本条款
+- **子功能**：
+  1. 读系统代理注册表，拿到 Clash 实际写的端口（**不要相信记忆里的 7897**）
+  2. 探测该端口及常见 Clash 端口（7897 / 7890 / 7900 / 7891 / 10808 / 1080）哪个真的在监听
+  3. 真打一次 `github.com` + `api.github.com`，确认能取到内容
+  4. 不通就**先把结论告诉用户、让他去开 Clash**，再继续；不要挂着不通的代理硬跑
+- **执行**：
+  ```bash
+  npm run check:net                                  # 只查，输出「网络就绪」才继续
+  pwsh -NoProfile -File scripts/check-net.ps1 -Fix   # 查并把探测到的端口写进 git http.proxy
+  ```
+- **验证方式**：脚本最后一行必须是 `网络就绪，可以 push / 发版了。`；`git ls-remote --heads origin` 在 2 秒内返回
+- **不适用条件**：纯本地操作（typecheck / build / 打包 / 冒烟）不需要联网，可跳过
+
+> **用户原话（2026-11-05）**：「我开clash了 走代理继续 下次没网让我提前开项目」。
+> **踩过的坑**：本机 Clash Verge（`verge-mihomo.exe`）的混合端口是 **7900**，而 `git config --local http.proxy` 与 `release.ps1` 的 `-Proxy` 默认值都写死 `127.0.0.1:7897`。端口对不上时 `git push` 每次静默等满 **300 秒**才报 `Connection timed out`，报错文案是「GitHub 不可达」而不是「代理没开」—— 发 v1.8.1 时为此白耗四十多分钟。现已：`release.ps1` 改为自动探测 + 上传前 fail-fast，`RELEASE_CHECKLIST.md` §2.6 加前置步骤，`package.json` 加 `check:net`。
+
+---
+
 ## node `sshwb-launch-integrity-low` — Electron 在该目录启动崩溃的真正根因
 
 - **功能名**：Electron 应用在 Windows 上「点了没反应 / 主进程秒退」的启动失败诊断

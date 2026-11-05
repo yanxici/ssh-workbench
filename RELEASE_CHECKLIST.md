@@ -264,16 +264,20 @@ npm run smoke:cdp            # 或 node scripts/smoke-cdp.cjs 9337
 ### 2.6 提交与发布
 
 ```bash
+# 先确认网络（没网会静默等满 300 秒再报「GitHub 不可达」）
+pwsh -NoProfile -File scripts/check-net.ps1     # 加 -Fix 顺手改 git http.proxy
+
 git add <具体文件>          # 不要 git add .
 git commit -m "fix(scope): 简述"
 git tag -a v<ver> -m "v<ver>"
-git -c http.proxy=http://127.0.0.1:7897 push origin main
-git -c http.proxy=http://127.0.0.1:7897 push origin v<ver>
+git push origin main       # http.proxy 已按 check-net 的探测结果写进 --local 配置
+git push origin v<ver>
 ```
 
 - [ ] commit 信息能说清「改了什么 + 为什么」
 - [ ] tag 与 `package.json` 版本一致
-- [ ] push 走本地代理（直连 GitHub 不可达；端口不通就换直连，别把 7897 写死在脚本里 —— v1.5.1 已改成启动探测）
+- [ ] push 前跑过 `scripts/check-net.ps1`，看到「网络就绪」再动手（2026-11-05 发 v1.8.1 时代理端口从 7897 变成 7900 没发现，每次 git 操作等满 300 秒，白耗四十多分钟）
+- [ ] 代理端口不写死：`git config --local http.proxy` 由 `check-net.ps1 -Fix` 决定；`scripts/release.ps1` 也不再默认 7897，改成「显式参数 > 系统代理注册表 > 常见端口 > 直连」自动探测
 
 ### 2.7 GitHub Release
 

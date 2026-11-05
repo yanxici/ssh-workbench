@@ -17,12 +17,17 @@ param(
   [Parameter(Mandatory = $true)][string]$Version,
   [string]$Owner = "yanxici",
   [string]$Repo = "ssh-workbench",
-  [string]$Proxy = "http://127.0.0.1:7897",
+  # 空 = 自动探测（读系统代理注册表 + 常见 Clash 端口），探不到就直连。
+  # 之前默认写死 7897，换了机器/换了 Clash 配置端口就整条链路挂掉，见 scripts/check-net.ps1。
+  [string]$Proxy = "",
   [string]$NotesFile = "RELEASE_NOTES.md",
   [switch]$IncludePortable
 )
 
 $ErrorActionPreference = "Stop"
+# 控制台默认 GBK，脚本里全是中文；从 bash / CI 日志读回来就是乱码，先钉成 UTF-8。
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()
+$OutputEncoding = [System.Text.UTF8Encoding]::new()
 
 if (-not $env:GH_TOKEN) {
   Write-Host "缺少 GH_TOKEN 环境变量（git credential fill 可取到系统凭证管理器里的 token）" -ForegroundColor Red
@@ -119,9 +124,9 @@ $headers = @{
 }
 
 # ---- 代理自动探测 ----
-# 默认值是家里机器的 127.0.0.1:7897，换到别的网络环境时那个端口通常没人监听，
-# Invoke-RestMethod 会直接抛「无法连接到远程服务器」。这里先探一下：能连上才用，
-# 探不到就直连 —— 国内直连 api.github.com 有时反而比半死的代理快。
+# 不再写死端口。顺序：-Proxy 显式传入 > 系统代理注册表（Clash 自己写的那个）> 常见端口 > 直连。
+# 为什么这么改：本机从 7897 换到了 7900，写死的那次发版白等了四十多分钟，
+# 报错还是「无法连接到远程服务器」，看不出只是代理没开。
 function Test-ProxyPort([string]$p) {
   if (-not $p) { return $false }
   try {
@@ -133,9 +138,34 @@ function Test-ProxyPort([string]$p) {
   } catch { return $false }
 }
 
-if ($Proxy -and -not (Test-ProxyPort $Proxy)) {
-  Write-Host "代理 $Proxy 不可达，改为直连" -ForegroundColor Yellow
+function Find-Proxy([string]$explicit) {
+  if ($explicit) {
+    if (Test-ProxyPort $explicit) { return $explicit }
+    Write-Host "指定的代理 $explicit 不可达，改为自动探测" -ForegroundColor Yellow
+  }
+  $net = Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings' -ErrorAction SilentlyContinue
+  $candidates = @()
+  if ($net.ProxyEnable -eq 1 -and $net.ProxyServer -match '^(?:https?://)?([^:/]+):(\d+)$') {
+    $candidates += "http://$($Matches[1]):$($Matches[2])"
+  }
+  foreach ($port in @(7897, 7890, 7900, 7891, 10808, 1080)) {
+    $candidates += "http://127.0.0.1:$port"
+  }
+  foreach ($c in $candidates) {
+    if (Test-ProxyPort $c) { return $c }
+  }
+  return ""
+}
+
+# 显式传入的也走同一套校验：端口不通就退回自动探测，不让一个手误的端口把整条链路拖死。
+$resolved = Find-Proxy $Proxy
+if ($resolved) {
+  $Proxy = $resolved
+} elseif ($Proxy) {
+  Write-Host "指定的代理 $Proxy 不可达，也没探测到别的代理，按直连继续。" -ForegroundColor Yellow
   $Proxy = ""
+} else {
+  Write-Host "没探测到可用代理端口。若要走代理，先打开 Clash Verge —— 现在按直连继续。" -ForegroundColor Yellow
 }
 if ($Proxy) {
   Write-Host "使用代理 $Proxy" -ForegroundColor DarkGray
@@ -144,6 +174,28 @@ if ($Proxy) {
   Write-Host "直连 api.github.com" -ForegroundColor DarkGray
   $proxyArgs = @{}
 }
+
+# ---- 上线前真打一次 github.com，别等到上传 80MB 才失败 ----
+# 之前代理端口不对时，整条脚本要跑到上传阶段才报错，而且每次 git 操作都等满 300 秒超时。
+# 这里花最多 20 秒先确认链路，失败直接退出并把「去开 Clash」写在最显眼的位置。
+Write-Host "探测 GitHub 连通性..." -ForegroundColor DarkGray
+$reachable = $false
+try {
+  $probe = Invoke-WebRequest -Uri "https://github.com" -TimeoutSec 20 -UseBasicParsing -MaximumRedirection 0 -ErrorAction Stop @proxyArgs
+  $reachable = $true
+} catch {
+  $code = $null
+  if ($_.Exception.Response) { $code = [int]$_.Exception.Response.StatusCode }
+  if ($code -and $code -lt 500) { $reachable = $true }
+}
+if (-not $reachable) {
+  Write-Host ""
+  Write-Host "GitHub 不可达，发布已中止（还没上传任何东西）。" -ForegroundColor Red
+  Write-Host "  最大概率：Clash Verge 没开，或者节点没选。" -ForegroundColor Yellow
+  Write-Host "  下一步：托盘里打开 Clash → 跑 pwsh -NoProfile -File scripts/check-net.ps1 确认 → 再发版。" -ForegroundColor Yellow
+  exit 1
+}
+Write-Host "  链路正常" -ForegroundColor Green
 
 Push-Location $root
 $sha = (git rev-parse HEAD).Trim()

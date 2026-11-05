@@ -5,6 +5,20 @@ All notable changes to SSH Workbench will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added（发版前网络自检：`npm run check:net`）
+
+**问题**：本机连 GitHub 完全依赖后台跑着的 Clash Verge，而它的混合端口从老配置的 7897 换成了 7900。端口对不上时症状极具误导性 —— `git push` 每次都等满 300 秒才报 `Connection timed out`，`release.ps1` 报一堆「无法连接到远程服务器」，看起来像 GitHub 挂了或 token 失效。v1.8.1 发版为此白耗四十多分钟。
+
+**改动**：
+
+- 新增 `scripts/check-net.ps1`（`npm run check:net`）：读系统代理注册表 → 探常见 Clash 端口（7897 / 7890 / 7900 / 7891 / 10808 / 1080）→ 真打一次 `github.com` 与 `api.github.com`；探不到可用代理时直接红字提示「先去打开 Clash Verge」，并说明此时重试 `git push` 只会再等 300 秒。`-Fix` 可把探测到的端口写进 `git config --local http.proxy`。
+- `scripts/release.ps1`：`-Proxy` 默认值从写死的 `http://127.0.0.1:7897` 改为空（自动探测），解析顺序「显式参数 > 系统代理注册表 > 常见端口 > 直连」；上传前新增一次 `github.com` 可达性探测，不可达直接退出并提示去开 Clash，不再等到传完 80MB 才失败。
+- `RELEASE_CHECKLIST.md` §2.6：push 前先跑 `check-net.ps1`，示例命令里不再出现写死的 7897。
+
+**实测**：`check-net.ps1` 输出「系统代理开启 → 7900 LISTEN → github.com 200 → 网络就绪」；两个脚本通过 `Parser::ParseFile` 语法校验。
+
 ## [1.8.1] - 2026-11-05
 
 ### Fixed（P0：sz 传输到一半终端被乱码刷屏并中断）
