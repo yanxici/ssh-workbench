@@ -77,7 +77,7 @@ const BackupPanel = lazy(() =>
  *
  * 新版结构（严格按视觉规范落地）：
  *   TitleBar 44px（品牌绿底）
- *   ├─ ActivityBar 48px │ SideNav 280px（可折叠）│ MainWorkspace（终端）│ CommandRail 380px（可折叠）
+ *   ├─ ActivityBar 48px │ SideNav 280px（可折叠）│ MainWorkspace（终端）│ CommandRail 400px（可折叠）
  *   StatusBar 28px
  *
  * 与旧版的差别不只是配色：旧版把「连接 / 文件树 / 命令」三栏同时铺开，
