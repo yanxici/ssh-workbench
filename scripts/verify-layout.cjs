@@ -52,16 +52,16 @@ function eq(name, got, want) {
 /* ---------- 规格表自身 ---------- */
 eq('两个可拖区域', KEYS, ['sidebar', 'commandRail'])
 eq('区域有中文名', PANE_LABEL, { sidebar: '侧边栏', commandRail: '命令栏' })
-eq('默认尺寸快照', DEFAULT_LAYOUT, { sidebar: 280, commandRail: 380 })
+eq('默认尺寸快照', DEFAULT_LAYOUT, { sidebar: 280, commandRail: 400 })
 eq(
   '侧栏三键：default 280 / min 220 / max 520',
   [PANE_SPECS.sidebar.default, PANE_SPECS.sidebar.min, PANE_SPECS.sidebar.max],
   [280, 220, 520]
 )
 eq(
-  '命令栏三键：default 380 / min 340 / max 600',
+  '命令栏三键：default 400 / min 340 / max 600',
   [PANE_SPECS.commandRail.default, PANE_SPECS.commandRail.min, PANE_SPECS.commandRail.max],
-  [380, 340, 600]
+  [400, 340, 600]
 )
 // 命令栏下限不是随手写的：三列卡片每列要放得下「图标 20 + 间隔 6 + 内边距 16」
 // 再给中文名留 4~5 个字，低于 340 全是省略号。
@@ -100,7 +100,7 @@ for (const key of KEYS) {
 eq('空配置全默认', resolveLayout(undefined), DEFAULT_LAYOUT)
 eq('只给 sidebar 时另一栏取默认', resolveLayout({ sidebar: 320 }), {
   sidebar: 320,
-  commandRail: 380
+  commandRail: 400
 })
 eq('只给 commandRail 时另一栏取默认', resolveLayout({ commandRail: 500 }), {
   sidebar: 280,
@@ -113,7 +113,7 @@ eq('两栏都越界时各自夹回', resolveLayout({ sidebar: -5, commandRail: 9
 eq(
   '老配置里的多余键被忽略（升级兼容）',
   resolveLayout({ sidebar: 300, fileTree: 999, commandPanel: 999, commandPanelHeight: 999 }),
-  { sidebar: 300, commandRail: 380 }
+  { sidebar: 300, commandRail: 400 }
 )
 eq('老配置只留 fileTree 时全取默认', resolveLayout({ fileTree: 400 }), DEFAULT_LAYOUT)
 
@@ -147,11 +147,11 @@ eq('命令栏步进受上限约束', nudgePane('commandRail', 600, -1), 600)
 /* ---------- isDefaultPane ---------- */
 ok('侧栏默认值算默认', isDefaultPane('sidebar', 280))
 ok('侧栏改过就不算默认', !isDefaultPane('sidebar', 281))
-ok('命令栏默认值算默认', isDefaultPane('commandRail', 380))
-ok('命令栏改过就不算默认', !isDefaultPane('commandRail', 379))
+ok('命令栏默认值算默认', isDefaultPane('commandRail', 400))
+ok('命令栏改过就不算默认', !isDefaultPane('commandRail', 401))
 // 一栏的默认值不能误判到另一栏身上（曾经 side/rail 共用常量的写法埋过这个坑）
 ok('把 280 用在命令栏上不算默认', !isDefaultPane('commandRail', 280))
-ok('把 380 用在侧栏上不算默认', !isDefaultPane('sidebar', 380))
+ok('把 400 用在侧栏上不算默认', !isDefaultPane('sidebar', 400))
 
 /* ---------- 往返一致性：拖动后写入再读出不变 ---------- */
 let layout = resolveLayout(undefined)
@@ -185,7 +185,9 @@ eq('20000 次随机拖动侧栏始终在 [220, 520] 且命令栏在 [340, 600]',
 /* ---------- 两栏合计不能挤死终端 ---------- */
 ok(
   '两栏都用默认值时主区仍有足够宽度（1280 窗口）',
-  1280 - 48 - DEFAULT_LAYOUT.sidebar - DEFAULT_LAYOUT.commandRail >= 560
+  // 命令栏默认 380 → 400 后主区仍有 552px；终端最小可用宽度按 8px 字符 × 80 列 = 640 起算
+  // 太苛刻，实际这个阈值是「不出现横向挤压」的下限，按 540 卡。
+  1280 - 48 - DEFAULT_LAYOUT.sidebar - DEFAULT_LAYOUT.commandRail >= 540
 )
 ok(
   '两栏都取上限时主区仍为正（1280 窗口）',

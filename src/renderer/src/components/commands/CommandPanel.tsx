@@ -1,6 +1,5 @@
-import { useMemo, useState, type DragEvent } from 'react'
+import { useEffect, useMemo, useRef, useState, type DragEvent } from 'react'
 import {
-  AlertTriangle,
   ArrowDown,
   ArrowDownToLine,
   ArrowUp,
@@ -37,8 +36,8 @@ import { cn } from '@/lib/utils'
 import { moveItem, placeRelative } from '@/lib/groupOrder'
 import { isCommandDrag } from '@/lib/commandDrag'
 import { searchCommands, type Scope, type SortMode } from '@/lib/commandSearch'
-import { DynamicIcon } from '@/lib/icons'
-import { Highlight } from './Highlight'
+import { wallColumns, wallStep, wrapIndex } from '@/lib/commandWall'
+import { CommandCard } from './CommandCard'
 import {
   ConfirmDialog,
   ContextMenu,
@@ -66,13 +65,12 @@ const SORT_LABEL: Record<SortMode, string> = {
 }
 
 /**
- * 命令墙的列数（用户明确要求「一行三个命令，这样好找一点」）。
+ * 命令墙的列数与色条规则收在 lib/commandWall.ts（纯函数，可单测）。
  *
- * 固定而不是自适应：找命令靠的是稳定的空间记忆（「磁盘那个在第三行右边」），
- * 列数一变，肌肉记忆和口头描述就都失效了。所以宁可卡片自己变宽变窄，
- * 也不让列数变。键盘 ↑↓ 的步长也要跟着它，否则会跟视觉错位。
+ * 历史结论「写死 3 列保空间记忆」的前提是用户从不拖宽度；实际命令栏被拖到过
+ * 340 下限，写死 3 列只会让每张卡缩到 60px、名字全变省略号。现在按容器宽度
+ * 在 3 / 4 / 5 列之间切换，键盘 ↑↓ 的步长同步取实际列数。
  */
-const WALL_COLS = 3
 
 /**
  * 空数组哨兵（模块级常量）。
@@ -135,6 +133,27 @@ export function CommandPanel({
 
   const searching = keyword.trim().length > 0
   const filtered = scope.kind !== 'all' || searching || sort !== 'smart'
+
+  /**
+   * 命令墙宽度 → 列数。
+   *
+   * 用 ResizeObserver 而不是监听 window resize：命令栏宽度由分隔条拖动决定，
+   * 窗口尺寸不变时它照样会变。首帧宽度为 0，wallColumns 回退 4 列，
+   * 不会出现「先渲染窄列再跳宽」的闪动。
+   */
+  const wallRef = useRef<HTMLDivElement>(null)
+  const [wallWidth, setWallWidth] = useState(0)
+  useEffect(() => {
+    const el = wallRef.current
+    if (!el) return
+    setWallWidth(el.clientWidth)
+    const ro = new ResizeObserver((entries) => {
+      for (const entry of entries) setWallWidth(entry.contentRect.width)
+    })
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
+  const cols = wallColumns(wallWidth)
 
   /**
    * 结果集：
@@ -371,9 +390,8 @@ export function CommandPanel({
   /**
    * 键盘导航：方向键选、↵ 执行、Ctrl+↵ 编辑、Esc 清空搜索。
    *
-   * 网格改成固定三列之后，方向键的语义也得跟着变：
-   * ↑↓ 走一行（±3 格），←→ 走一格。原来只有 ↑↓ 且步长是 1，
-   * 视觉上明明是横排三个按钮，按一下 ↓ 却只跳到右边那个 —— 手感是错的。
+   * ↑↓ 走一行，步长 = 实际列数（cols 由容器宽度算出，见 lib/commandWall.ts）；
+   * ←→ 走一格。步长写死过 3，列数一变光标就跳错位置。
    */
   const onKeyDown = (e: React.KeyboardEvent): void => {
     // 输入法组合态：Enter 是确认候选词，不是「执行」。事件从搜索框冒泡上来，必须在这里挡。
@@ -385,18 +403,11 @@ export function CommandPanel({
       }
       return
     }
-    const stepOf = (key: string): number => {
-      if (key === 'ArrowDown') return WALL_COLS
-      if (key === 'ArrowUp') return -WALL_COLS
-      if (key === 'ArrowRight') return 1
-      if (key === 'ArrowLeft') return -1
-      return 0
-    }
-    const step = stepOf(e.key)
+    const step = wallStep(e.key, cols)
     if (step !== 0) {
       e.preventDefault()
       if (flat.length === 0) return
-      setCursor((c) => (c + step + flat.length * WALL_COLS) % flat.length)
+      setCursor((c) => wrapIndex(c, step, flat.length))
       return
     }
     if (e.key === 'Enter' && activeItem) {
@@ -546,6 +557,7 @@ export function CommandPanel({
 
       {/* ---------- 列表 ---------- */}
       <div
+        ref={wallRef}
         className={cn(
           'scroll-thin min-h-0 flex-1 pb-1',
           horizontal ? 'flex gap-2 overflow-x-auto px-2 pt-0.5' : 'overflow-y-auto px-1.5'
@@ -616,7 +628,11 @@ export function CommandPanel({
                    * 只有竖排需要吸顶；横排是每分组一列，列头本来就一直在。
                    */
                   !horizontal &&
-                    'sticky top-0 z-10 -mx-0.5 rounded-md bg-panel px-0.5 pb-0.5 pt-1'
+                    /*
+                     * 吸顶条压到 20px：展开态原来占 26px，10 个分组就是 60px，
+                     * 等于白扔掉一行半卡片。名称和数量留在外面，其余 hover 才出。
+                     */
+                    'sticky top-0 z-10 -mx-0.5 rounded bg-panel px-0.5 pb-px pt-px'
                 )}
                 draggable={!searching}
                 onDragStart={(e) => {
@@ -633,17 +649,17 @@ export function CommandPanel({
               >
                 {!searching && (
                   <GripVertical
-                    size={11}
+                    size={9}
                     className="-mr-1 shrink-0 cursor-grab text-ink-3/40 opacity-0 transition-opacity group-hover/hdr:opacity-100"
                   />
                 )}
                 <button
-                  className="flex min-w-0 flex-1 cursor-default items-center gap-1 rounded-md px-1.5 py-1 text-2xs font-medium text-ink-2 transition-colors hover:bg-hover hover:text-ink"
+                  className="flex min-w-0 flex-1 cursor-default items-center gap-1 rounded px-1 py-0 text-3xs font-medium text-ink-2 transition-colors hover:bg-hover hover:text-ink"
                   onClick={() => toggleGroup(group)}
                 >
-                  {isCollapsed ? <ChevronRight size={11} /> : <ChevronDown size={11} />}
+                  {isCollapsed ? <ChevronRight size={9} /> : <ChevronDown size={9} />}
                   <span className="truncate">{group}</span>
-                  <span className="font-mono text-2xs tabular-nums text-ink-3/70">
+                  <span className="font-mono text-3xs tabular-nums text-ink-3/70">
                     {items.length}
                   </span>
                 </button>
@@ -674,28 +690,45 @@ export function CommandPanel({
 
               {!isCollapsed && (
                 /*
-                 * 堆叠按钮墙：命令按分组堆成一片按钮，不用滚长列表去翻。
-                 * 每块只显示「图标 + 名称」，命令行作为辨识辅助，热度与完整命令放到 title，
-                 * 因为目标是「一眼扫到、直接点」，而不是逐行读详情。
+                 * 命令墙：列数由容器宽度决定（3 / 4 / 5 列，见 lib/commandWall.ts）。
                  *
-                 * 列数固定 WALL_COLS = 3，理由见常量定义处（空间记忆 + 键盘步长一致）。
+                 * 卡片里只剩名字（最多两行），命令行与命中原因交给悬停浮层；
+                 * 状态（需确认 / 收藏 / 有变量）压缩成左边缘 2px 色条。
+                 * 一张卡固定 40px 高 —— 行是齐的，扫视时不会忽高忽低。
                  */
                 <div
                   className="grid gap-1 pb-1"
-                  style={{ gridTemplateColumns: `repeat(${WALL_COLS}, minmax(0, 1fr))` }}
+                  style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` }}
                 >
                   {items.map((c) => {
                     const idx = flatIndexById.get(c.id) ?? -1
-                    const isActive = idx >= 0 && idx === cursor
                     const pinned = pinnedSet.has(c.id)
                     const hit = hitInfo.get(c.id)
                     return (
-                      <button
+                      <CommandCard
                         key={c.id}
-                        draggable
-                        data-cmd-id={c.id}
-                        type="button"
+                        command={c}
+                        pinned={pinned}
+                        active={idx >= 0 && idx === cursor}
+                        hit={hit}
+                        /*
+                         * 只有「搜到了、但名字里没有这个字」时才补一行命令片段。
+                         * 否则卡片看不出为什么它在结果里 —— 这是搜索态最难受的点。
+                         */
+                        showCommandLine={searching && !!hit && hit.cmdIndices.length > 0}
+                        dragging={dragId === c.id}
+                        dropTarget={overId === c.id && !!dragId && dragId !== c.id}
+                        onActivate={(e) => {
+                          if (idx >= 0) setCursor(idx)
+                          // Ctrl/⌘ + 单击 = 编辑，普通单击 = 执行
+                          if (e.ctrlKey || e.metaKey) onEdit(c)
+                          else runCommand(c)
+                        }}
+                        onEdit={() => onEdit(c)}
+                        onTogglePin={() => void togglePin(c.id)}
+                        onContextMenu={(e) => openMenu(e, c)}
                         onDragStart={(e) => {
+                          if (idx >= 0) setCursor(idx)
                           setDragId(c.id)
                           // 沿用终端区可识别的 MIME；额外的 text/plain 供 Electron 判定为可拖放
                           e.dataTransfer.setData('application/x-ssh-command', c.id)
@@ -730,110 +763,7 @@ export function CommandPanel({
                           setDragId(null)
                           setOverId(null)
                         }}
-                        onClick={(e) => {
-                          // Ctrl/⌘ + 单击 = 编辑，普通单击 = 执行
-                          if (e.ctrlKey || e.metaKey) onEdit(c)
-                          else runCommand(c)
-                        }}
-                        onContextMenu={(e) => openMenu(e, c)}
-                        onMouseEnter={() => idx >= 0 && setCursor(idx)}
-                        title={`${c.name}\n${c.command}${c.useCount > 0 ? `\n用过 ${c.useCount} 次` : ''}\n\n单击执行 · Ctrl+单击编辑 · 右键更多`}
-                        className={cn(
-                          'group relative flex min-w-0 cursor-default flex-col gap-1 rounded-lg border px-2 py-1.5 text-left transition-colors duration-150',
-                          /*
-                           * 常态是「灰底上的白按钮」，不是「浅灰按钮压在浅灰底上」。
-                           * 侧栏底色 bg-panel（#f8f9fa），卡片若用 bg-raised（#fafafa）
-                           * 两层只差 1.5%，126 个按钮会糊成一片没有边界；白色 + 实边框
-                           * 才读得出「这是一堆可以按的东西」。
-                           */
-                          isActive
-                            ? 'border-accent/50 bg-select'
-                            : 'border-edge bg-app hover:bg-hover',
-                          overId === c.id && dragId && dragId !== c.id && 'border-accent/60',
-                          dragId === c.id && 'opacity-40'
-                        )}
-                      >
-                        {/*
-                         * 名称行：图标 + 名字（右侧留出 24px 给角标/操作槽）。
-                         * 必须带 w-full：与下面命令行同一个坑 —— button 的 UA 样式是
-                         * align-items:flex-start，交叉轴上子项宽度由内容决定，行内那个
-                         * flex-1 truncate 拿不到可收缩的宽度基准，长命令名会撑出卡片
-                         * （129 张里 92 张中招，最宽溢出 123px）。
-                         */}
-                        <span className="flex w-full min-w-0 items-center gap-1.5">
-                          <span
-                            className={cn(
-                              'flex h-5 w-5 shrink-0 items-center justify-center rounded-md border',
-                              isActive ? 'border-accent/40 bg-app' : 'border-edge-soft bg-raised'
-                            )}
-                            style={{ color: c.color ?? 'rgb(var(--c-ink-2))' }}
-                          >
-                            <DynamicIcon name={c.icon} size={12} />
-                          </span>
-                          <span className="min-w-0 flex-1 truncate pr-6 text-xs font-medium text-ink">
-                            <Highlight text={c.name} indices={hit?.nameIndices ?? []} />
-                          </span>
-                        </span>
-
-                        {/*
-                         * 命令行：单行省略，作为「这是干什么的」的辨识辅助。
-                         * 必须带 w-full：button 的 UA 样式是 align-items:flex-start，
-                         * 交叉轴上子项宽度由内容决定，truncate 的 overflow:hidden
-                         * 不参与收缩 —— 长命令会直接撑出卡片右边界（128 张里 82 张中招）。
-                         * w-full 把宽度钉在卡片内容宽，truncate 才真正生效。
-                         */}
-                        <span className="w-full min-w-0 truncate font-mono text-3xs leading-tight text-ink-3">
-                          <Highlight text={c.command} indices={hit?.cmdIndices ?? []} />
-                        </span>
-
-                        {/*
-                         * 右上角一个槽，两种内容交叉淡入：
-                         * 平时显示角标（收藏 / 需确认 / 有变量），悬停显示操作（收藏 / 编辑）。
-                         * 原来是「角标在名称行尾 + 操作条绝对定位 top-1 right-1」，
-                         * 悬停时两个东西正正压在同一个位置，操作按钮盖在 AlertTriangle 上。
-                         * 现在两者同槽互斥，只改 opacity，不产生位移。
-                         */}
-                        <span className="pointer-events-none absolute right-1 top-1 flex items-center gap-0.5">
-                          <span className="flex items-center gap-0.5 transition-opacity duration-150 group-hover:opacity-0">
-                            {pinned && <Pin size={9} className="text-warning" />}
-                            {c.confirmRequired && (
-                              <AlertTriangle size={9} className="text-warning" />
-                            )}
-                            {c.variables.length > 0 && (
-                              <Braces size={9} className="text-accent/80" />
-                            )}
-                          </span>
-                          <span className="absolute right-0 top-0 flex items-center gap-0.5 opacity-0 transition-opacity duration-150 group-hover:pointer-events-auto group-hover:opacity-100">
-                            <span
-                              role="button"
-                              tabIndex={-1}
-                              className={cn(
-                                'flex h-[18px] w-[18px] items-center justify-center rounded text-ink-3 hover:text-warning',
-                                pinned && 'text-warning'
-                              )}
-                              title={pinned ? '取消收藏' : '收藏置顶'}
-                              onClick={(e) => {
-                                e.stopPropagation()
-                                void togglePin(c.id)
-                              }}
-                            >
-                              <Pin size={10} />
-                            </span>
-                            <span
-                              role="button"
-                              tabIndex={-1}
-                              className="flex h-[18px] w-[18px] items-center justify-center rounded text-ink-3 hover:text-ink"
-                              title="编辑此命令"
-                              onClick={(e) => {
-                                e.stopPropagation()
-                                onEdit(c)
-                              }}
-                            >
-                              <Pencil size={10} />
-                            </span>
-                          </span>
-                        </span>
-                      </button>
+                      />
                     )
                   })}
                 </div>

@@ -36,14 +36,15 @@ export interface PaneSpec {
  * 加分组缩进和右侧的状态点），250 时 `root@192.168.100.120` 会被截断成
  * `root@192.168.100.…`，一行里认不出是哪台设备。
  *
- * 命令栏默认 380 / 下限 340：命令墙固定一行三个按钮（这是用户明确要的
- * 「一眼扫到三列」），卡片里最窄要放得下「图标 20 + 间隔 6 + 圆角内边距 16」，
- * 再给中文名留 4~5 个字，三列合计不能低于 330 左右，否则每个名字都是省略号。
+ * 命令栏默认 400 / 下限 340：命令墙按容器宽度在 3 / 4 / 5 列之间切换
+ * （见 lib/commandWall.ts）。卡片不再带图标方块和命令行，只剩两行名字，
+ * 所以 400 宽下 4 列每张卡仍有 87px，能放下 8~10 个汉字、129 条命令里只有
+ * 一条超长名字要省略。默认值从 380 提到 400 就是为了这条命令。
  * 上限 600：再宽不如直接收起命令栏，把宽度还给终端。
  */
 export const PANE_SPECS: Record<PaneKey, PaneSpec> = {
   sidebar: { default: 280, min: 220, max: 520, axis: 'x', sign: 1 },
-  commandRail: { default: 380, min: 340, max: 600, axis: 'x', sign: -1 }
+  commandRail: { default: 400, min: 340, max: 600, axis: 'x', sign: -1 }
 }
 
 export const DEFAULT_LAYOUT: Required<LayoutSizes> = {

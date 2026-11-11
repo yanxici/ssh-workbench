@@ -14,8 +14,8 @@ import { useLayoutStore } from '@/stores/layoutStore'
  * 连接列表的滚动位置还在（keep-alive 保住了），但注意力已经断了。
  * 两块内容本来就是并行的：左边看「连到哪」，右边看「执行什么」。
  *
- * 宽度下限 340（见 lib/layout.ts 的 PANE_SPECS）：命令墙固定一行三个按钮，
- * 低于这个宽度每个名字都会被压成省略号，反而更难扫。
+ * 宽度下限 340（见 lib/layout.ts 的 PANE_SPECS）：低于 360 时命令墙自动退到
+ * 3 列，每张卡仍有 100px 左右，名字依然可读；再窄就只能靠悬停浮层认命令了。
  */
 export function CommandRail({
   width,
