@@ -45,12 +45,47 @@ const outDir = path.join(tmp, 'out')
 fs.writeFileSync(zipPath, zip)
 fs.mkdirSync(outDir)
 
+/**
+ * 找可用的 Python 解释器。
+ *
+ * 不能写死 'python'：Windows 上从 Microsoft Store 装的 python 常只留一个别名
+ * 占位符，执行时弹商店并抛 ENOENT；真正装好的是 `py` 启动器。反过来在 Linux
+ * 上通常只有 python3。逐个试到能打印版本为止。
+ */
+function findPython() {
+  const { execFileSync } = require('node:child_process')
+  const candidates =
+    process.platform === 'win32'
+      ? [
+          { cmd: 'py', args: ['-3'] },
+          { cmd: 'python', args: [] },
+          { cmd: 'python3', args: [] }
+        ]
+      : [
+          { cmd: 'python3', args: [] },
+          { cmd: 'python', args: [] }
+        ]
+  for (const c of candidates) {
+    try {
+      execFileSync(c.cmd, [...c.args, '--version'], { encoding: 'utf8', stdio: 'pipe' })
+      return c
+    } catch {
+      /* 试下一个 */
+    }
+  }
+  return null
+}
+
+const PYTHON = findPython()
+
 try {
+  if (!PYTHON) throw new Error('本机没有可用的 Python 解释器（试过 py / python / python3）')
   // 注意：中文 Windows 上 Python 的 stdout 默认走 GBK，非 ASCII 文件名会被替换成 '?'
   // 导致断言假失败。这里强制 Python 以 UTF-8 写 stdout，才能校验真实文件名。
   const py = run(
-    'python',
+    PYTHON.cmd,
     [
+      ...PYTHON.args,
       '-c',
       `import zipfile,sys,io;sys.stdout=io.TextIOWrapper(sys.stdout.buffer,encoding="utf-8",errors="replace");z=zipfile.ZipFile(sys.argv[1]);z.extractall(sys.argv[2]);print(z.namelist());print(z.testzip())`,
       zipPath,

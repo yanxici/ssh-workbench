@@ -486,6 +486,19 @@ v1.6.1 收敛成：
 
 ### 7.0 版本更新记录
 
+#### v1.9.0（2026-11-11）
+
+| 分类 | 内容 |
+|---|---|
+| **界面（命令栏）** | **列数跟栏宽走**。`src/renderer/src/lib/commandWall.ts` 收口全部判据：`wallColumns(width)` 按 `< 360` / `< 480` / 其余分三 / 四 / 五列，`wallCardWidth` 扣掉 `WALL_PAD_X`(12) 与 `WALL_GAP`(4) 后均分，`wallStep` 的 ↑↓ 取实际列数、←→ 恒为 1。旧实现把 `WALL_COLS` 写死为 3，注释理由是「保空间记忆」，但前提是用户从不拖宽度 —— 实际被拖到过 340 下限，写死三列等于惩罚用户。代价是拖动跨越阈值时列数跳一次 |
+| **界面（卡片）** | 去掉图标方块与命令行：名字占满整卡宽、最多两行；状态压缩成左边缘 2px 色条，优先级 `confirm` > `pinned` > `vars` > `none`。卡片高度 47~51px（且随名字长短跳动）→ 统一 **40px**，比改动前更矮。默认栏宽 380 → **400** |
+| **界面（提示层）** | 原生 `title` 换成自绘浮层 `CommandCardTip.tsx`：0 延迟、命令等宽字体自动换行、贴边自动翻转。原生提示约 1 秒延迟、不能排版、不能高亮命中字 |
+| **界面（搜索）** | 卡片里没有命令行了，搜 `sqlite3` 出来的卡看不出为什么命中 —— 命中命令字符索引非空时临时补一行 10px 命令片段并高亮。分组头 26px → 20px（10 组省 60px，约多放一行半卡片），拖拽把手与增删改按钮改 hover 出现 |
+| **量化** | 129 条命令里被截断的从 **93 条**降到 **0~1 条**；名字可用宽度 54px → 70~81px；每行 4.9 字单行 → 7 字两行 |
+| **范围** | 只改右侧命令栏。Ctrl+K 命令中心与底部横排（`layout=horizontal`）保持原样 |
+| **回归** | 新增 `verify-command-wall.cjs`（37 项，断言刻意选「旧实现必红」的判据，如四列时下键步长必须是 4 而非写死的 3）与 `perf-command-wall.cjs`（20 项，真实应用 + 完整 IPC，渲染真实 129 条命令，340 / 400 / 600 三档宽度验列数与等高）。`verify-layout.cjs` 默认栏宽快照跟到 400 |
+| **发布链路** | 新增 `verify-docs-sync.cjs`（`npm run test:docs`）：README `Current:` / README.zh-CN `当前版本：` / CHANGELOG 本版条目 / 两份 README「最近更新」**首条**必须是本版且正文 ≥ 60 字符 / `release-notes-v<ver>.md` ≥ 200 字符。起因：v1.9.0 发出后 GitHub 上 README 还写 v1.8.1、CHANGELOG 没有 1.9.0 —— 发版日志有 CI 硬门禁所以从没漏过，README / CHANGELOG 只是 checklist 里的 checkbox，等于没有 |
+
 #### v1.6.3（2026-10-29）
 
 | 分类 | 内容 |
@@ -733,6 +746,10 @@ node scripts/verify-dircache.cjs         # TTL 缓存 / stale-while-revalidate /
 node scripts/verify-upload-folder.cjs    # 上传文件夹：保留目录名 / 铺平 / 空目录 / 扫描统计（v1.6.0，22 项）
 node scripts/verify-hostkey.cjs          # 主机指纹格式 / 旧格式兼容 / 不误判（v1.6.0，14 项）
 node scripts/verify-repository-split.cjs # 数据层行为：凭据三态 / 分组默认 / 历史上限 / 超时钳制（v1.6.3，48 项）
+node scripts/verify-release-notes.cjs    # 发版日志链路：CI 不得用 --notes 占位符 / 必须 --notes-file / 本版日志长度（v1.8.1）
+node scripts/verify-docs-sync.cjs        # 文档同步：README 当前版本 / CHANGELOG 本版条目 / 最近更新首条（v1.9.0，6 项）
+node scripts/verify-command-wall.cjs     # 命令栏列数跟栏宽走 / 卡片宽度 / 方向键步长（v1.9.0，37 项）
+node scripts/perf-command-wall.cjs       # 真实 129 条命令渲染：三档宽度列数 / 全部等高 40px / 截断 ≤1 条（v1.9.0，20 项）
 for f in scripts/verify-zmodem*.cjs; do node "$f"; done  # ZMODEM 协议 / 解码 / 渲染层 / 端到端（P4-c，4 个脚本）
 ```
 

@@ -19,7 +19,7 @@ A lightweight desktop SSH client with a built-in workbench for embedded-device t
 **Command panel**
 - One-click saved commands with `{{variables}}`, dangerous-command confirmation, groups, drag-and-drop, search, favorites and history
 - JSON import / export
-- Always-on command rail on the right (fixed 3-column button wall, `Ctrl+Alt+B` to toggle)
+- Always-on command rail on the right (`Ctrl+Alt+B` to toggle): column count follows the pane width — 3 columns below 360 px, 4 below 480 px, 5 above — with two-line labels, no per-card icon or command line, and a 2 px accent strip (needs confirmation > pinned > has variables > plain). Arrow keys step by the real column count; hover shows the full command in a self-drawn tooltip
 - Command Center (`Ctrl+K`): fuzzy search with Chinese/English synonyms, usage-based ranking, full keyboard control, scope filtering (all / recent / most used / favorites)
 - Group fields are searchable comboboxes: the full list shows up on open, typing filters it, and a brand-new group name can be created on the spot
 
@@ -95,9 +95,10 @@ Architecture, directory layout and roadmap (Chinese): [DESIGN.md](./DESIGN.md)
 
 ## Version
 
-Current: **v1.8.1**
+Current: **v1.9.0**
 
 Recent updates:
+- **v1.9.0** — command rail layout only. Columns now follow the pane width (3 / 4 / 5) instead of a hardcoded 3, so at the default 400 px width 4 columns fit and 129 saved commands no longer truncate: the old fixed layout clipped 93 of them to 4–6 characters. Cards drop the icon square and the command line so the name gets the full card width across two lines, and the state collapses to a 2 px accent strip (needs confirmation > pinned > has variables > plain); the full command moved into a zero-delay self-drawn tooltip (the native `title` had a ~1 s delay and could not wrap or highlight). Card height is a uniform 40 px — shorter than before. Arrow-key step now equals the real column count, so ↓ moves a row instead of landing in the adjacent column
 - **v1.8.1** — ZMODEM both directions. Downloads: `sz` no longer floods the terminal with protocol bytes and stalls mid-file (the receiver never ACKed ZCRCW; one unparseable frame aborted the whole session; ZRPOS resume had no landing path). Uploads: `rz` no longer sits at 0 bytes (the library waits for a ZSINIT ACK that never arrives, with no timeout), no longer kills the session on a late ZACK after a finished file, and no longer freezes the renderer (chunked sends with yields, 20 s timeouts on every wait). Verified by 5 new scenarios driving a real `Zmodem.Session.Receive()` peer
 - **v1.8.0** — IME composition guard across 13 Enter handlers (pinyin Enter ran half-typed commands), StatusBar transfer subscription collapsed to three scalar selectors, batch shortcut-conflict reset
 - **v1.6.8** — CI gate split into two explicit steps: `typecheck + 41 verify scripts` and `UI e2e` (with retry). The 41 were previously covered only indirectly through a `package.json` chain, so editing that script silently changed the gate

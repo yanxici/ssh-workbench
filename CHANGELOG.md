@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.9.0] - 2026-11-11
+
+### Changed（命令栏：列数跟栏宽走，名字不再被截断）
+
+**问题**：右侧命令栏写死三列。默认 380px 栏宽下每张卡只有 117px，去掉图标方块（约 28px）、角标槽（24px）和命令行之后，名字只剩 54px —— 每行 4.9 个字、单行截断。用户库里 129 条命令，**93 条**只能看到前 4~6 个字，剩下全靠逐个悬停确认。而命令栏本身是可拖拽的，用户实际把它拖到过 340 的下限，写死三列在窄栏里只会让每张卡缩到 60px。
+
+**改动**：
+
+- `src/renderer/src/lib/commandWall.ts`（新增，纯函数，便于单测）：`wallColumns(width)` 按宽度分档 —— `< 360` 三列、`< 480` 四列、其余五列；`wallCardWidth` 扣掉 `WALL_PAD_X`(12) 与 `WALL_GAP`(4) 后均分；`wallStep` 的 ↑↓ 取实际列数、←→ 恒为 1。
+- 卡片去掉图标方块与命令行：名字占满整卡宽、最多两行；状态压缩成左边缘 2px 色条，优先级 `confirm` > `pinned` > `vars` > `none`。卡片高度从 47~51px（且随名字长短跳动）统一到 **40px**。
+- 原生 `title` 提示换成自绘浮层（`CommandCardTip.tsx`）：0 延迟、命令等宽字体自动换行、贴边自动翻转。原生提示约 1 秒延迟、不能排版、不能高亮命中字。
+- 搜索只在命中命令文本时临时补一行 10px 命令片段并高亮命中字符 —— 卡片里已经没有命令行了，搜 `sqlite3` 出来的卡原本看不出为什么命中。
+- 分组头 26px 降到 20px（10 个分组省 60px，约多放一行半卡片）；拖拽把手与新建 / 重命名 / 删除按钮改成 hover 才出现。
+- 默认栏宽 380 提到 **400**：唯一超长的「同步封禁场站代码（代码需上传）」在 400 宽下也能显示完整。
+
+**范围**：只改右侧命令栏。Ctrl+K 命令中心（搜索 + 列表的信息密集界面）与底部横排（`layout=horizontal`）保持原样。
+
+**实测**：`verify-command-wall.cjs` 37 通过 / 0 失败（新增）、`perf-command-wall.cjs` 20 通过 / 0 失败（新增，真实应用 + 完整 IPC，渲染真实 129 条命令：340 / 400 / 600 三档宽度列数正确、全部等高 40px、截断不超过 1 条）、`verify-layout.cjs` 77 通过 / 0 失败。全量 `test:verify` 47 通过 / 0 失败；tsc + eslint + electron-vite build 全绿。压测前后 `commands.json` 的 sha256 未变，129 条命令零影响。
+
 ### Added（发版前网络自检：`npm run check:net`）
 
 **问题**：本机连 GitHub 完全依赖后台跑着的 Clash Verge，而它的混合端口从老配置的 7897 换成了 7900。端口对不上时症状极具误导性 —— `git push` 每次都等满 300 秒才报 `Connection timed out`，`release.ps1` 报一堆「无法连接到远程服务器」，看起来像 GitHub 挂了或 token 失效。v1.8.1 发版为此白耗四十多分钟。
@@ -18,6 +37,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `RELEASE_CHECKLIST.md` §2.6：push 前先跑 `check-net.ps1`，示例命令里不再出现写死的 7897。
 
 **实测**：`check-net.ps1` 输出「系统代理开启 → 7900 LISTEN → github.com 200 → 网络就绪」；两个脚本通过 `Parser::ParseFile` 语法校验。
+
+### Added（文档同步门禁：`npm run test:docs`）
+
+**问题**：v1.9.0 已经发到 GitHub，README 上写的还是 `Current: **v1.8.1**`，CHANGELOG 里根本没有 1.9.0 这一条。代码、tag、Release 日志全对，唯独「人打开仓库第一眼看到的两处」停在上一版。
+
+**根因**：流程不对称。`release-notes-v<ver>.md` 有 CI 硬门禁（`verify-release-notes.cjs` + `release.yml` 里缺文件直接 `exit 1`），所以它从没漏过；README / CHANGELOG 只是 `RELEASE_CHECKLIST.md` §2.3 里的一个 checkbox，没有任何脚本判它 —— **一个只在 checklist 里存在的步骤，等价于不存在**。
+
+**改动**：
+
+- 新增 `scripts/verify-docs-sync.cjs`（`npm run test:docs`）六条判据：README 的 `Current:`、README.zh-CN 的 `当前版本：`、CHANGELOG 的 `## [<ver>] - YYYY-MM-DD`、两份 README 的「最近更新 / Recent updates」**第一条**必须是本版且正文 ≥ 60 字符、`release-notes-v<ver>.md` 存在且 ≥ 200 字符。
+- 判「第一条」而不是「包含」：只判包含的话，把新条目追加到列表末尾也能过，但读者看到的第一条还是上一版 —— 顺序本身就是内容的一部分。
+- 全部按 `/\r?\n/` 切行并去掉行尾 `\r`：仓库里这些 md 都是 CRLF，用 `\n` 切会把 `\r` 留在行尾，正则静默不匹配（v1.8.1 那轮 IME 批量替换踩过同一个坑）。
+- 已接入 `package.json` 的 `test:verify` 链路，与其余 51 项 verify 一起跑。
+
+**实测**：在修复前的仓库状态上跑，5 项 FAIL / 1 项 PASS（`release-notes-v1.9.0.md` 存在）—— 判据确实在「文档没同步」时变红，不是写完文档才成立的假门禁。
+
 
 ## [1.8.1] - 2026-11-05
 

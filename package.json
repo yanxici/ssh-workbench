@@ -30,6 +30,7 @@
     "test:uploadsession": "node scripts/verify-upload-session.cjs",
     "test:ipc": "electron scripts/verify-ipc-registration.cjs",
     "test:repository": "node scripts/verify-repository-split.cjs",
+    "test:docs": "node scripts/verify-docs-sync.cjs",
     "test:features": "node scripts/verify-hostkey.cjs && node scripts/verify-upload-folder.cjs && node scripts/verify-upload-session.cjs",
     "test:stress": "node scripts/stress-test.js && node scripts/stress-cwd.cjs",
     "test:stress:e2e": "electron scripts/stress-e2e.cjs",

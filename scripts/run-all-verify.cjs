@@ -25,7 +25,15 @@ const SCRIPTS = path.join(ROOT, 'scripts')
 const KNOWN_FAIL = new Set(['verify-cdsync.cjs', 'verify-theme.cjs', 'verify-zmodem.cjs'])
 
 /** 必须在 Electron 里跑的脚本（用到 app / BrowserWindow / ipcMain） */
-const NEEDS_ELECTRON = new Set(['verify-ipc-registration.cjs', 'verify-zmodem-e2e.cjs', 'verify-zmodem-renderer.cjs'])
+const NEEDS_ELECTRON = new Set([
+  'verify-ipc-registration.cjs',
+  'verify-zmodem-e2e.cjs',
+  'verify-zmodem-renderer.cjs',
+  // 本地专用（.gitignore 忽略，只在有公司设备环境时存在），但运行器是按目录扫
+  // 脚本的 —— 机器上有这个文件就会被收录。它 require('electron') 取 app.whenReady，
+  // 用裸 node 跑会直接 `Cannot read properties of undefined (reading 'whenReady')`。
+  'verify-xcmd-import.cjs'
+])
 
 /** 需要先生成 .tsc-verify 编译产物 */
 const NEEDS_TSC = new Set(['verify-zip.cjs'])
