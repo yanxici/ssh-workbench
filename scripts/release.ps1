@@ -36,6 +36,27 @@ if (-not $env:GH_TOKEN) {
 
 $root = Split-Path -Parent $PSScriptRoot
 
+# ---- 硬性校验：文档必须跟版本号同步，否则不发 ----
+# v1.9.0 的教训：包传上去了、tag 打了、Release 日志也有，但 GitHub 上的 README
+# 还写着 v1.8.1、CHANGELOG 里没有 1.9.0 —— 代码全对，唯独人打开仓库第一眼
+# 看到的两处停在上一版。
+#
+# 根因是流程不对称：release-notes 有 CI 硬门禁所以从没漏过，README / CHANGELOG
+# 只是 RELEASE_CHECKLIST 里的 checkbox，没有任何脚本判它。这里把它挪到发布
+# 脚本的必经路径上 —— 打包完才发现文档没写，比发出去才发现便宜得多。
+$docsScript = Join-Path $PSScriptRoot "verify-docs-sync.cjs"
+if (Test-Path $docsScript) {
+  Write-Host "校验文档同步..." -ForegroundColor DarkGray
+  $docsOut = & node $docsScript 2>&1
+  if ($LASTEXITCODE -ne 0) {
+    Write-Host "文档没跟版本号同步，已中止发布：" -ForegroundColor Red
+    $docsOut | Where-Object { $_ -match 'FAIL' } | ForEach-Object { Write-Host "  $_" -ForegroundColor Red }
+    Write-Host "补 README 当前版本 / 最近更新首条 + CHANGELOG 本版条目后重试" -ForegroundColor Yellow
+    exit 1
+  }
+  Write-Host "  文档已同步" -ForegroundColor Green
+}
+
 # ---- 输出目录从 electron-builder.yml 解析，不再硬编码 ----
 # 硬编码 dist-v13 而配置早已切到 dist-v15，每次发版都要手动改脚本，
 # 忘改就报「没有产物」，本身就是事故源。以配置里的 directories.output 为准。

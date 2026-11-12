@@ -182,7 +182,7 @@ npm run test:stress:e2e    # 真实 Electron：30 次连续目录读取
 
 - [ ] `package.json:3` 的 `version` 已 bump
 - [ ] `CHANGELOG.md` 顶部新增本版条目（Fixed / Added / Changed 分类）
-- [ ] `README.md` 与 `README.zh-CN.md` 的「当前版本 / 最近更新」已同步 —— **不要靠肉眼**，跑 `npm run test:docs`（`verify-docs-sync.cjs`）到全绿。v1.9.0 就是这一步只写在清单里没人跑，结果 GitHub 上 README 还写 v1.8.1、CHANGELOG 压根没有 1.9.0
+- [ ] `README.md` 与 `README.zh-CN.md` 的「当前版本 / 最近更新」已同步 —— **不要靠肉眼**，跑 `npm run test:docs`（`verify-docs-sync.cjs`）到全绿。v1.9.0 就是这一步只写在清单里没人跑，结果 GitHub 上 README 还写 v1.8.1、CHANGELOG 压根没有 1.9.0。现在 `release.ps1` 与 CI 都会跑它，红着发不出去
 - [ ] `RELEASE_NOTES.md` 已按本版重写
 - [ ] `DESIGN.md` 目录结构（§3）+ §5 对应小节 + §6 安全表 + §7 路线表 + §7.0 版本更新记录 + §9 已知限制 + §10 自检脚本清单 已补
 - [ ] `USAGE_GUIDE.md` 新功能的使用说明已补（按用户视角写，不写实现细节）
