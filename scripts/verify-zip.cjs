@@ -54,6 +54,10 @@ fs.mkdirSync(outDir)
  */
 function findPython() {
   const { execFileSync } = require('node:child_process')
+  const fs = require('node:fs')
+  const os = require('node:os')
+  const path = require('node:path')
+
   const candidates =
     process.platform === 'win32'
       ? [
@@ -65,9 +69,56 @@ function findPython() {
           { cmd: 'python3', args: [] },
           { cmd: 'python', args: [] }
         ]
+
+  // Windows 上再补一层：直接扫官方安装器的默认目录。
+  // 见过 PATH 上只剩 py.exe 与 Store 别名、而真正解释器在
+  // %LOCALAPPDATA%\Programs\Python\PythonXXX\ 里的情况；也见过该目录里
+  // python.exe 缺失只剩 pythonw.exe 的半残安装。pythonw 没有控制台，
+  // 但只要父进程给了管道就能正常写 stdout，所以一并纳入候选。
+  if (process.platform === 'win32') {
+    const roots = [
+      path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'), 'Programs', 'Python'),
+      'C:\\Python314',
+      'C:\\Python313',
+      'C:\\Python312',
+      'C:\\Python311'
+    ]
+    for (const root of roots) {
+      let dirs = []
+      try {
+        dirs = fs.readdirSync(root)
+      } catch {
+        continue
+      }
+      for (const d of dirs) {
+        for (const exe of ['python.exe', 'pythonw.exe']) {
+          const full = path.join(root, d, exe)
+          try {
+            if (fs.statSync(full).isFile()) candidates.push({ cmd: full, args: [] })
+          } catch {
+            /* 不存在就跳过 */
+          }
+        }
+      }
+      for (const exe of ['python.exe', 'pythonw.exe']) {
+        const full = path.join(root, exe)
+        try {
+          if (fs.statSync(full).isFile()) candidates.push({ cmd: full, args: [] })
+        } catch {
+          /* 同上 */
+        }
+      }
+    }
+  }
+
   for (const c of candidates) {
     try {
-      execFileSync(c.cmd, [...c.args, '--version'], { encoding: 'utf8', stdio: 'pipe' })
+      // 用 -c 探活而不是 --version：pythonw 对 --version 的输出去向不保证，
+      // 而能跑起一行 Python 就说明解释器可用。
+      execFileSync(c.cmd, [...c.args, '-c', 'import sys;sys.exit(0)'], {
+        encoding: 'utf8',
+        stdio: 'pipe'
+      })
       return c
     } catch {
       /* 试下一个 */

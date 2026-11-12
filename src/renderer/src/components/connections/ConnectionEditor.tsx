@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import {
+  AlertTriangle,
   CheckCircle2,
   Loader2,
   FlaskConical,
@@ -7,24 +8,40 @@ import {
   Fingerprint,
   KeyRound,
   Plug,
+  RefreshCw,
   Trash2
 } from 'lucide-react'
 import type {
   AuthType,
+  ConnKind,
   Connection,
   ConnectionInput,
+  SerialCharset,
+  SerialDataBits,
+  SerialFlowControl,
+  SerialNewline,
+  SerialParity,
+  SerialPortInfo,
+  SerialStopBits,
   TestConnectionInput,
   TestConnectionResult
 } from '@shared/types'
+import { describeSerialTarget } from '@shared/serialDisplay'
 import { useConnectionStore } from '@/stores/connectionStore'
 import { useSessionStore } from '@/stores/sessionStore'
 import { useToastStore } from '@/stores/toastStore'
 import { COLORS } from '@/lib/icons'
 import { cn } from '@/lib/utils'
 import { call } from '@/lib/ipc'
-import { Combobox, Field, Modal } from '@/components/ui'
+import { Combobox, Field, Modal, Toggle } from '@/components/ui'
 
 interface FormState {
+  /**
+   * 连接类型。SSH 与串口共用同一条 Connection 记录（见 types.ts 里的
+   * 说明），编辑器按这个字段切换表单分支：串口不显示主机/端口/用户名/
+   * 认证/代理这些 SSH 专属字段，它们会以空串落库。
+   */
+  kind: ConnKind
   name: string
   host: string
   port: string
@@ -43,9 +60,33 @@ interface FormState {
   proxyPort: string
   proxyUsername: string
   proxyPassword: string
+
+  /* ---------------- 串口参数 ---------------- */
+
+  /** 端口路径：Windows 是 COM3，Linux 是 /dev/ttyUSB0 */
+  serialPath: string
+  /** 波特率存字符串：输入过程中会出现空串，Number('') 是 0，不能直接存 number */
+  serialBaud: string
+  serialDataBits: SerialDataBits
+  serialStopBits: SerialStopBits
+  serialParity: SerialParity
+  serialFlow: SerialFlowControl
+  serialCharset: SerialCharset
+  serialNewline: SerialNewline
+  /** 打开端口时拉 DTR 复位设备（默认关，见 types.ts 里的事故说明） */
+  serialAutoReset: boolean
+  /**
+   * 选中端口时记下的 USB 身份，保存时一并落库。
+   *
+   * 它的用途不是"显示"，而是热插拔后把连接找回同一台设备：COM 号会漂，
+   * 插到别的 USB 口也可能是另一个号。三级退化见 serialResolve.ts。
+   */
+  serialSn: string
+  serialPnp: string
 }
 
 const EMPTY: FormState = {
+  kind: 'ssh',
   name: '',
   host: '',
   port: '22',
@@ -62,13 +103,61 @@ const EMPTY: FormState = {
   proxyHost: '',
   proxyPort: '1080',
   proxyUsername: '',
-  proxyPassword: ''
+  proxyPassword: '',
+  serialPath: '',
+  serialBaud: '115200',
+  serialDataBits: 8,
+  serialStopBits: 1,
+  serialParity: 'none',
+  serialFlow: 'none',
+  serialCharset: 'utf-8',
+  serialNewline: 'cr',
+  serialAutoReset: false,
+  serialSn: '',
+  serialPnp: ''
 }
 
 const AUTH_OPTIONS: Array<{ value: AuthType; label: string }> = [
   { value: 'password', label: '密码' },
   { value: 'privateKey', label: '私钥文件' },
   { value: 'agent', label: 'SSH Agent' }
+]
+
+/** 常用波特率。Console 口绝大多数是 115200 或 9600，其余留着能手输 */
+const BAUD_PRESETS = ['9600', '19200', '38400', '57600', '115200', '230400', '460800', '921600']
+
+const DATA_BITS_OPTIONS: SerialDataBits[] = [5, 6, 7, 8]
+
+const STOP_BITS_OPTIONS: Array<{ value: SerialStopBits; label: string }> = [
+  { value: 1, label: '1' },
+  { value: 1.5, label: '1.5' },
+  { value: 2, label: '2' }
+]
+
+const PARITY_OPTIONS: Array<{ value: SerialParity; label: string }> = [
+  { value: 'none', label: '无 (N)' },
+  { value: 'even', label: '偶 (E)' },
+  { value: 'odd', label: '奇 (O)' },
+  { value: 'mark', label: '标记 (M)' },
+  { value: 'space', label: '空格 (S)' }
+]
+
+const FLOW_OPTIONS: Array<{ value: SerialFlowControl; label: string }> = [
+  { value: 'none', label: '无' },
+  { value: 'hardware', label: '硬件 (RTS/CTS)' },
+  { value: 'software', label: '软件 (XON/XOFF)' }
+]
+
+const CHARSET_OPTIONS: Array<{ value: SerialCharset; label: string }> = [
+  { value: 'utf-8', label: 'UTF-8' },
+  { value: 'gbk', label: 'GBK' },
+  { value: 'gb18030', label: 'GB18030' }
+]
+
+const NEWLINE_OPTIONS: Array<{ value: SerialNewline; label: string; hint: string }> = [
+  { value: 'cr', label: 'CR', hint: '\\r' },
+  { value: 'lf', label: 'LF', hint: '\\n' },
+  { value: 'crlf', label: 'CRLF', hint: '\\r\\n' }
 ]
 
 const PROXY_OPTIONS: Array<{ value: FormState['proxyType']; label: string }> = [
@@ -104,6 +193,22 @@ export function ConnectionEditor({
   /** 正在更新主机指纹 */
   const [updatingKey, setUpdatingKey] = useState(false)
 
+  /* ---------- 串口端口列表 ---------- */
+  /**
+   * 端口列表不缓存在 store 里，每次打开编辑器现取。
+   * USB 转串口随时可能被拔掉或换口，缓存一份旧列表只会让人选到已消失的端口。
+   * 插拔变化另走 window.api.on.serialPorts 推送（这里也订阅，面板开着时自动更新）。
+   */
+  const [ports, setPorts] = useState<SerialPortInfo[]>([])
+  const [portsLoading, setPortsLoading] = useState(false)
+
+  const loadPorts = async (): Promise<void> => {
+    setPortsLoading(true)
+    const list = await call(window.api.serial.list(), { silent: true })
+    setPortsLoading(false)
+    if (list) setPorts(list)
+  }
+
   /* ---------- 打开时初始化 ---------- */
   useEffect(() => {
     if (!open) return
@@ -113,6 +218,7 @@ export function ConnectionEditor({
 
     if (initial) {
       setForm({
+        kind: initial.kind ?? 'ssh',
         name: initial.name,
         host: initial.host,
         port: String(initial.port),
@@ -129,7 +235,18 @@ export function ConnectionEditor({
         proxyHost: initial.proxy?.host ?? '',
         proxyPort: initial.proxy?.port !== undefined ? String(initial.proxy.port) : '1080',
         proxyUsername: initial.proxy?.username ?? '',
-        proxyPassword: ''
+        proxyPassword: '',
+        serialPath: initial.serial?.path ?? '',
+        serialBaud: initial.serial ? String(initial.serial.baudRate) : EMPTY.serialBaud,
+        serialDataBits: initial.serial?.dataBits ?? EMPTY.serialDataBits,
+        serialStopBits: initial.serial?.stopBits ?? EMPTY.serialStopBits,
+        serialParity: initial.serial?.parity ?? EMPTY.serialParity,
+        serialFlow: initial.serial?.flowControl ?? EMPTY.serialFlow,
+        serialCharset: initial.serial?.charset ?? EMPTY.serialCharset,
+        serialNewline: initial.serial?.newline ?? EMPTY.serialNewline,
+        serialAutoReset: initial.serial?.autoReset ?? false,
+        serialSn: initial.serial?.usbSerialNumber ?? '',
+        serialPnp: initial.serial?.usbPnpId ?? ''
       })
       void call(window.api.conn.hasSecret(initial.id), { silent: true }).then((has) =>
         setHasSecret(has ?? false)
@@ -147,7 +264,18 @@ export function ConnectionEditor({
       })
       setHasSecret(false)
     }
+    void loadPorts()
   }, [open, initial, preset])
+
+  /*
+   * 面板开着时跟随热插拔：插上设备立刻出现在下拉里，拔掉就消失。
+   * 只更新列表、不动 form.serialPath —— 用户正在填的表单不该被外部事件改写。
+   */
+  useEffect(() => {
+    if (!open) return
+    const off = window.api.on.serialPorts((list) => setPorts(list))
+    return off
+  }, [open])
 
   const set = <K extends keyof FormState>(key: K, value: FormState[K]): void =>
     setForm((f) => ({ ...f, [key]: value }))
@@ -171,6 +299,16 @@ export function ConnectionEditor({
   /* ---------- 校验与保存 ---------- */
   const validate = (): string | null => {
     if (!form.name.trim()) return '请填写连接名称'
+
+    if (form.kind === 'serial') {
+      if (!form.serialPath.trim()) return '请选择串口端口'
+      const baud = Number(form.serialBaud)
+      if (!Number.isInteger(baud) || baud <= 0) return '波特率必须是正整数'
+      // 上限不是协议要求，只是防手滑（输成 1152000 会 open 失败且报错很难懂）
+      if (baud > 4000000) return '波特率过大（上限 4000000）'
+      return null
+    }
+
     if (!form.host.trim()) return '请填写主机地址'
     if (!form.username.trim()) return '请填写用户名'
     const port = Number(form.port)
@@ -198,14 +336,44 @@ export function ConnectionEditor({
     }
   }
 
+  /**
+   * 组装串口配置。
+   *
+   * 端口身份（sn/pnp）跟着走：只存 COM 号的话，用户换一个 USB 口重插，
+   * 或者同一台机器插两台同型号 CH340，下次连接就会连到错的设备上。
+   */
+  const buildSerial = (): ConnectionInput['serial'] => {
+    if (form.kind !== 'serial') return undefined
+    return {
+      path: form.serialPath.trim(),
+      baudRate: Number(form.serialBaud) || 115200,
+      dataBits: form.serialDataBits,
+      stopBits: form.serialStopBits,
+      parity: form.serialParity,
+      flowControl: form.serialFlow,
+      charset: form.serialCharset,
+      newline: form.serialNewline,
+      autoReset: form.serialAutoReset,
+      usbSerialNumber: form.serialSn.trim() || undefined,
+      usbPnpId: form.serialPnp.trim() || undefined
+    }
+  }
+
   const buildInput = (forceClearSecret = false, asNew = false): ConnectionInput => ({
     id: asNew ? undefined : initial?.id,
+    kind: form.kind,
     name: form.name.trim(),
-    host: form.host.trim(),
-    port: Number(form.port),
-    username: form.username.trim(),
-    authType: form.authType,
-    privateKeyPath: form.privateKeyPath.trim() || undefined,
+    /*
+     * 串口连接也走 Connection 这条记录，但 host/port/username/authType 在
+     * types.ts 里是必填（见那里的取舍说明）。串口没有这些概念，统一落空串/0，
+     * 主进程 saveConnection 里还会再兜一层，两边都写是为了让这里读起来不困惑。
+     */
+    host: form.kind === 'serial' ? '' : form.host.trim(),
+    port: form.kind === 'serial' ? 0 : Number(form.port),
+    username: form.kind === 'serial' ? '' : form.username.trim(),
+    authType: form.kind === 'serial' ? 'password' : form.authType,
+    privateKeyPath: form.kind === 'serial' ? undefined : form.privateKeyPath.trim() || undefined,
+    serial: buildSerial(),
     group: form.group.trim() || '默认',
     tags: form.tags
       .split(/[,，]/)
@@ -216,9 +384,9 @@ export function ConnectionEditor({
     // 密码语义：编辑时留空 = 不修改；'' = 清除
     password: forceClearSecret ? '' : form.password === '' ? undefined : form.password,
     passphrase: forceClearSecret ? '' : form.passphrase === '' ? undefined : form.passphrase,
-    proxy: buildProxy(forceClearSecret),
+    proxy: form.kind === 'serial' ? undefined : buildProxy(forceClearSecret),
     // 编辑器不编辑跳板链，但保存时必须原样保留，避免"编辑一次就丢"
-    proxyJump: initial?.proxyJump
+    proxyJump: form.kind === 'serial' ? undefined : initial?.proxyJump
   })
 
   /**
@@ -255,7 +423,9 @@ export function ConnectionEditor({
         id: saved.id,
         name: saved.name,
         host: saved.host,
-        username: saved.username
+        username: saved.username,
+        kind: saved.kind,
+        serial: saved.serial
       })
       useToastStore.getState().push({
         kind: 'success',
@@ -357,23 +527,66 @@ export function ConnectionEditor({
 
   const groupOptions = [...new Set(connections.map((c) => c.group).filter(Boolean))]
 
+  const isSsh = form.kind === 'ssh'
+
+  /*
+   * 端口下拉的选项串：`COM3`，能带上厂商名就带上（`COM3 · Silicon Labs CP210x`）。
+   * 用户选完后 pickPort 再从同一份 ports 里反查身份，所以选项串必须是能唯一
+   * 反解的形式 —— 用 path 做前缀正好。
+   */
+  const portOptions = ports.map((p) =>
+    p.manufacturer ? `${p.path} · ${p.manufacturer}` : p.path
+  )
+
+  /** 当前选中端口对应的完整信息（拿 manufacturer / sn / pnpId 用） */
+  const selectedPort = ports.find((p) => p.path === form.serialPath)
+
+  /**
+   * 选中端口：路径 + USB 身份一起写进表单。
+   *
+   * 只存 path 的话，用户把线换到另一个 USB 口（COM3 → COM7）再插回来，
+   * 或者同型号两台设备同时插着，下次连接就会连错设备。
+   * 身份三级退化（serialNumber → pnpId → COM 号）见 serialResolve.ts。
+   */
+  const pickPort = (value: string): void => {
+    const path = value.split(' · ')[0].trim()
+    const hit = ports.find((p) => p.path === path)
+    setForm((f) => ({
+      ...f,
+      serialPath: path,
+      serialSn: hit?.serialNumber ?? '',
+      serialPnp: hit?.pnpId ?? ''
+    }))
+  }
+
   return (
     <Modal
       open={open}
-      title={initial ? `编辑连接 · ${initial.name}` : '新建连接'}
+      title={
+        initial
+          ? `编辑${form.kind === 'serial' ? '串口' : ''}连接 · ${initial.name}`
+          : `新建${form.kind === 'serial' ? '串口' : ''}连接`
+      }
       onClose={onClose}
       width="max-w-xl"
       footer={
         <>
           <div className="mr-auto flex items-center gap-2">
-            <button className="btn" onClick={() => void runTest()} disabled={testing}>
-              {testing ? (
-                <Loader2 size={13} className="animate-spin" />
-              ) : (
-                <FlaskConical size={13} />
-              )}
-              测试连接
-            </button>
+            {/*
+              串口没有"测试连接"这回事：open 一次端口就等于连上了，
+              而反复开关端口会触发 DTR 电平变化（接 EN 脚的板子会重启）。
+              想验就保存后直接连，断开再改。
+            */}
+            {form.kind === 'ssh' && (
+              <button className="btn" onClick={() => void runTest()} disabled={testing}>
+                {testing ? (
+                  <Loader2 size={13} className="animate-spin" />
+                ) : (
+                  <FlaskConical size={13} />
+                )}
+                测试连接
+              </button>
+            )}
             {testResult && (
               <span
                 className={cn(
@@ -437,197 +650,479 @@ export function ConnectionEditor({
           />
         </Field>
 
-        <Field label="主机地址">
-          <input
-            className="input selectable"
-            value={form.host}
-            onChange={(e) => set('host', e.target.value)}
-            placeholder="192.168.1.10 或 hostname"
-          />
-        </Field>
-
-        <Field label="端口">
-          <input
-            className="input selectable"
-            type="number"
-            min={1}
-            max={65535}
-            value={form.port}
-            onChange={(e) => set('port', e.target.value)}
-          />
-        </Field>
-
-        <Field label="用户名">
-          <input
-            className="input selectable"
-            value={form.username}
-            onChange={(e) => set('username', e.target.value)}
-          />
-        </Field>
-
-        <Field label="认证方式">
+        {/*
+          连接类型。只在新建时可自由切换：已有连接改了 kind 等于换了台设备，
+          在编辑器里"顺手改一下"会让原设备的凭据/档案挂到新记录上，
+          真要从串口改成 SSH，删掉重建更清楚。
+        */}
+        <Field
+          label="类型"
+          hint={initial ? '已保存的连接不能改类型，请新建一条' : undefined}
+          className="col-span-2"
+        >
           <div className="flex gap-1">
-            {AUTH_OPTIONS.map((opt) => (
-              <button
-                key={opt.value}
-                type="button"
-                onClick={() => set('authType', opt.value)}
-                className={cn(
-                  'h-7 flex-1 rounded-md border text-xs transition-colors',
-                  form.authType === opt.value
-                    ? 'border-accent/60 bg-accent/15 text-accent'
-                    : 'border-edge bg-raised text-ink-3 hover:text-ink-2'
-                )}
-              >
-                {opt.label}
-              </button>
-            ))}
+            <button
+              type="button"
+              disabled={Boolean(initial)}
+              onClick={() => set('kind', 'ssh')}
+              className={cn(
+                'h-7 flex-1 rounded-md border text-xs transition-colors',
+                form.kind === 'ssh'
+                  ? 'border-accent/60 bg-accent/15 text-accent'
+                  : 'border-edge bg-raised text-ink-3 hover:text-ink-2',
+                initial && 'cursor-not-allowed opacity-60'
+              )}
+            >
+              SSH 远程登录
+            </button>
+            <button
+              type="button"
+              disabled={Boolean(initial)}
+              onClick={() => set('kind', 'serial')}
+              className={cn(
+                'h-7 flex-1 rounded-md border text-xs transition-colors',
+                form.kind === 'serial'
+                  ? 'border-accent/60 bg-accent/15 text-accent'
+                  : 'border-edge bg-raised text-ink-3 hover:text-ink-2',
+                initial && 'cursor-not-allowed opacity-60'
+              )}
+            >
+              串口 Console
+            </button>
           </div>
         </Field>
 
-        {form.authType === 'password' && (
+        {/* SSH 专属字段：串口连接不需要主机/端口/账号/认证/代理，它们以空串落库 */}
+        {isSsh && (
+          <>
+            <Field label="主机地址">
+              <input
+                className="input selectable"
+                value={form.host}
+                onChange={(e) => set('host', e.target.value)}
+                placeholder="192.168.1.10 或 hostname"
+              />
+            </Field>
+
+            <Field label="端口">
+              <input
+                className="input selectable"
+                type="number"
+                min={1}
+                max={65535}
+                value={form.port}
+                onChange={(e) => set('port', e.target.value)}
+              />
+            </Field>
+
+            <Field label="用户名">
+              <input
+                className="input selectable"
+                value={form.username}
+                onChange={(e) => set('username', e.target.value)}
+              />
+            </Field>
+
+            <Field label="认证方式">
+              <div className="flex gap-1">
+                {AUTH_OPTIONS.map((opt) => (
+                  <button
+                    key={opt.value}
+                    type="button"
+                    onClick={() => set('authType', opt.value)}
+                    className={cn(
+                      'h-7 flex-1 rounded-md border text-xs transition-colors',
+                      form.authType === opt.value
+                        ? 'border-accent/60 bg-accent/15 text-accent'
+                        : 'border-edge bg-raised text-ink-3 hover:text-ink-2'
+                    )}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+            </Field>
+
+            {form.authType === 'password' && (
+              <>
+                <Field
+                  label="密码"
+                  hint={initial && hasSecret ? '已保存，留空则不修改' : undefined}
+                  className="col-span-2"
+                >
+                  <div className="flex gap-1.5">
+                    <input
+                      className="input selectable flex-1"
+                      type={showPassword ? 'text' : 'password'}
+                      value={form.password}
+                      onChange={(e) => set('password', e.target.value)}
+                      placeholder={initial && hasSecret ? '••••••••（留空保持原密码）' : '登录密码'}
+                      autoComplete="new-password"
+                    />
+                    <button
+                      type="button"
+                      className="btn shrink-0"
+                      onClick={() => setShowPassword((v) => !v)}
+                    >
+                      {showPassword ? '隐藏' : '显示'}
+                    </button>
+                  </div>
+                </Field>
+                {initial && hasSecret && (
+                  <button
+                    type="button"
+                    className="col-span-2 -mt-2 flex items-center gap-1 self-start text-2xs text-ink-3 transition-colors hover:text-danger"
+                    onClick={() => void clearSecret()}
+                  >
+                    <Trash2 size={11} />
+                    清除已保存的凭据
+                  </button>
+                )}
+              </>
+            )}
+
+            {form.authType === 'privateKey' && (
+              <>
+                <Field
+                  label="私钥文件路径"
+                  hint="可手动填写，或点「选择文件」从本地导入"
+                  className="col-span-2"
+                >
+                  <div className="flex gap-2">
+                    <input
+                      className="input selectable min-w-0 flex-1 font-mono text-2xs"
+                      value={form.privateKeyPath}
+                      onChange={(e) => set('privateKeyPath', e.target.value)}
+                      placeholder="~/.ssh/id_rsa"
+                    />
+                    <button
+                      type="button"
+                      className="btn shrink-0"
+                      onClick={() => void pickKey()}
+                      disabled={picking}
+                    >
+                      {picking ? <Loader2 size={13} className="animate-spin" /> : <FolderOpen size={13} />}
+                      选择文件
+                    </button>
+                  </div>
+                </Field>
+                <Field
+                  label="私钥口令"
+                  hint={initial && hasSecret ? '已保存，留空则不修改' : '私钥未加密则留空'}
+                  className="col-span-2"
+                >
+                  <input
+                    className="input selectable"
+                    type="password"
+                    value={form.passphrase}
+                    onChange={(e) => set('passphrase', e.target.value)}
+                    autoComplete="new-password"
+                  />
+                </Field>
+              </>
+            )}
+
+            {form.authType === 'agent' && (
+              <div className="col-span-2 flex items-start gap-2 rounded-lg border border-edge-soft bg-app px-3 py-2.5 text-2xs leading-relaxed text-ink-3">
+                <KeyRound size={13} className="mt-0.5 shrink-0" />
+                <span>
+                  使用系统 SSH Agent 中的密钥认证。Windows 需启用 OpenSSH Authentication
+                  Agent 服务并已 ssh-add 导入密钥；Linux/macOS 需保证 SSH_AUTH_SOCK 可用。
+                </span>
+              </div>
+            )}
+
+            <Field
+              label="代理"
+              hint="经 SOCKS5 / HTTP 代理建立连接（配置了跳板链时作用于第一跳）"
+              className="col-span-2"
+            >
+              <div className="space-y-2">
+                <div className="flex gap-1.5">
+                  {PROXY_OPTIONS.map((opt) => (
+                    <button
+                      key={opt.value}
+                      type="button"
+                      onClick={() => set('proxyType', opt.value)}
+                      className={cn(
+                        'h-7 flex-1 rounded-md border text-xs transition-colors',
+                        form.proxyType === opt.value
+                          ? 'border-accent/60 bg-accent/15 text-accent'
+                          : 'border-edge bg-raised text-ink-3 hover:text-ink-2'
+                      )}
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
+                {form.proxyType !== 'none' && (
+                  <div className="grid grid-cols-2 gap-x-3 gap-y-2">
+                    <input
+                      className="input selectable"
+                      value={form.proxyHost}
+                      onChange={(e) => set('proxyHost', e.target.value)}
+                      placeholder="代理地址，如 192.168.1.2"
+                    />
+                    <input
+                      className="input selectable font-mono"
+                      value={form.proxyPort}
+                      onChange={(e) => set('proxyPort', e.target.value.replace(/[^\d]/g, ''))}
+                      placeholder={form.proxyType === 'socks5' ? '1080' : '8080'}
+                    />
+                    <input
+                      className="input selectable"
+                      value={form.proxyUsername}
+                      onChange={(e) => set('proxyUsername', e.target.value)}
+                      placeholder="用户名（可选）"
+                    />
+                    <input
+                      className="input selectable"
+                      type="password"
+                      value={form.proxyPassword}
+                      onChange={(e) => set('proxyPassword', e.target.value)}
+                      placeholder="密码（编辑时留空 = 保持不变）"
+                    />
+                  </div>
+                )}
+              </div>
+            </Field>
+          </>
+        )}
+
+        {/* 串口专属字段：只有 Console 救急需要的几个参数，其余 SSH 字段不显示 */}
+        {!isSsh && (
           <>
             <Field
-              label="密码"
-              hint={initial && hasSecret ? '已保存，留空则不修改' : undefined}
+              label="串口端口"
+              hint={
+                ports.length === 0
+                  ? portsLoading
+                    ? '正在枚举…'
+                    : '没有检测到串口设备，插上 USB 转串口后点「刷新」'
+                  : `已检测到 ${ports.length} 个端口`
+              }
               className="col-span-2"
             >
               <div className="flex gap-1.5">
-                <input
-                  className="input selectable flex-1"
-                  type={showPassword ? 'text' : 'password'}
-                  value={form.password}
-                  onChange={(e) => set('password', e.target.value)}
-                  placeholder={initial && hasSecret ? '••••••••（留空保持原密码）' : '登录密码'}
-                  autoComplete="new-password"
+                <Combobox
+                  value={form.serialPath}
+                  onChange={pickPort}
+                  options={portOptions}
+                  placeholder={portsLoading ? '正在枚举…' : 'COM3 或 /dev/ttyUSB0'}
+                  className="min-w-0 flex-1"
                 />
                 <button
                   type="button"
                   className="btn shrink-0"
-                  onClick={() => setShowPassword((v) => !v)}
+                  onClick={() => void loadPorts()}
+                  disabled={portsLoading}
                 >
-                  {showPassword ? '隐藏' : '显示'}
+                  {portsLoading ? (
+                    <Loader2 size={13} className="animate-spin" />
+                  ) : (
+                    <RefreshCw size={13} />
+                  )}
+                  刷新
                 </button>
               </div>
             </Field>
-            {initial && hasSecret && (
-              <button
-                type="button"
-                className="col-span-2 -mt-2 flex items-center gap-1 self-start text-2xs text-ink-3 transition-colors hover:text-danger"
-                onClick={() => void clearSecret()}
-              >
-                <Trash2 size={11} />
-                清除已保存的凭据
-              </button>
-            )}
-          </>
-        )}
 
-        {form.authType === 'privateKey' && (
-          <>
-            <Field
-              label="私钥文件路径"
-              hint="可手动填写，或点「选择文件」从本地导入"
-              className="col-span-2"
-            >
-              <div className="flex gap-2">
-                <input
-                  className="input selectable min-w-0 flex-1 font-mono text-2xs"
-                  value={form.privateKeyPath}
-                  onChange={(e) => set('privateKeyPath', e.target.value)}
-                  placeholder="~/.ssh/id_rsa"
-                />
-                <button
-                  type="button"
-                  className="btn shrink-0"
-                  onClick={() => void pickKey()}
-                  disabled={picking}
-                >
-                  {picking ? <Loader2 size={13} className="animate-spin" /> : <FolderOpen size={13} />}
-                  选择文件
-                </button>
+            {/* 选中端口的身份信息：热插拔后靠它把连接找回同一台设备，值得让人看见 */}
+            {selectedPort && (
+              <div className="col-span-2 -mt-2 flex flex-wrap items-center gap-x-3 gap-y-0.5 font-mono text-3xs text-ink-3">
+                {selectedPort.manufacturer && <span>{selectedPort.manufacturer}</span>}
+                {selectedPort.serialNumber && <span>SN {selectedPort.serialNumber}</span>}
+                {selectedPort.pnpId && <span className="truncate">{selectedPort.pnpId}</span>}
+                {!selectedPort.serialNumber && !selectedPort.pnpId && (
+                  <span className="text-warning">
+                    该设备没有 USB 身份信息，拔插后只能按端口号找回
+                  </span>
+                )}
               </div>
-            </Field>
-            <Field
-              label="私钥口令"
-              hint={initial && hasSecret ? '已保存，留空则不修改' : '私钥未加密则留空'}
-              className="col-span-2"
-            >
-              <input
-                className="input selectable"
-                type="password"
-                value={form.passphrase}
-                onChange={(e) => set('passphrase', e.target.value)}
-                autoComplete="new-password"
+            )}
+
+            {/*
+              端口待确认：导入别人的连接、或设备拔掉后按 USB 身份找不回来时置位。
+              不说清楚的话，用户点「连接」只会看到一句原生层的 open failed，
+              完全不知道是端口号对不上。
+            */}
+            {initial?.serial?.pathPending && (
+              <div className="col-span-2 -mt-1 flex items-start gap-2 rounded-md border border-warning/40 bg-warning/10 px-2.5 py-2">
+                <AlertTriangle size={13} className="mt-0.5 shrink-0 text-warning" />
+                <div className="text-2xs leading-relaxed text-ink-2">
+                  端口待确认：这条连接的端口来自别的机器（或设备已拔走），本机没有
+                  <span className="mx-0.5 font-mono">{form.serialPath || '该端口'}</span>。
+                  插好设备后点「刷新」，从上面重新选一次端口再保存。
+                </div>
+              </div>
+            )}
+
+            <Field label="波特率" hint="多数 Console 口是 115200，老设备常见 9600">
+              <Combobox
+                value={form.serialBaud}
+                onChange={(v) => set('serialBaud', v)}
+                options={BAUD_PRESETS}
+                placeholder="115200"
               />
             </Field>
+
+            <Field label="数据位">
+              <div className="flex gap-1">
+                {DATA_BITS_OPTIONS.map((bits) => (
+                  <button
+                    key={bits}
+                    type="button"
+                    onClick={() => set('serialDataBits', bits)}
+                    className={cn(
+                      'h-7 flex-1 rounded-md border text-xs transition-colors',
+                      form.serialDataBits === bits
+                        ? 'border-accent/60 bg-accent/15 text-accent'
+                        : 'border-edge bg-raised text-ink-3 hover:text-ink-2'
+                    )}
+                  >
+                    {bits}
+                  </button>
+                ))}
+              </div>
+            </Field>
+
+            <Field label="校验位" className="col-span-2">
+              <div className="flex gap-1">
+                {PARITY_OPTIONS.map((opt) => (
+                  <button
+                    key={opt.value}
+                    type="button"
+                    onClick={() => set('serialParity', opt.value)}
+                    className={cn(
+                      'h-7 flex-1 rounded-md border text-xs transition-colors',
+                      form.serialParity === opt.value
+                        ? 'border-accent/60 bg-accent/15 text-accent'
+                        : 'border-edge bg-raised text-ink-3 hover:text-ink-2'
+                    )}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+            </Field>
+
+            <Field label="停止位">
+              <div className="flex gap-1">
+                {STOP_BITS_OPTIONS.map((opt) => (
+                  <button
+                    key={opt.value}
+                    type="button"
+                    onClick={() => set('serialStopBits', opt.value)}
+                    className={cn(
+                      'h-7 flex-1 rounded-md border text-xs transition-colors',
+                      form.serialStopBits === opt.value
+                        ? 'border-accent/60 bg-accent/15 text-accent'
+                        : 'border-edge bg-raised text-ink-3 hover:text-ink-2'
+                    )}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+            </Field>
+
+            <Field label="流控">
+              <div className="flex gap-1">
+                {FLOW_OPTIONS.map((opt) => (
+                  <button
+                    key={opt.value}
+                    type="button"
+                    onClick={() => set('serialFlow', opt.value)}
+                    className={cn(
+                      'h-7 flex-1 rounded-md border text-xs transition-colors',
+                      form.serialFlow === opt.value
+                        ? 'border-accent/60 bg-accent/15 text-accent'
+                        : 'border-edge bg-raised text-ink-3 hover:text-ink-2'
+                    )}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+            </Field>
+
+            <Field
+              label="编码"
+              hint="设备输出是 GBK 时选 GBK，否则中文会是乱码"
+            >
+              <div className="flex gap-1">
+                {CHARSET_OPTIONS.map((opt) => (
+                  <button
+                    key={opt.value}
+                    type="button"
+                    onClick={() => set('serialCharset', opt.value)}
+                    className={cn(
+                      'h-7 flex-1 rounded-md border text-xs transition-colors',
+                      form.serialCharset === opt.value
+                        ? 'border-accent/60 bg-accent/15 text-accent'
+                        : 'border-edge bg-raised text-ink-3 hover:text-ink-2'
+                    )}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+            </Field>
+
+            <Field label="换行符" hint="回车键发出的换行，选错设备会把一条命令执行两遍">
+              <div className="flex gap-1">
+                {NEWLINE_OPTIONS.map((opt) => (
+                  <button
+                    key={opt.value}
+                    type="button"
+                    onClick={() => set('serialNewline', opt.value)}
+                    title={opt.hint}
+                    className={cn(
+                      'h-7 flex-1 rounded-md border text-xs transition-colors',
+                      form.serialNewline === opt.value
+                        ? 'border-accent/60 bg-accent/15 text-accent'
+                        : 'border-edge bg-raised text-ink-3 hover:text-ink-2'
+                    )}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+            </Field>
+
+            <Field
+              label="打开时复位设备（DTR）"
+              hint="拉低 DTR 会让 ESP32/STM32 重启。只是看日志时保持关闭"
+              className="col-span-2"
+            >
+              <div className="flex items-center gap-2 pt-0.5">
+                <Toggle
+                  checked={form.serialAutoReset}
+                  onChange={(v) => set('serialAutoReset', v)}
+                />
+                <span className="text-2xs text-ink-3">
+                  {form.serialAutoReset ? '连接时发送一次复位脉冲' : '不碰 DTR，设备保持当前状态'}
+                </span>
+              </div>
+            </Field>
+
+            {/* 让用户看清保存后标签上会显示什么 */}
+            <div className="col-span-2 rounded-lg border border-edge-soft bg-app/60 px-3 py-2 font-mono text-2xs text-ink-3">
+              {form.serialPath.trim()
+                ? describeSerialTarget({
+                    path: form.serialPath.trim(),
+                    baudRate: Number(form.serialBaud) || 115200,
+                    dataBits: form.serialDataBits,
+                    stopBits: form.serialStopBits,
+                    parity: form.serialParity,
+                    flowControl: form.serialFlow,
+                    charset: form.serialCharset,
+                    newline: form.serialNewline
+                  })
+                : '选择端口后这里显示会话名称'}
+            </div>
           </>
         )}
-
-        {form.authType === 'agent' && (
-          <div className="col-span-2 flex items-start gap-2 rounded-lg border border-edge-soft bg-app px-3 py-2.5 text-2xs leading-relaxed text-ink-3">
-            <KeyRound size={13} className="mt-0.5 shrink-0" />
-            <span>
-              使用系统 SSH Agent 中的密钥认证。Windows 需启用 OpenSSH Authentication
-              Agent 服务并已 ssh-add 导入密钥；Linux/macOS 需保证 SSH_AUTH_SOCK 可用。
-            </span>
-          </div>
-        )}
-
-        <Field
-          label="代理"
-          hint="经 SOCKS5 / HTTP 代理建立连接（配置了跳板链时作用于第一跳）"
-          className="col-span-2"
-        >
-          <div className="space-y-2">
-            <div className="flex gap-1.5">
-              {PROXY_OPTIONS.map((opt) => (
-                <button
-                  key={opt.value}
-                  type="button"
-                  onClick={() => set('proxyType', opt.value)}
-                  className={cn(
-                    'h-7 flex-1 rounded-md border text-xs transition-colors',
-                    form.proxyType === opt.value
-                      ? 'border-accent/60 bg-accent/15 text-accent'
-                      : 'border-edge bg-raised text-ink-3 hover:text-ink-2'
-                  )}
-                >
-                  {opt.label}
-                </button>
-              ))}
-            </div>
-            {form.proxyType !== 'none' && (
-              <div className="grid grid-cols-2 gap-x-3 gap-y-2">
-                <input
-                  className="input selectable"
-                  value={form.proxyHost}
-                  onChange={(e) => set('proxyHost', e.target.value)}
-                  placeholder="代理地址，如 192.168.1.2"
-                />
-                <input
-                  className="input selectable font-mono"
-                  value={form.proxyPort}
-                  onChange={(e) => set('proxyPort', e.target.value.replace(/[^\d]/g, ''))}
-                  placeholder={form.proxyType === 'socks5' ? '1080' : '8080'}
-                />
-                <input
-                  className="input selectable"
-                  value={form.proxyUsername}
-                  onChange={(e) => set('proxyUsername', e.target.value)}
-                  placeholder="用户名（可选）"
-                />
-                <input
-                  className="input selectable"
-                  type="password"
-                  value={form.proxyPassword}
-                  onChange={(e) => set('proxyPassword', e.target.value)}
-                  placeholder="密码（编辑时留空 = 保持不变）"
-                />
-              </div>
-            )}
-          </div>
-        </Field>
 
         <Field label="分组" hint="用于左侧列表归类">
           <Combobox

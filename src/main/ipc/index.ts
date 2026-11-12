@@ -6,6 +6,7 @@ import { registerDiagnosticsIpc } from './diagnostics'
 import { registerErrorIpc } from './errors'
 import { registerLocalFsIpc } from './localFs'
 import { registerSessionIpc } from './sessions'
+import { registerSerialIpc } from './serial'
 import { registerSftpIpc } from './sftp'
 import { registerSettingsIpc } from './settings'
 import { registerWindowUpdateIpc } from './windowUpdate'
@@ -25,6 +26,7 @@ export function registerAllIpc(): void {
   registerErrorIpc()
   registerConnectionIpc()
   registerSessionIpc()
+  registerSerialIpc()
   registerCommandIpc()
   registerSettingsIpc()
   registerSftpIpc()

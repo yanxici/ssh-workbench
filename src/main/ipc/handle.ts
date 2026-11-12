@@ -19,6 +19,8 @@ function channelTitle(channel: string): string {
     'conn:test': '测试连接失败',
     'session:open': '打开会话失败',
     'session:write': '终端写入失败',
+    'serial:list': '枚举串口失败',
+    'serial:refresh': '刷新串口列表失败',
     'sftp:list': '读取远程目录失败',
     'sftp:upload': '上传失败',
     'sftp:upload-folder-dialog': '上传文件夹失败',

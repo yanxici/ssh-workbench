@@ -56,7 +56,7 @@ for (const name of actions) {
     continue
   }
   const rest = store.slice(m.index)
-  const end = rest.search(/\r?\n  \},?\r?\n/)
+  const end = rest.search(/\r?\n {2}\},?\r?\n/)
   const body = end > 0 ? rest.slice(0, end) : rest.slice(0, 800)
   if (/get\(\)\.sessionId/.test(body)) {
     fail(`${name} 仍在函数体里读 get().sessionId（sftpStore.ts:${lineOf(store, m.index)}）`)

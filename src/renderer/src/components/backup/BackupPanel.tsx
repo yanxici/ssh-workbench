@@ -14,7 +14,7 @@ import type { BackupDiffResult, BackupMeta } from '@shared/types'
 import { cn, formatBytes, formatTime } from '@/lib/utils'
 import { ConfirmDialog, EmptyState, Field, Modal } from '@/components/ui'
 import { useBackupStore } from '@/stores/backupStore'
-import { useSessionStore } from '@/stores/sessionStore'
+import { useSshSessions } from '@/stores/sessionStore'
 import { useToastStore } from '@/stores/toastStore'
 
 /**
@@ -153,7 +153,7 @@ function BackupDetailView(): JSX.Element {
   const diffing = useBackupStore((s) => s.diffing)
   const diffAllRunning = useBackupStore((s) => s.diffAllRunning)
 
-  const sessions = useSessionStore((s) => s.sessions)
+  const sessions = useSshSessions()
   const connected = sessions.filter((s) => s.status === 'connected')
   const compareSessionId = useBackupStore((s) => s.compareSessionId)
 
@@ -194,7 +194,7 @@ function BackupDetailView(): JSX.Element {
             <option value="">选择一台在线设备…</option>
             {connected.map((s) => (
               <option key={s.id} value={s.id}>
-                {s.title}（{s.username}@{s.host}）
+                {s.title}（{s.target}）
               </option>
             ))}
           </select>
@@ -403,7 +403,7 @@ const DEFAULT_PATHS = '/etc/config\n/etc/network/interfaces\n/etc/hosts'
 
 function CreateBackupModal(): JSX.Element {
   const open = useBackupStore((s) => s.createOpen)
-  const sessions = useSessionStore((s) => s.sessions)
+  const sessions = useSshSessions()
   const connected = sessions.filter((s) => s.status === 'connected')
 
   const [sessionId, setSessionId] = useState('')
@@ -455,7 +455,7 @@ function CreateBackupModal(): JSX.Element {
             <option value="">选择一台在线设备…</option>
             {connected.map((s) => (
               <option key={s.id} value={s.id}>
-                {s.title}（{s.username}@{s.host}）
+                {s.title}（{s.target}）
               </option>
             ))}
           </select>

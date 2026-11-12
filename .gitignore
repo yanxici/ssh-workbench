@@ -41,3 +41,6 @@ releases/
 # 布局方案对比 demo 与一次性截图（本地验证产物，不入库）
 .demo/
 .shots/
+
+# 串口原生模块 spike 的临时产物（asar 对照实验 / 结果 json）
+serial-spike-result.json

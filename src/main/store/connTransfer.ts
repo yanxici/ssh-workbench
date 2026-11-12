@@ -16,12 +16,23 @@ import type {
   ConnImportMode,
   ConnImportPreview,
   ConnImportResult,
+  ConnKind,
   Connection,
-  ProxyConfig
+  ProxyConfig,
+  SerialCharset,
+  SerialConfig,
+  SerialDataBits,
+  SerialFlowControl,
+  SerialNewline,
+  SerialParity,
+  SerialPortInfo,
+  SerialStopBits
 } from '@shared/types'
 import { dataDir } from './jsonStore'
 import { bulkUpsertConnections, listConnections } from './repository'
 import { getSecret, setSecretsBulk, type PlainSecret } from './vault'
+import { listSerialPorts } from '../transport/serialPorts'
+import { resolveSerialPath } from '../transport/serialResolve'
 
 /**
  * 连接导出 / 导入：把连接发给同事，对方导入后直接可用。
@@ -44,14 +55,37 @@ const MIN_PASSPHRASE = 4
 const AUTH_TYPES: AuthType[] = ['password', 'privateKey', 'agent']
 const SCRYPT = { N: 1 << 15, r: 8, p: 1 }
 
+/**
+ * 串口枚举器注入点（仅测试使用，传 null 恢复真实实现）。
+ *
+ * 导入要判断「文件里这几条串口连接在本机能不能直接对上端口」，这需要真实端口列表。
+ * 但验证脚本跑在裸 node / CI 上：没有 USB 转串口设备，也没有原生模块，
+ * 真实枚举永远返回空数组 —— 那样只能测到「全部待确认」这一条分支，
+ * 「USB 身份能对上、COM 号被自动改写」这条最重要的路径反而测不到。
+ */
+let serialPortLister: (() => Promise<SerialPortInfo[]>) | null = null
+
+/** 注入串口枚举器（仅测试使用；传 null 恢复真实实现） */
+export function setSerialPortLister(lister: (() => Promise<SerialPortInfo[]>) | null): void {
+  serialPortLister = lister
+}
+
+function listPorts(): Promise<SerialPortInfo[]> {
+  return serialPortLister ? serialPortLister() : listSerialPorts()
+}
+
 interface ExportedConn {
   /** 导出方的连接 id，仅用于还原跳板机引用 */
   ref: string
   name: string
+  /** 连接类型；缺省按 ssh 处理（v1 导出文件没有这个字段） */
+  kind?: ConnKind
   host: string
   port: number
   username: string
   authType: AuthType
+  /** 串口参数；kind = 'serial' 时必填，host / port / username 为空值 */
+  serial?: SerialConfig
   group: string
   tags: string[]
   color?: string
@@ -126,29 +160,46 @@ async function buildPayload(opts: ConnExportOptions): Promise<{
   const connections: ExportedConn[] = []
 
   for (const c of picked) {
-    const secret: PlainSecret = opts.includeSecrets ? await getSecret(c.id) : {}
+    /*
+     * 串口连接没有任何凭据：authType 在落库时被统一成 'password'（见
+     * repo/connections.ts 的 normalize），如果照 SSH 的路径去读 secret，
+     * 会白白给 noPassword 计数加一，用户看到「3 条连接没有可用密码」，
+     * 实际那 3 条是串口 —— 是假告警，得跳过。
+     */
+    const isSerial = c.kind === 'serial'
+    const secret: PlainSecret = opts.includeSecrets && !isSerial ? await getSecret(c.id) : {}
 
     let keyRef: string | undefined
-    if (opts.includeSecrets && c.authType === 'privateKey' && c.privateKeyPath) {
+    if (!isSerial && opts.includeSecrets && c.authType === 'privateKey' && c.privateKeyPath) {
       if (!keyByPath.has(c.privateKeyPath)) {
         keyByPath.set(c.privateKeyPath, await readKeyInto(c.privateKeyPath, keys))
       }
       keyRef = keyByPath.get(c.privateKeyPath) ?? undefined
       if (!keyRef) missingKeys++
     }
-    if (opts.includeSecrets && c.authType === 'password' && !secret.password) noPassword++
+    if (!isSerial && opts.includeSecrets && c.authType === 'password' && !secret.password) {
+      noPassword++
+    }
 
-    // 跳板机只保留导出范围内的；范围外的在对方机器上不存在
-    const jumps = (c.proxyJump ?? []).filter((id) => pickedIds.has(id))
-    droppedJumps += (c.proxyJump?.length ?? 0) - jumps.length
+    // 跳板机只保留导出范围内的；范围外的在对方机器上不存在。串口没有跳板
+    const jumps = isSerial ? [] : (c.proxyJump ?? []).filter((id) => pickedIds.has(id))
+    droppedJumps += isSerial ? 0 : (c.proxyJump?.length ?? 0) - jumps.length
 
     connections.push({
       ref: c.id,
       name: c.name,
+      kind: c.kind,
       host: c.host,
       port: c.port,
       username: c.username,
       authType: c.authType,
+      /*
+       * 串口参数原样带出，包括 usbSerialNumber / usbPnpId：
+       * 有了 USB 身份，对方机器插上同一台设备时能自动找回端口；
+       * 没有身份时只能靠 COM 号，而 COM 号在别人机器上几乎必然不同，
+       * 所以导入端会把它标成「待确认」。
+       */
+      serial: isSerial ? (c.serial ? { ...c.serial } : undefined) : undefined,
       group: c.group || '默认',
       tags: c.tags ?? [],
       color: c.color,
@@ -226,6 +277,17 @@ export async function previewImport(file: string, passphrase?: string): Promise<
   const groupCount = new Map<string, number>()
   for (const c of p.connections) groupCount.set(c.group, (groupCount.get(c.group) ?? 0) + 1)
 
+  /*
+   * 预览里就把「有几条串口要重选端口」算出来，用户点导入之前就知道。
+   * 判定与 applyImport 必须一致，所以两边都走 resolveSerialPath，
+   * 不在这里另写一套「有身份就算能匹配」的近似判断。
+   */
+  const serials = p.connections.filter((c) => c.kind === 'serial')
+  const ports = serials.length > 0 ? await listPorts() : []
+  const pendingPorts = serials.filter(
+    (c) => !c.serial || !resolveSerialPath(c.serial, ports).ok
+  ).length
+
   return {
     path: file,
     encrypted: env.encrypted === true,
@@ -241,7 +303,9 @@ export async function previewImport(file: string, passphrase?: string): Promise<
         Boolean(c.password || c.passphrase || c.proxy?.password) ||
         Boolean(c.keyRef && p.keys.has(c.keyRef))
     ).length,
-    invalid: p.invalid
+    invalid: p.invalid,
+    serialCount: serials.length,
+    pendingPorts
   }
 }
 
@@ -287,6 +351,20 @@ export async function applyImport(
   let added = 0
   let updated = 0
   let skipped = 0
+  /**
+   * 串口端口待确认计数。
+   *
+   * 别人机器上的 COM3 在我这里几乎必然不是 COM3，甚至根本没有这个设备。
+   * 这里先用 USB 身份在当前端口列表里找一遍：找得到就把真实路径改过来、
+   * 清掉待确认；找不到就置 pathPending，界面提示重选端口 ——
+   * 而不是拿一个不存在的路径去 open，报一句原生层的 open failed。
+   *
+   * 只在文件里确实有串口连接时才枚举端口：SSH-only 的导入不该为此
+   * 去加载原生模块。
+   */
+  const serialCount = p.connections.filter((c) => c.kind === 'serial').length
+  const ports = serialCount > 0 ? await listPorts() : []
+  let pendingPorts = 0
 
   for (const src of p.connections) {
     const k = dupKey(src)
@@ -300,22 +378,36 @@ export async function applyImport(
 
     const id = hit?.id ?? randomUUID()
     refToId.set(src.ref, id)
+    const isSerial = src.kind === 'serial'
+    let serial: SerialConfig | undefined
+    if (isSerial && src.serial) {
+      const resolved = resolveSerialPath(src.serial, ports)
+      if (resolved.ok) {
+        serial = { ...src.serial, path: resolved.path, pathPending: false }
+      } else {
+        // 找不到或匹配到多台：保留原路径但标记待确认，交给用户决定
+        serial = { ...src.serial, pathPending: true }
+        pendingPorts++
+      }
+    }
     const conn: Connection = {
       id,
       name: src.name,
+      kind: isSerial ? 'serial' : 'ssh',
       host: src.host,
       port: src.port,
       username: src.username,
       authType: src.authType,
       privateKeyPath:
-        src.authType === 'privateKey'
+        !isSerial && src.authType === 'privateKey'
           ? ((await ensureKey(src.keyRef)) ?? hit?.privateKeyPath)
           : undefined,
+      serial,
       group: src.group,
       tags: src.tags,
       color: src.color,
       remark: src.remark,
-      proxy: src.proxy ? { ...src.proxy, password: undefined } : undefined,
+      proxy: !isSerial && src.proxy ? { ...src.proxy, password: undefined } : undefined,
       lastUsedAt: hit?.lastUsedAt,
       createdAt: hit?.createdAt ?? now,
       updatedAt: now
@@ -326,6 +418,8 @@ export async function applyImport(
     if (hit) updated++
     else added++
 
+    // 串口连接没有密码/私钥；照 SSH 走会给它写一条空凭据记录，白白占一行
+    if (isSerial) continue
     const cur: PlainSecret = hit ? await getSecret(id) : {}
     secrets.set(id, {
       password: src.password ?? cur.password,
@@ -345,7 +439,7 @@ export async function applyImport(
 
   await bulkUpsertConnections([...pending.values()])
   await setSecretsBulk([...secrets.entries()])
-  return { added, updated, skipped, keysWritten, invalid: p.invalid }
+  return { added, updated, skipped, keysWritten, invalid: p.invalid, pendingPorts }
 }
 
 async function readEnvelope(file: string): Promise<Envelope> {
@@ -430,6 +524,40 @@ function cleanPayload(raw: unknown): CleanPayload {
   for (const item of r.connections as unknown[]) {
     const c = item as Partial<ExportedConn> | null
     const name = str(c?.name)?.trim()
+    const kind: ConnKind = c?.kind === 'serial' ? 'serial' : 'ssh'
+    const group = str(c?.group, 255)?.trim() || '默认'
+    const tags = Array.isArray(c?.tags)
+      ? c.tags.filter((t): t is string => typeof t === 'string').slice(0, 50).map((t) => t.slice(0, 64))
+      : []
+
+    /*
+     * 串口连接走单独一条校验：它没有 host / username / 端口号，
+     * 用 SSH 那套「host 非空 + port 1..65535」去卡，串口连接会被整条丢掉，
+     * 而且计入 invalid —— 用户会看到「N 条字段不合法」却不知道是自己的串口。
+     */
+    if (kind === 'serial') {
+      const serial = cleanSerial(c?.serial)
+      if (!c || !name || !serial) {
+        invalid++
+        continue
+      }
+      connections.push({
+        ref: str(c.ref, 64) ?? randomUUID(),
+        name,
+        kind,
+        host: '',
+        port: 0,
+        username: '',
+        authType: 'password',
+        serial,
+        group,
+        tags,
+        color: str(c.color, 32),
+        remark: str(c.remark, 2000)
+      })
+      continue
+    }
+
     const host = str(c?.host, 255)?.trim()
     const username = str(c?.username, 255)?.trim()
     const port = Number(c?.port)
@@ -446,14 +574,13 @@ function cleanPayload(raw: unknown): CleanPayload {
     connections.push({
       ref: str(c.ref, 64) ?? randomUUID(),
       name,
+      kind,
       host,
       port,
       username,
       authType: authType as AuthType,
-      group: str(c.group, 255)?.trim() || '默认',
-      tags: Array.isArray(c.tags)
-        ? c.tags.filter((t): t is string => typeof t === 'string').slice(0, 50).map((t) => t.slice(0, 64))
-        : [],
+      group,
+      tags,
       color: str(c.color, 32),
       remark: str(c.remark, 2000),
       proxy: cleanProxy(c.proxy),
@@ -488,11 +615,77 @@ function cleanProxy(v: unknown): ProxyConfig | undefined {
   }
 }
 
+const SERIAL_CHARSETS: SerialCharset[] = ['utf-8', 'gbk', 'gb18030']
+const SERIAL_NEWLINES: SerialNewline[] = ['cr', 'lf', 'crlf']
+const SERIAL_PARITIES: SerialParity[] = ['none', 'even', 'odd', 'mark', 'space']
+const SERIAL_FLOWS: SerialFlowControl[] = ['none', 'hardware', 'software']
+const SERIAL_DATA_BITS: SerialDataBits[] = [5, 6, 7, 8]
+const SERIAL_STOP_BITS: SerialStopBits[] = [1, 1.5, 2]
+/** 常用波特率；不在表里的自定义值也放行，只要在合理区间 */
+const SERIAL_MIN_BAUD = 50
+const SERIAL_MAX_BAUD = 4_000_000
+
+/**
+ * 校验并归一化文件里的串口参数。
+ *
+ * 逐字段白名单而不是「照抄」：文件是别人给的 JSON，baudRate: 0 或 dataBits: 9
+ * 会让 serialport 在 open 时抛异常，而且报错信息是原生层的，用户看不出是哪条连接坏了。
+ * 这里当场判掉，计入 invalid，问题在导入时就暴露。
+ */
+function cleanSerial(v: unknown): SerialConfig | undefined {
+  const s = v as Partial<SerialConfig> | null
+  if (!s || typeof s !== 'object') return undefined
+  const path = str(s.path, 255)?.trim()
+  if (!path) return undefined
+  const baud = Number(s.baudRate)
+  if (!Number.isInteger(baud) || baud < SERIAL_MIN_BAUD || baud > SERIAL_MAX_BAUD) return undefined
+  return {
+    path,
+    baudRate: baud,
+    dataBits: SERIAL_DATA_BITS.includes(s.dataBits as SerialDataBits)
+      ? (s.dataBits as SerialDataBits)
+      : 8,
+    stopBits: SERIAL_STOP_BITS.includes(s.stopBits as SerialStopBits)
+      ? (s.stopBits as SerialStopBits)
+      : 1,
+    parity: SERIAL_PARITIES.includes(s.parity as SerialParity) ? (s.parity as SerialParity) : 'none',
+    flowControl: SERIAL_FLOWS.includes(s.flowControl as SerialFlowControl)
+      ? (s.flowControl as SerialFlowControl)
+      : 'none',
+    charset: SERIAL_CHARSETS.includes(s.charset as SerialCharset)
+      ? (s.charset as SerialCharset)
+      : 'utf-8',
+    newline: SERIAL_NEWLINES.includes(s.newline as SerialNewline)
+      ? (s.newline as SerialNewline)
+      : 'cr',
+    // 自动复位是危险开关，默认关；文件里明确写了 true 才开
+    autoReset: s.autoReset === true,
+    usbSerialNumber: str(s.usbSerialNumber, 128),
+    usbPnpId: str(s.usbPnpId, 255),
+    pathPending: s.pathPending === true
+  }
+}
+
 /* ------------------------------------------------------------------ *
  *  工具
  * ------------------------------------------------------------------ */
 
-function dupKey(c: { name: string; host: string; port: number; username: string }): string {
+function dupKey(c: {
+  name: string
+  host: string
+  port: number
+  username: string
+  kind?: ConnKind
+  serial?: SerialConfig
+}): string {
+  /*
+   * 串口连接不能沿用 name+host+port+username：它的 host/username 是空串、
+   * port 是 0，两台不同设备只要重名就会被判成重复，导入时后一台被 skip 掉。
+   * 用端口路径代替地址部分。
+   */
+  if (c.kind === 'serial') {
+    return `${c.name}\u0000serial\u0000${c.serial?.path ?? ''}`
+  }
   return `${c.name}\u0000${c.host}\u0000${c.port}\u0000${c.username}`
 }
 

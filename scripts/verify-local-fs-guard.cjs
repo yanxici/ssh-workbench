@@ -260,20 +260,20 @@ async function main() {
    */
 
   // 扩展前缀包裹本应被拒的位置 —— 前缀不能成为绕过黑名单的通道
-  await expectGuardReject('\?\ + System32 被守卫拒绝',
+  await expectGuardReject('\\?\\ + System32 被守卫拒绝',
     () => M.localDelete([j('', '', '?', 'C:', 'Windows', 'System32', 'config')]), '关键位置')
   await expectGuardReject('//?/ 斜杠形态同样被拒',
     () => M.localDelete(['//?/C:/Windows/System32/config']), '关键位置')
   // home 本身：只断言抛错，绝不真执行
   const home = os.homedir()
   const homeExtended = j('', '', '?') + BS + home
-  await expectGuardReject('\?\ + 用户主目录被守卫拒绝',
+  await expectGuardReject('\\?\\ + 用户主目录被守卫拒绝',
     () => M.localDelete([homeExtended]), '关键位置')
   // GLOBALROOT 设备命名空间（阴影副本绕文件锁）
   await expectGuardReject('GLOBALROOT 设备路径被拒',
     () => M.localDelete([j('', '', '?', 'GLOBALROOT', 'Device', 'HarddiskVolumeShadowCopy1', 'Windows')]),
     '设备路径')
-  await expectGuardReject('\\.\ 设备路径被拒',
+  await expectGuardReject('\\\\.\\ 设备路径被拒',
     () => M.localDelete([j('', '', '.', 'PhysicalDrive0')]), '设备路径')
   // UNC：浏览放行、删除拒绝
   await expectGuardReject('UNC 网络路径不允许删除',

@@ -169,7 +169,7 @@ export function StatusBar(): JSX.Element {
           <span className="flex items-center gap-1 text-ink-2">
             <CircleDot size={10} className="text-ink-3" />
             <span className="max-w-[180px] truncate">
-              {session.username}@{session.host}
+              {session.target}
             </span>
           </span>
 

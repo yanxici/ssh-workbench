@@ -278,7 +278,6 @@ async function main() {
   /* 6. 比对 */
   const expectAll = treeMap(SRC, SRC, {})
   /* 符号链接本就不该传，从期望里摘掉，单独断言「远端不能出现」 */
-  const expectLinks = Object.keys(expectAll).filter((k) => expectAll[k] === 'link')
   const expect = {}
   for (const [k, v] of Object.entries(expectAll)) if (v !== 'link') expect[k] = v
   /* 远端落点 = 目标目录/本地目录名（keepRoot），所以基准取那个同名目录 */

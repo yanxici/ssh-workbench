@@ -15,7 +15,7 @@ import { cn, formatBytes } from '@/lib/utils'
 import { ConfirmDialog } from '@/components/ui'
 import { useFirmwareStore } from '@/stores/firmwareStore'
 import { useSftpStore } from '@/stores/sftpStore'
-import { useSessionStore } from '@/stores/sessionStore'
+import { useSshSessions } from '@/stores/sessionStore'
 
 /**
  * 固件升级助手（覆盖主区域）：选择 → 上传 → 校验 → 升级 → 重启等待 → 启动日志。
@@ -106,7 +106,8 @@ function StepCard({
  * ------------------------------------------------------------------ */
 
 function TargetBar(): JSX.Element {
-  const sessions = useSessionStore((s) => s.sessions)
+  // 固件升级靠 SFTP 传包 + 远端命令，串口会话在这里选了也只会报「仅支持 SSH」
+  const sessions = useSshSessions()
   const sessionId = useFirmwareStore((s) => s.sessionId)
   const connected = sessions.filter((s) => s.status === 'connected')
 
@@ -121,7 +122,7 @@ function TargetBar(): JSX.Element {
         <option value="">选择一台在线设备…</option>
         {connected.map((s) => (
           <option key={s.id} value={s.id}>
-            {s.title}（{s.username}@{s.host}）
+            {s.title}（{s.target}）
           </option>
         ))}
       </select>
@@ -434,7 +435,7 @@ function StepReboot(): JSX.Element {
   const bootLog = useFirmwareStore((s) => s.bootLog)
   const [confirming, setConfirming] = useState(false)
 
-  const sessions = useSessionStore((s) => s.sessions)
+  const sessions = useSshSessions()
   const hasOnline = sessions.some((s) => s.status === 'connected')
 
   return (

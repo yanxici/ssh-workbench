@@ -147,6 +147,7 @@ const SEED: SeedInput[] = [
   cmd({
     name: '端口连通性探测',
     command: 'nc -zv -w 3 {{host}} {{port}}',
+    envs: ['ssh'],
     description: 'TCP 端口是否可达',
     group: '网络诊断',
     icon: 'Plug',
@@ -159,6 +160,7 @@ const SEED: SeedInput[] = [
   cmd({
     name: 'HTTP 接口测试',
     command: 'curl -sS -m 8 -i {{url}} 2>&1 | head -n 40',
+    envs: ['ssh'],
     description: '查看响应头与前若干行内容',
     group: '网络诊断',
     icon: 'Globe',
@@ -205,6 +207,7 @@ const SEED: SeedInput[] = [
   cmd({
     name: '资源占用 TOP',
     command: 'top -b -n 1 | head -n 25',
+    envs: ['ssh'],
     description: 'CPU / 内存占用最高的进程',
     group: '进程与资源',
     icon: 'Gauge',
@@ -289,6 +292,7 @@ const SEED: SeedInput[] = [
   cmd({
     name: '启动错误日志',
     command: 'journalctl -b -p err --no-pager 2>/dev/null | tail -n 100',
+    envs: ['ssh'],
     description: '本次启动的错误级日志（systemd 系统）',
     group: '日志排查',
     icon: 'FileText',
@@ -327,6 +331,7 @@ const SEED: SeedInput[] = [
   cmd({
     name: 'I2C 总线扫描',
     command: 'i2cdetect -y {{bus}}',
+    envs: ['ssh'],
     description: '扫描 I2C 总线上的从设备地址',
     group: '嵌入式专项',
     icon: 'Microchip',

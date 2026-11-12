@@ -18,6 +18,7 @@ import {
   X
 } from 'lucide-react'
 import type { Connection, ConnectionInput } from '@shared/types'
+import { connectionAddress } from '@shared/serialDisplay'
 import { groupConnections, useConnectionStore } from '@/stores/connectionStore'
 import { useSessionStore } from '@/stores/sessionStore'
 import { useSettingsStore } from '@/stores/settingsStore'
@@ -267,7 +268,14 @@ export function ConnectionSidebar({
   const [shown, setShown] = useState<Record<string, number>>({})
 
   const openConnection = (c: Connection): void => {
-    open({ id: c.id, name: c.name, host: c.host, username: c.username })
+    open({
+      id: c.id,
+      name: c.name,
+      host: c.host,
+      username: c.username,
+      kind: c.kind,
+      serial: c.serial
+    })
   }
 
   const duplicateConnection = async (c: Connection): Promise<void> => {
@@ -746,9 +754,9 @@ export function ConnectionSidebar({
                           {/* 主机信息：等宽字体，单行省略，悬停看完整地址 */}
                           <div
                             className="mt-0.5 truncate pl-[11px] font-mono text-2xs text-ink-3"
-                            title={`${c.username}@${c.host}:${c.port}`}
+                            title={connectionAddress(c)}
                           >
-                            {c.username}@{c.host}:{c.port}
+                            {connectionAddress(c)}
                           </div>
 
                           {c.tags.length > 0 && (
@@ -1060,7 +1068,7 @@ export function ConnectionSidebar({
         message={
           <>
             确定删除连接 <span className="font-medium text-ink">「{pendingDelete?.name}」</span>
-            （{pendingDelete?.username}@{pendingDelete?.host}）吗？
+            （{pendingDelete ? connectionAddress(pendingDelete) : ''}）吗？
             <div className="mt-2 text-2xs text-ink-3">
               删除后已保存的密码会一并从凭据保险箱移除，该操作不可撤销。
             </div>

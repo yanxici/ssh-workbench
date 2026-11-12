@@ -13,6 +13,7 @@ import {
   X
 } from 'lucide-react'
 import type { Connection, DeviceProfile, DeviceProfileInput } from '@shared/types'
+import { connectionTarget } from '@shared/serialDisplay'
 import { cn, formatTime } from '@/lib/utils'
 import { ConfirmDialog, EmptyState, Field } from '@/components/ui'
 import { useProfileStore } from '@/stores/profileStore'
@@ -272,7 +273,14 @@ function ProfileDetail({
     : []
 
   const openSession = (c: Connection): void => {
-    useSessionStore.getState().open({ id: c.id, name: c.name, host: c.host, username: c.username })
+    useSessionStore.getState().open({
+      id: c.id,
+      name: c.name,
+      host: c.host,
+      username: c.username,
+      kind: c.kind,
+      serial: c.serial
+    })
     useProfileStore.setState({ panelOpen: false })
   }
 
@@ -471,7 +479,7 @@ function ProfileDetail({
                 <button
                   key={c.id}
                   className="btn h-6 px-2 text-2xs"
-                  title={`打开 ${c.username}@${c.host} 的会话`}
+                  title={`打开 ${connectionTarget(c)} 的会话`}
                   onClick={() => openSession(c)}
                 >
                   <Terminal size={11} />

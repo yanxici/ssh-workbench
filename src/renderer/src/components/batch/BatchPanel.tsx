@@ -19,7 +19,7 @@ import { cn } from '@/lib/utils'
 import { EmptyState } from '@/components/ui'
 import { useBatchStore } from '@/stores/batchStore'
 import { useCommandStore } from '@/stores/commandStore'
-import { useSessionStore } from '@/stores/sessionStore'
+import { useSessionStore, useSshSessions } from '@/stores/sessionStore'
 import { useToastStore } from '@/stores/toastStore'
 
 /**
@@ -59,7 +59,7 @@ export function BatchPanel(): JSX.Element | null {
  * ------------------------------------------------------------------ */
 
 function SessionPicker(): JSX.Element {
-  const sessions = useSessionStore((s) => s.sessions)
+  const sessions = useSshSessions()
   const selected = useBatchStore((s) => s.selectedSessionIds)
 
   const connected = useMemo(() => sessions.filter((s) => s.status === 'connected'), [sessions])
@@ -106,7 +106,7 @@ function SessionPicker(): JSX.Element {
                   ? 'cursor-default text-ink-2 hover:bg-hover/60'
                   : 'cursor-not-allowed text-ink-3/70'
               )}
-              title={selectable ? `${s.username}@${s.host}` : '会话未连接，无法参与批量执行'}
+              title={selectable ? s.target : '会话未连接，无法参与批量执行'}
               onClick={() => selectable && useBatchStore.getState().toggleSession(s.id)}
             >
               {on ? (
@@ -359,7 +359,7 @@ function BatchResultCard({ sessionId }: { sessionId: string }): JSX.Element {
         <BatchStatusIcon status={status} />
         <span className="text-xs font-medium text-ink">{title}</span>
         <span className="font-mono text-3xs text-ink-3">
-          {result ? `${result.username}@${result.host}` : (session?.host ?? '')}
+          {result ? result.target : (session?.target ?? '')}
         </span>
         <span className="flex-1" />
         <span className="font-mono text-3xs text-ink-3">

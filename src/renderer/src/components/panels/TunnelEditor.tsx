@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { TunnelConfig, TunnelInput, TunnelType } from '@shared/types'
 import { isWildcardHost, needsLanGrant } from '@shared/bindHost'
+import { connectionTarget } from '@shared/serialDisplay'
 import { cn } from '@/lib/utils'
 import { Field, Modal } from '@/components/ui'
 import { useConnectionStore } from '@/stores/connectionStore'
@@ -209,7 +210,7 @@ export function TunnelEditor({
             <option value="">自动（当前活动会话）</option>
             {connections.map((c) => (
               <option key={c.id} value={c.id}>
-                {c.name}（{c.username}@{c.host}）
+                {c.name}（{connectionTarget(c)}）
               </option>
             ))}
           </select>

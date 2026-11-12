@@ -1,12 +1,22 @@
-import { Client, type ClientChannel, type ConnectConfig } from 'ssh2'
-import { StringDecoder } from 'node:string_decoder'
+import { Client, type ConnectConfig } from 'ssh2'
 import type {
   AppSettings,
+  ConnKind,
   ConnStatus,
   Connection,
   ReconnectEvent,
+  SerialConfig,
+  SerialPortInfo,
   SessionInfo
 } from '@shared/types'
+import type { Transport, TransportEvents } from '../transport/types'
+import { SshTransport } from '../transport/sshTransport'
+import { SerialTransport } from '../transport/serialTransport'
+import { resolveSerialPath } from '../transport/serialResolve'
+import { listSerialPorts } from '../transport/serialPorts'
+// 显示名格式只留 shared 那一份：标签栏要立刻显示（主进程还没回话），
+// 主进程 list() 也要给同一个名字，两处各写必然漂移。
+import { describeSerialTarget } from '@shared/serialDisplay'
 import { getConnection, getSettings, touchConnection } from '../store/repository'
 import { recorder } from './recorder'
 import { getSecret } from '../store/vault'
@@ -40,20 +50,40 @@ interface SessionRecord {
   id: string
   connectionId: string
   connectionName: string
+  /** 会话类型：决定界面显示什么、哪些子系统可用 */
+  kind: ConnKind
   host: string
   username: string
+  /** 一行显示用的目标描述，SSH 为 user@host，串口为 COM3 · 115200 8N1 */
+  target: string
   status: ConnStatus
   error?: string
   createdAt: number
   cols: number
   rows: number
   latencyMs?: number
-  client: Client
-  shell?: ClientChannel
+  /**
+   * 统一的数据通道。收发、窗口、关闭全部走它，本类不再直接碰 ssh2 的 channel。
+   * 解码也下沉到传输层内部：SSH 固定 UTF-8，串口按连接配置的 charset。
+   */
+  transport: Transport
+  /**
+   * 底层 SSH 连接，仅 kind='ssh' 时有值。
+   * SFTP 挂载、延迟探测、端口转发这些 SSH 专有能力仍需要它 ——
+   * 把它们也塞进 Transport 接口会让接口变成 ssh2 的镜像，得不偿失。
+   */
+  client?: Client
   /** 跳板链上所有中间连接，关闭时一并清理 */
   jumpClients: Client[]
-  decoder: StringDecoder
-  pending: Buffer[]
+  /**
+   * 串口参数快照，仅 kind='serial' 时有值。
+   * 断开后要按 USB 身份把同一台设备找回来，不能只靠 connectionId 重读配置 ——
+   * 期间用户可能改了连接、也可能删了连接，恢复时用的是当时打开的参数。
+   */
+  serialConfig?: SerialConfig
+  /** 输出合帧缓冲（已解码文本，原始字节单独暂存给 ZMODEM） */
+  pendingText: string[]
+  pendingRaw: Buffer[]
   flushTimer?: NodeJS.Timeout
   /** 最近一次探测的时刻 / 是否正在进行，供全局轮转探针调度 */
   probedAt?: number
@@ -80,6 +110,8 @@ const PROBE_MIN_GAP_MS = 5000
 const FLUSH_INTERVAL_MS = 8
 /** 等待会话就绪的默认上限（连接握手未完成的挂起请求） */
 const READY_TIMEOUT_MS = 30_000
+
+
 
 /** 就绪等待者：会话进入 connected 时 resolve，失败/断开/超时时 reject */
 interface ReadyWaiter {
@@ -123,6 +155,17 @@ class SessionManager {
       rows: number
     }
   >()
+  /**
+   * 串口会话「等设备插回」的挂起表。
+   *
+   * 与 reconnectState 分开而不是复用：SSH 的重连是定时器驱动的退避重试，
+   * 串口是事件驱动的（等热插拔通知）。硬塞进同一个 Map 会让每个读取点
+   * 都要先判断「这条记录到底有没有 timer」，不如两张表各自表达一种机制。
+   */
+  private serialWaiting = new Map<
+    string,
+    { connectionId: string; title: string; cols: number; rows: number }
+  >()
   private handlers: SessionEvents | null = null
   /** 会话关闭钩子（供 SFTP 等模块清理挂在会话上的资源） */
   private onClosed: ((sessionId: string) => void) | null = null
@@ -132,6 +175,52 @@ class SessionManager {
   private opening = new Set<string>()
   /** 登记前就被关闭的 id：open() 读完配置后直接放弃 */
   private cancelled = new Set<string>()
+  /**
+   * 串口传输层工厂（测试注入点）。
+   *
+   * 生产环境为 null，走真实的 SerialTransport。测试里换成内存假实现，
+   * 就能在没有物理串口、没有 com0com 的 CI 机器上跑完整的「打开 → 收发 →
+   * 拔线 → 等设备 → 插回 → 自动恢复」链路。
+   *
+   * 用注入而不是在 SerialTransport 内部做 if (process.env.TEST)：
+   * 后者会把测试分支留在生产代码里，且测试只能验到「分支走对了」，
+   * 验不到真实实现的行为。
+   */
+  private serialTransportFactory: ((cfg: SerialConfig, events: TransportEvents) => Transport) | null =
+    null
+
+  /** 注入串口传输层工厂（仅测试使用；传 null 恢复真实实现） */
+  setSerialTransportFactory(
+    factory: ((cfg: SerialConfig, events: TransportEvents) => Transport) | null
+  ): void {
+    this.serialTransportFactory = factory
+  }
+
+  /** 造一个串口传输层：优先用注入的工厂，否则用真实的 SerialTransport */
+  private makeSerialTransport(cfg: SerialConfig, events: TransportEvents): Transport {
+    return this.serialTransportFactory
+      ? this.serialTransportFactory(cfg, events)
+      : new SerialTransport({ config: cfg }, events)
+  }
+
+  /**
+   * 串口端口枚举器（测试注入点）。
+   *
+   * 与上面的工厂同一个理由：CI 机器上没有串口，真实的 listSerialPorts()
+   * 返回空数组，openSerial 会在「端口不存在」这一步就失败，后面
+   * 「按 USB 身份找回设备」的逻辑一条都跑不到。注入假枚举器才能在
+   * 测试里模拟「拔掉 → 列表空了 → 插回 → 同 serialNumber 换了 COM 号」。
+   */
+  private serialPortLister: (() => Promise<SerialPortInfo[]>) | null = null
+
+  /** 注入串口枚举器（仅测试使用；传 null 恢复真实实现） */
+  setSerialPortLister(lister: (() => Promise<SerialPortInfo[]>) | null): void {
+    this.serialPortLister = lister
+  }
+
+  private listPorts(): Promise<SerialPortInfo[]> {
+    return this.serialPortLister ? this.serialPortLister() : listSerialPorts()
+  }
 
   setHandlers(handlers: SessionEvents): void {
     this.handlers = handlers
@@ -146,8 +235,10 @@ class SessionManager {
       id: s.id,
       connectionId: s.connectionId,
       connectionName: s.connectionName,
+      kind: s.kind,
       host: s.host,
       username: s.username,
+      target: s.target,
       title: s.connectionName,
       status: s.status,
       error: s.error,
@@ -158,9 +249,29 @@ class SessionManager {
     }))
   }
 
-  /** 供 SFTP 模块在已建立的连接上挂载 SFTP 子系统 */
+  /** 供 SFTP 模块在已建立的连接上挂载 SFTP 子系统（仅 SSH 会话有值） */
   getClient(sessionId: string): Client | undefined {
     return this.sessions.get(sessionId)?.client
+  }
+
+  /** 会话类型；不存在时返回 undefined */
+  kindOf(sessionId: string): ConnKind | undefined {
+    return this.sessions.get(sessionId)?.kind
+  }
+
+  /**
+   * 断言会话是 SSH 类型。
+   *
+   * SFTP、隧道、端口转发、批量执行、诊断、指标、固件这七个子系统全部建立在
+   * ssh2 的 Client 之上，串口会话上它们没有意义。与其让每个调用方各自判断
+   * 「getClient 返回 undefined 怎么办」，不如在这里给出统一、可读的错误。
+   */
+  requireSshClient(sessionId: string): Client {
+    const record = this.sessions.get(sessionId)
+    if (!record) throw new Error('会话不存在或已断开，请先打开连接')
+    if (record.kind !== 'ssh') throw new Error('该功能仅支持 SSH 会话，串口会话不提供')
+    if (!record.client) throw new Error('SSH 连接尚未就绪，请稍后重试')
+    return record.client
   }
 
   /* ------------------------------------------------------------------ *
@@ -241,25 +352,26 @@ class SessionManager {
     }
     if (this.cancelled.delete(sessionId)) return
 
-    const record: SessionRecord = {
+    // 串口与 SSH 的连接建立过程毫无共同点（一边是 TCP+握手+认证+跳板，
+    // 一边是打开本地设备文件），只共享外层的「登记 → 广播 → 失败处理」。
+    if (conn.kind === 'serial') {
+      await this.openSerial(sessionId, connectionId, conn, settings, cols, rows)
+      return
+    }
+
+    const record = this.newRecord({
       id: sessionId,
       connectionId,
       connectionName: conn.name,
+      kind: 'ssh',
       host: conn.host,
       username: conn.username,
-      status: 'connecting',
-      createdAt: Date.now(),
+      target: `${conn.username}@${conn.host}`,
       cols,
-      rows,
-      client: new Client(),
-      jumpClients: [],
-      decoder: new StringDecoder('utf-8'),
-      pending: [],
-      closedByUser: false,
-      shared: { refs: 1 },
-      closed: false,
-      cleaned: false
-    }
+      rows
+    })
+    // 占位传输层：真正的 SshTransport 要等连接建立后才构造（它需要 client）。
+    // 先放一个不可用的实现，保证 open 返回前到达的 write/resize 有地方落。
     this.sessions.set(sessionId, record)
     this.emitStatus(record, 'connecting')
 
@@ -293,7 +405,8 @@ class SessionManager {
       void this.prewarmSftp(record.id)
 
       // ---- 打开交互式 shell ----
-      await this.attachShell(record)
+      record.transport = new SshTransport({ getClient: () => Promise.resolve(client) }, this.transportEvents(record))
+      await record.transport.open({ cols: record.cols, rows: record.rows })
 
       await touchConnection(connectionId)
       // 延迟探测：起全局节拍器即可，单会话不再各自挂定时器
@@ -309,6 +422,141 @@ class SessionManager {
       if (record.closed) throw new Error(message)
       this.failRecord(record, message)
       throw new Error(message)
+    }
+  }
+
+  /** 串口会话：解析端口 → 打开 → 广播 connected。没有握手，成功与否在一次 open 内定论 */
+  private async openSerial(
+    sessionId: string,
+    connectionId: string,
+    conn: Connection,
+    settings: AppSettings,
+    cols: number,
+    rows: number
+  ): Promise<void> {
+    const cfg = conn.serial
+    const record = this.newRecord({
+      id: sessionId,
+      connectionId,
+      connectionName: conn.name,
+      kind: 'serial',
+      host: '',
+      username: '',
+      target: '',
+      cols,
+      rows,
+      // 存快照：断开后要按 USB 身份把同一台设备找回来，
+      // 期间用户可能改了连接或删了连接，恢复时用当时打开的参数。
+      serialConfig: cfg ? { ...cfg } : undefined
+    })
+    /*
+     * 这里不预先造 transport：参数校验与端口解析都可能在 open 之前失败，
+     * 预先造一个没 open 过的 SerialTransport 只会让 cleanup 去 close 一个
+     * 从未打开的句柄。真正需要时才在解析成功后创建（见下方）。
+     */
+    this.sessions.set(sessionId, record)
+    this.emitStatus(record, 'connecting')
+
+    try {
+      if (!cfg) throw new Error('串口连接缺少参数配置')
+      if (!cfg.path) throw new Error('未选择串口端口，请先在连接设置里选择')
+
+      /*
+       * 端口重解析：保存的 COM 号可能已经失效（拔插、换 USB 口、系统重排）。
+       * 有 USB 身份时按身份找回同一台设备；找不到就明确报错并置 pathPending，
+       * 由界面提示用户重选 —— 而不是拿旧 COM 号去开一台别的设备。
+       */
+      const ports = await this.listPorts()
+      const resolved = resolveSerialPath(cfg, ports)
+      if (!resolved.ok) {
+        cfg.pathPending = true
+        throw new Error(
+          resolved.reason === 'ambiguous'
+            ? `有 ${resolved.candidates.length} 个串口匹配同一台设备（${resolved.candidates.map((c) => c.path).join(' / ')}），请重新选择端口`
+            : `串口 ${cfg.path} 当前不存在，设备可能已拔出或端口号已变化，请重新选择端口`
+        )
+      }
+      // 端口号变了就更新到记录上：界面显示与后续写入都要用真实端口
+      if (resolved.path !== cfg.path) cfg.path = resolved.path
+
+      record.target = describeSerialTarget(cfg)
+      // 传输层用的是构造时的 config 快照，端口解析后需要重建
+      record.transport = this.makeSerialTransport(cfg, this.transportEvents(record))
+      await record.transport.open({ cols, rows })
+
+      if (record.closed) return
+
+      await touchConnection(connectionId)
+      if (settings.autoLog) {
+        void recorder.start(sessionId, conn.name, record.cols, record.rows).catch(() => {})
+      }
+      // 打开了就说明不需要再等设备（手动重连、热插拔恢复都走这里）
+      this.serialWaiting.delete(sessionId)
+      this.emitStatus(record, 'connected')
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      if (record.closed) throw new Error(message)
+      this.failRecord(record, message)
+      throw new Error(message)
+    }
+  }
+
+  /** 造一条会话记录（两种 kind 共用的字段初始化） */
+  private newRecord(init: {
+    id: string
+    connectionId: string
+    connectionName: string
+    kind: ConnKind
+    host: string
+    username: string
+    target: string
+    cols: number
+    rows: number
+    latencyMs?: number
+    serialConfig?: SerialConfig
+  }): SessionRecord {
+    return {
+      id: init.id,
+      connectionId: init.connectionId,
+      connectionName: init.connectionName,
+      kind: init.kind,
+      host: init.host,
+      username: init.username,
+      target: init.target,
+      status: 'connecting',
+      createdAt: Date.now(),
+      cols: init.cols,
+      rows: init.rows,
+      latencyMs: init.latencyMs,
+      // 占位：open 过程中会被真正的实现替换；这里保证字段非空
+      transport: null as unknown as Transport,
+      jumpClients: [],
+      serialConfig: init.serialConfig,
+      pendingText: [],
+      pendingRaw: [],
+      closedByUser: false,
+      shared: { refs: 1 },
+      closed: false,
+      cleaned: false
+    }
+  }
+
+  /**
+   * 传输层事件 → 会话层事件。
+   *
+   * 传输层交出的是「原始字节 + 已解码文本」，解码已在各实现内部完成
+   * （SSH 固定 UTF-8、串口按 charset）。这里只做合帧与录制。
+   */
+  private transportEvents(record: SessionRecord): {
+    onData: (raw: Buffer, text: string) => void
+    onClose: (error?: Error) => void
+  } {
+    return {
+      onData: (raw: Buffer, text: string) => this.feed(record, raw, text),
+      onClose: (error?: Error) => {
+        if (record.closedByUser) return
+        this.teardown(record, error ? 'error' : 'disconnected', error?.message)
+      }
     }
   }
 
@@ -329,28 +577,27 @@ class SessionManager {
       throw new Error('所属会话未连接，无法在其上新建终端')
     }
     if (host.connectionId !== connectionId) throw new Error('终端与所属会话的连接不一致')
+    // 串口是一条独占的设备通道，不支持在同一端口上再开一个终端
+    if (host.kind !== 'ssh' || !host.client) {
+      throw new Error('串口会话不支持多终端，请直接使用当前终端')
+    }
 
-    const record: SessionRecord = {
+    const record = this.newRecord({
       id: sessionId,
       connectionId: host.connectionId,
       connectionName: host.connectionName,
+      kind: 'ssh',
       host: host.host,
       username: host.username,
-      status: 'connecting',
-      createdAt: Date.now(),
+      target: host.target,
       cols,
       rows,
-      latencyMs: host.latencyMs,
-      client: host.client,
-      // 与宿主共享同一跳板链数组，最后一个终端关闭时统一断开
-      jumpClients: host.jumpClients,
-      decoder: new StringDecoder('utf-8'),
-      pending: [],
-      closedByUser: false,
-      shared: host.shared,
-      closed: false,
-      cleaned: false
-    }
+      latencyMs: host.latencyMs
+    })
+    record.client = host.client
+    // 与宿主共享同一跳板链数组，最后一个终端关闭时统一断开
+    record.jumpClients = host.jumpClients
+    record.shared = host.shared
     record.shared.refs++
     // 先登记再 await：期间到达的 resize 能记到 record 上，shell 以真实尺寸打开
     this.sessions.set(sessionId, record)
@@ -358,7 +605,9 @@ class SessionManager {
 
     try {
       this.wireClientEvents(record)
-      await this.attachShell(record)
+      const client = host.client
+      record.transport = new SshTransport({ getClient: () => Promise.resolve(client) }, this.transportEvents(record))
+      await record.transport.open({ cols: record.cols, rows: record.rows })
       this.emitStatus(record, 'connected')
       void this.prewarmSftp(record.id)
 
@@ -372,32 +621,6 @@ class SessionManager {
       this.failRecord(record, message)
       throw new Error(message)
     }
-  }
-
-  /** 在 record.client 上打开交互式 shell 并接好数据流 */
-  private async attachShell(record: SessionRecord): Promise<void> {
-    const shell = await new Promise<ClientChannel>((resolve, reject) => {
-      record.client.shell(
-        { term: 'xterm-256color', cols: record.cols, rows: record.rows },
-        (err, channel) => (err ? reject(err) : resolve(channel))
-      )
-    })
-    // shell 打开期间被关闭：直接收掉，不再挂到已拆除的记录上
-    if (record.closed) {
-      try {
-        shell.end()
-      } catch {
-        /* ignore */
-      }
-      throw new Error('会话已关闭')
-    }
-    record.shell = shell
-
-    shell.on('data', (chunk: Buffer) => this.feed(record, chunk))
-    shell.stderr.on('data', (chunk: Buffer) => this.feed(record, chunk))
-    shell.on('close', () => {
-      if (!record.closedByUser) this.teardown(record, 'disconnected')
-    })
   }
 
   /** 打开失败：广播 error 并释放资源（只处理仍属于本记录的 Map 项） */
@@ -468,6 +691,7 @@ class SessionManager {
   /** 连接建立后的掉线处理 */
   private wireClientEvents(record: SessionRecord): void {
     const client = record.client
+    if (!client) return
     const onClose = (): void => {
       if (!record.closedByUser) this.teardown(record, 'disconnected')
     }
@@ -505,20 +729,23 @@ class SessionManager {
 
   write(sessionId: string, data: string): void {
     const rec = this.sessions.get(sessionId)
-    if (rec?.shell) {
-      rec.shell.write(data)
-      recorder.appendInput(sessionId, data)
-    }
+    if (!rec || rec.status !== 'connected') return
+    // 换行转换、字符编码全部在传输层内部完成：串口按连接的 charset/newline，
+    // SSH 原样透传（远端 locale 由服务端决定）
+    rec.transport.write(data)
+    recorder.appendInput(sessionId, data)
   }
 
   /**
    * 写入原始字节（ZMODEM 等二进制协议用）。
-   * 不能走 write()：那里的 string 会被 ssh2 按 UTF-8 编码，>127 的字节会变成多字节序列而失真。
+   * 不能走 write()：串口实现会按配置改写换行符，二进制帧会被破坏；
+   * SSH 侧的 string 则会被按 UTF-8 编码，>127 的字节失真。
    * 二进制内容也不写进会话录制，避免污染日志。
    */
   writeBytes(sessionId: string, data: Buffer): void {
     const rec = this.sessions.get(sessionId)
-    if (rec?.shell) rec.shell.write(data)
+    if (!rec || rec.status !== 'connected') return
+    rec.transport.writeBytes(data)
   }
 
   resize(sessionId: string, cols: number, rows: number): void {
@@ -526,11 +753,8 @@ class SessionManager {
     if (!rec) return
     rec.cols = cols
     rec.rows = rows
-    try {
-      rec.shell?.setWindow(rows, cols, 0, 0)
-    } catch {
-      // 连接已断开时忽略
-    }
+    // 串口实现里是空操作（设备没有终端尺寸），SSH 实现才真正下发 setWindow
+    rec.transport.resize(cols, rows)
   }
 
   /** 广播输入：多个会话同时写入 */
@@ -543,6 +767,10 @@ class SessionManager {
    * ------------------------------------------------------------------ */
 
   close(sessionId: string, silent = false): void {
+    // 等待设备插回的串口会话已不在 sessions 里（record 随 teardown 删除），
+    // 但它还挂在 serialWaiting 上等热插拔事件 —— 用户关标签必须把这条挂起也撤掉，
+    // 否则设备插回时会把已经关掉的会话又拉起来。
+    this.serialWaiting.delete(sessionId)
     const rec = this.sessions.get(sessionId)
     if (!rec) {
       if (this.opening.has(sessionId)) this.cancelled.add(sessionId)
@@ -575,10 +803,96 @@ class SessionManager {
      * 自动重连：只在「非用户主动关闭」且状态是 disconnected/error 时启动。
      * 用户点了关闭标签（closedByUser）或程序退出时不重连 —— 那是主动行为，
      * 重连会让用户觉得"关不掉"。
+     *
+     * 串口走另一条路：拔线时按秒级退避去重开一个不存在的设备没有意义，
+     * 而且插回的瞬间往往正好落在长间隔里。改为挂起等热插拔事件。
      */
     if (!record.closedByUser && (status === 'disconnected' || status === 'error')) {
-      void this.scheduleReconnect(record)
+      if (record.kind === 'serial') {
+        this.waitForDevice(record)
+      } else {
+        void this.scheduleReconnect(record)
+      }
     }
+  }
+
+  /**
+   * 串口断开后挂起，等设备插回来。
+   *
+   * 只登记、不重试：真正拉起重开的是 serialDeviceArrived()，由热插拔监听调用。
+   * 这样「插上」这个动作与「重连」这个结果之间没有延迟，也不会在设备没插时
+   * 反复打开失败的句柄。
+   */
+  private waitForDevice(record: SessionRecord): void {
+    const cfg = record.serialConfig
+    this.serialWaiting.set(record.id, {
+      connectionId: record.connectionId,
+      title: record.connectionName,
+      cols: record.cols,
+      rows: record.rows
+    })
+    const hint = cfg?.path ? `请检查 ${cfg.path} 的连接线` : '请检查设备连接线'
+    this.onReconnect?.({
+      sessionId: record.id,
+      phase: 'waiting-device',
+      message: `串口已断开，${hint}；设备插回后会自动重连`,
+      attempt: 0
+    })
+  }
+
+  /**
+   * 热插拔监听回调：有新设备出现时尝试恢复挂起的串口会话。
+   *
+   * 不判断「新出现的端口是不是这台设备的」—— 交给 open 里的
+   * resolveSerialPath 按 serialNumber/pnpId 匹配。这里多写一份匹配逻辑
+   * 只会让两处判定慢慢分叉。
+   */
+  async resumeSerialSessions(): Promise<void> {
+    if (this.serialWaiting.size === 0) return
+    const pending = [...this.serialWaiting.keys()]
+    for (const sessionId of pending) {
+      const st = this.serialWaiting.get(sessionId)
+      if (!st) continue
+      // 用户可能已经关掉这个标签
+      if (this.cancelled.delete(sessionId)) {
+        this.serialWaiting.delete(sessionId)
+        continue
+      }
+      this.onReconnect?.({
+        sessionId,
+        phase: 'connecting',
+        message: '检测到设备，正在恢复串口…',
+        attempt: 0
+      })
+      try {
+        await this.open(sessionId, st.connectionId, st.cols, st.rows)
+        this.serialWaiting.delete(sessionId)
+        this.onReconnect?.({
+          sessionId,
+          phase: 'restored',
+          message: '串口已自动恢复',
+          attempt: 0
+        })
+        // 硬回车唤醒：很多设备的串口控制台在长时间无输入后会停止回显，
+        // 补一个回车能把提示符重新唤出来，用户立刻就知道连接活着。
+        this.write(sessionId, '\r')
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        // 打开失败（比如端口被别的程序占用）：留在挂起表里等下次插拔，
+        // 不进入退避重试 —— 占用通常要人手动处理。
+        this.onReconnect?.({
+          sessionId,
+          phase: 'failed',
+          message: `恢复串口失败：${message}`,
+          attempt: 0
+        })
+      }
+    }
+  }
+
+  /** 是否在等串口设备插回（供测试/诊断） */
+  isWaitingDevice(sessionId: string): boolean {
+    return this.serialWaiting.has(sessionId)
   }
 
   /**
@@ -757,11 +1071,8 @@ class SessionManager {
     for (const r of this.sessions.values()) if (!r.closed) live++
     if (live === 0) this.stopProbeTicker()
 
-    try {
-      record.shell?.end()
-    } catch {
-      /* ignore */
-    }
+    // 关闭传输层：SSH 实现只 end shell，串口实现释放端口
+    record.transport?.close()
 
     record.shared.refs--
     if (record.shared.refs > 0) {
@@ -770,7 +1081,7 @@ class SessionManager {
     } else {
       // 最后一个终端：断开连接。监听保留（teardown 已幂等），
       // 避免 end 之后迟到的 error 事件因无监听而变成未捕获异常
-      this.endQuietly(record.client, record.jumpClients)
+      if (record.client) this.endQuietly(record.client, record.jumpClients)
       record.jumpClients.length = 0
     }
     record.jumpClients = []
@@ -780,9 +1091,10 @@ class SessionManager {
    *  输出合帧
    * ------------------------------------------------------------------ */
 
-  private feed(record: SessionRecord, chunk: Buffer): void {
+  private feed(record: SessionRecord, raw: Buffer, text: string): void {
     if (record.closed) return
-    record.pending.push(chunk)
+    record.pendingRaw.push(raw)
+    if (text) record.pendingText.push(text)
     if (record.flushTimer) return
     record.flushTimer = setTimeout(() => {
       record.flushTimer = undefined
@@ -791,12 +1103,13 @@ class SessionManager {
   }
 
   private flush(record: SessionRecord): void {
-    if (record.pending.length === 0) return
+    if (record.pendingRaw.length === 0) return
     // 原始字节：ZMODEM 等二进制协议必须基于未解码的字节流解析，
     // 因此除文本外再把合并后的原始缓冲一并交给上层。
-    const raw = Buffer.concat(record.pending)
-    const text = record.decoder.write(raw)
-    record.pending = []
+    const raw = Buffer.concat(record.pendingRaw)
+    const text = record.pendingText.join('')
+    record.pendingRaw = []
+    record.pendingText = []
     if (text || raw.length) {
       this.handlers?.onData(record.id, text, raw)
       if (text) recorder.appendOutput(record.id, text)
@@ -854,7 +1167,12 @@ class SessionManager {
       record.probing = false
     }
     try {
-      record.client.exec('echo', (err, stream) => {
+      const client = record.client
+      if (!client) {
+        finish()
+        return
+      }
+      client.exec('echo', (err, stream) => {
         if (err || !stream) {
           finish()
           return

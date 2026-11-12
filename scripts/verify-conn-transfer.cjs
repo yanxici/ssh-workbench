@@ -47,6 +47,7 @@ esbuild.buildSync({
       export * from './src/main/store/connTransfer'
       export * from './src/main/store/repository'
       export { getSecret } from './src/main/store/vault'
+      export { listSerialPorts } from './src/main/transport/serialPorts'
     `,
     resolveDir: ROOT,
     loader: 'ts'
@@ -266,6 +267,106 @@ async function main() {
   check('只导入合法条目', rD.added === 1 && rD.invalid === 4)
   check('空分组归到默认', (await D.listConnections())[0].group === '默认')
   check('私钥文件名不能跳出目录', !fs.existsSync(path.join(D.dir, 'evil')) && !fs.existsSync(path.join(D.dir, 'data', 'evil')))
+
+  /* ================= 串口连接：导出 / 导入 / 按 USB 身份找回端口 ================= */
+  {
+    const E = machine('E')
+    const ser = (name, serial) =>
+      E.saveConnection({
+        kind: 'serial',
+        name,
+        host: '',
+        port: 0,
+        username: '',
+        authType: 'password',
+        group: 'SER',
+        tags: [],
+        serial: {
+          path: 'COM3',
+          baudRate: 115200,
+          dataBits: 8,
+          stopBits: 1,
+          parity: 'none',
+          flowControl: 'none',
+          charset: 'utf-8',
+          newline: 'cr',
+          ...serial
+        }
+      })
+    await ser('控制台-A', { path: 'COM3', usbSerialNumber: 'SN-AAA' })
+    await ser('控制台-B', { path: 'COM9' })
+    // 同名不同端口：串口没有 host/port 可区分，判定必须看端口路径
+    await ser('控制台-B', { path: 'COM11' })
+
+    const fSerial = path.join(work, 'serial.swconn')
+    const eSerial = await E.exportConnectionsToFile(fSerial, { includeSecrets: true })
+    check('串口连接全部导出', eSerial.count === 3, `实际 ${eSerial.count}`)
+    // 串口落库时 authType 被统一成 password，若照 SSH 统计会凭空多出「没有密码」告警
+    check('串口不计入无密码统计', eSerial.noPassword === 0, `实际 ${eSerial.noPassword}`)
+    const rawSerial = fs.readFileSync(fSerial, 'utf8')
+    check('导出文件带 USB 身份', rawSerial.includes('SN-AAA'))
+
+    const F = machine('F')
+    // 对方机器上只有一台设备：COM 号与导出方不同，但 serialNumber 相同
+    F.setSerialPortLister(async () => [
+      { path: 'COM7', serialNumber: 'SN-AAA', pnpId: 'USB\\VID_10C4&PID_EA60\\AAA' }
+    ])
+    const pvS = await F.previewImport(fSerial)
+    check('预览识别串口条数', pvS.serialCount === 3, `实际 ${pvS.serialCount}`)
+    check('预览算出一条对得上、两条待确认', pvS.pendingPorts === 2, `实际 ${pvS.pendingPorts}`)
+
+    const rS = await F.applyImport(fSerial, undefined, 'skip')
+    check('串口连接全部导入', rS.added === 3 && rS.invalid === 0, JSON.stringify(rS))
+    check('导入返回待确认数', rS.pendingPorts === 2, `实际 ${rS.pendingPorts}`)
+
+    const sList = await F.listConnections()
+    const a = sList.find((c) => c.name === '控制台-A')
+    check('按 USB 身份找回端口', a.serial.path === 'COM7' && a.serial.pathPending === false, JSON.stringify(a.serial))
+    check('找回后身份字段保留', a.serial.usbSerialNumber === 'SN-AAA')
+    check('串口连接的 kind 与空地址', a.kind === 'serial' && a.host === '' && a.port === 0 && a.username === '')
+    check('串口连接不写凭据', !(await F.getSecret(a.id)).password)
+    const bList = sList.filter((c) => c.name === '控制台-B')
+    check('同名不同端口不算重复', bList.length === 2, `实际 ${bList.length}`)
+    check('找不到的端口标为待确认', bList.every((c) => c.serial.pathPending === true))
+    check(
+      '待确认连接保留原端口号',
+      bList.map((c) => c.serial.path).sort().join() === 'COM11,COM9',
+      bList.map((c) => c.serial.path).join()
+    )
+
+    // 串口参数非法：必须计入 invalid，而不是被当成「缺 host」的坏 SSH 丢掉
+    const fBadSerial = bad(
+      'serial',
+      JSON.stringify({
+        format: 'ssh-workbench-connections',
+        version: 1,
+        encrypted: false,
+        payload: {
+          connections: [
+            { ref: 'a', name: '好串口', kind: 'serial', serial: { path: 'COM1', baudRate: 9600 } },
+            { ref: 'b', name: '坏波特率', kind: 'serial', serial: { path: 'COM2', baudRate: 0 } },
+            { ref: 'c', name: '缺端口', kind: 'serial', serial: { baudRate: 115200 } }
+          ],
+          keys: {}
+        }
+      })
+    )
+    const pvBadS = await F.previewImport(fBadSerial)
+    check('串口参数非法计入 invalid', pvBadS.count === 1 && pvBadS.invalid === 2, JSON.stringify({ count: pvBadS.count, invalid: pvBadS.invalid }))
+    await F.applyImport(fBadSerial, undefined, 'skip')
+    const good = (await F.listConnections()).find((c) => c.name === '好串口')
+    check(
+      '缺省串口参数补齐',
+      good.serial.dataBits === 8 &&
+        good.serial.stopBits === 1 &&
+        good.serial.parity === 'none' &&
+        good.serial.flowControl === 'none' &&
+        good.serial.charset === 'utf-8' &&
+        good.serial.newline === 'cr' &&
+        good.serial.autoReset === false,
+      JSON.stringify(good.serial)
+    )
+  }
 
   /* ================= 规模：3000 条 ================= */
   const S = machine('S')

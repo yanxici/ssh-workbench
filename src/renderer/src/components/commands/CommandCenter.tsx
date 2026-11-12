@@ -24,6 +24,7 @@ import { useSettingsStore } from '@/stores/settingsStore'
 import { useToastStore } from '@/stores/toastStore'
 import { useUiStore } from '@/stores/uiStore'
 import { runCommand } from '@/stores/executionStore'
+import { useActiveEnv } from '@/stores/sessionStore'
 import {
   buildScopes,
   sameScope,
@@ -81,6 +82,8 @@ export function CommandCenter({
   const extraGroups = useSettingsStore((s) => s.settings.commandGroups) ?? EMPTY_GROUPS
   const savedSort = useSettingsStore((s) => s.settings.commandSort) ?? 'smart'
   const updateSettings = useSettingsStore((s) => s.update)
+  /** 当前活动会话的连接类型；没有活动会话时 undefined，此时不过滤 */
+  const env = useActiveEnv()
 
   const [query, setQuery] = useState('')
   const [scope, setScope] = useState<Scope>({ kind: 'all' })
@@ -108,13 +111,13 @@ export function CommandCenter({
   }, [open, presetQuery])
 
   const scopes = useMemo(
-    () => buildScopes(commands, { groupOrder, extraGroups, pinnedIds }),
-    [commands, groupOrder, extraGroups, pinnedIds]
+    () => buildScopes(commands, { groupOrder, extraGroups, pinnedIds, env }),
+    [commands, groupOrder, extraGroups, pinnedIds, env]
   )
 
   const results = useMemo(
-    () => searchCommands({ commands, query, scope, sort, pinnedIds }),
-    [commands, query, scope, sort, pinnedIds]
+    () => searchCommands({ commands, query, scope, sort, pinnedIds, env }),
+    [commands, query, scope, sort, pinnedIds, env]
   )
 
   /**

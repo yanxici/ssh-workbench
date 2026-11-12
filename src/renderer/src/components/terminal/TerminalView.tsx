@@ -397,7 +397,7 @@ export function TerminalView({
           {session.status === 'connecting' && (
             <div className="flex items-center gap-2.5 text-xs text-ink-2">
               <Loader2 size={15} className="animate-spin text-accent" />
-              正在连接 {session.username}@{session.host}…
+              正在连接 {session.target}…
             </div>
           )}
           {session.status === 'disconnected' && (

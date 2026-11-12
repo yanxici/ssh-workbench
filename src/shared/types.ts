@@ -9,6 +9,68 @@
 
 export type AuthType = 'password' | 'privateKey' | 'agent'
 
+/**
+ * 连接类型。
+ *
+ * 用同一个 Connection 实体承载两种连接，而不是并列两套实体：
+ * 分组、标签、色标、备注、最近使用时间、搜索、批量打标签、导入导出
+ * 这些能力对两种连接完全一样，拆两套就要复制一遍。
+ *
+ * 缺省（undefined）一律按 'ssh' 处理 —— V1.x 存下来的连接没有这个字段，
+ * 不做数据迁移，读取时就地兜底。
+ */
+export type ConnKind = 'ssh' | 'serial'
+
+export type SerialDataBits = 5 | 6 | 7 | 8
+export type SerialStopBits = 1 | 1.5 | 2
+export type SerialParity = 'none' | 'even' | 'odd' | 'mark' | 'space'
+export type SerialFlowControl = 'none' | 'hardware' | 'software'
+/** 串口字符编码。现场设备大量是 GBK（国产模组、老工控屏），UTF-8 会显示成乱码 */
+export type SerialCharset = 'utf-8' | 'gbk' | 'gb18030'
+/**
+ * 发送时追加的换行。
+ *
+ * 必须是配置项而不是写死 CR：U-Boot / BusyBox 认 LF，多数 MCU 的 AT 通道认 CR，
+ * 而 Windows 串口工具惯用 CRLF。认 CR 的设备收到 CRLF 会当成两次回车，
+ * 直接执行两遍命令 —— 在设备上是实打实的副作用。
+ */
+export type SerialNewline = 'cr' | 'lf' | 'crlf'
+
+/** 串口连接参数（仅 kind = 'serial' 时有值） */
+export interface SerialConfig {
+  /** 端口路径：Windows 为 COM3，Linux/macOS 为 /dev/ttyUSB0 */
+  path: string
+  baudRate: number
+  dataBits: SerialDataBits
+  stopBits: SerialStopBits
+  parity: SerialParity
+  flowControl: SerialFlowControl
+  charset: SerialCharset
+  newline: SerialNewline
+  /**
+   * 打开端口时是否拉 DTR 触发设备复位。
+   *
+   * 默认关闭。ESP32 / STM32 / Arduino 的自动下载电路会把 DTR 接到 EN 脚，
+   * 一拉就重启 —— 用户只是想看日志，结果把设备重启了，在现场是事故。
+   */
+  autoReset?: boolean
+  /**
+   * USB 身份，用于拔插后找回同一台设备。
+   *
+   * 优先 serialNumber（芯片出厂唯一），退而求其次 pnpId（含 VID/PID/序列号，
+   * 但某些廉价 CH340 的 pnpId 只有 VID/PID，同型号两个设备就分不开），
+   * 两者都没有时只能退回 COM 号 —— 那时拔插后可能连到别的设备上，
+   * 见 resolveSerialPath 的注释。
+   */
+  usbSerialNumber?: string
+  usbPnpId?: string
+  /**
+   * 端口待确认：导入别人的连接、或插拔后原端口消失且无法用 USB 身份匹配时置位。
+   * 渲染层据此提示「请重新选择端口」，而不是拿着一个不存在的 COM 号去连。
+   */
+  pathPending?: boolean
+}
+
 export interface ProxyConfig {
   type: 'socks5' | 'http'
   host: string
@@ -20,12 +82,25 @@ export interface ProxyConfig {
 export interface Connection {
   id: string
   name: string
+  /** 连接类型；缺省按 'ssh' 处理 */
+  kind?: ConnKind
+  /**
+   * SSH 主机。
+   *
+   * 串口连接保留这个字段但存空串 —— 不改成可选，因为可选会让所有读
+   * conn.host 的地方（连接配置构建、指纹校验、跳板、导入导出、搜索）
+   * 全部需要收窄，扩散面几十处，而收益只是"类型上更诚实"。
+   * 语义上：host / port / username / authType 只对 kind='ssh' 有意义，
+   * 串口连接的界面与逻辑一律先看 kind 再决定读不读这些字段。
+   */
   host: string
   port: number
   username: string
   authType: AuthType
   /** 私钥文件路径（authType = privateKey） */
   privateKeyPath?: string
+  /** 串口参数（kind = 'serial'） */
+  serial?: SerialConfig
   /** 分组名，'/' 分隔表示层级 */
   group: string
   tags: string[]
@@ -38,6 +113,17 @@ export interface Connection {
   lastUsedAt?: number
   createdAt: number
   updatedAt: number
+}
+
+/** 系统枚举到的串口（SerialPort.list() 的投影，只保留用得上的字段） */
+export interface SerialPortInfo {
+  path: string
+  manufacturer?: string
+  serialNumber?: string
+  pnpId?: string
+  locationId?: string
+  productId?: string
+  vendorId?: string
 }
 
 /* ---------- 连接导出 / 导入（发给同事直接可用） ---------- */
@@ -81,6 +167,14 @@ export interface ConnImportPreview {
   withSecrets: number
   /** 字段不合法被忽略的条数 */
   invalid: number
+  /** 串口连接数 */
+  serialCount: number
+  /**
+   * 其中端口需要重新确认的条数：别人机器上的 COM 号在本机大概率不存在，
+   * 且没有 USB 身份可以对上。导入后这些连接带着「待确认」标记，
+   * 用户得自己选一次端口才能连。
+   */
+  pendingPorts: number
 }
 
 export interface ConnImportResult {
@@ -89,6 +183,8 @@ export interface ConnImportResult {
   skipped: number
   keysWritten: number
   invalid: number
+  /** 端口待确认的串口连接数（见 ConnImportPreview.pendingPorts） */
+  pendingPorts: number
 }
 
 /** 连接凭据：独立于连接对象存储，密文落盘（safeStorage） */
@@ -134,6 +230,13 @@ export interface Command {
   color?: string
   /** 危险命令：发送前必须二次确认 */
   confirmRequired: boolean
+  /**
+   * 适用环境。缺省（undefined）= SSH 与串口都适用。
+   * 内置命令大多是为 shell 写的（systemctl / journalctl / lsblk），
+   * 串口 Console 接的常是 bootloader、U-Boot 或 BusyBox，一半按钮按下去只会报错，
+   * 所以需要这个标记把不适用的从串口会话里滤掉。
+   */
+  envs?: ConnKind[]
   variables: CommandVariable[]
   sortOrder: number
   /** 使用次数，用于「最常用」排序 */
@@ -166,8 +269,22 @@ export interface SessionInfo {
   id: string
   connectionId: string
   connectionName: string
+  /** 连接类型；缺省按 'ssh' 处理 */
+  kind?: ConnKind
+  /**
+   * SSH 主机（串口会话为空串）。
+   * 与 Connection.host 同理：保持必填形状，显示一律用 target。
+   */
   host: string
   username: string
+  /**
+   * 一行显示用的目标描述，取代渲染层到处拼 `${username}@${host}`。
+   *
+   * SSH 会话是 `user@host`，串口会话是 `COM3 · 115200 8N1`。
+   * 以前每个面板各自拼字符串，串口接进来之后这些地方全会显示成
+   * `@`（空串拼接），所以统一收到主进程算好、渲染层只负责显示。
+   */
+  target: string
   title: string
   status: ConnStatus
   error?: string
@@ -410,6 +527,14 @@ export type ReconnectPhase =
   | 'failed'
   /** 次数用尽，放弃 */
   | 'gave-up'
+  /**
+   * 串口专用：设备已拔出，正在等它插回来。
+   *
+   * 串口不复用上面的退避重试 —— 拔掉线缆时按 1/2/4/8/16 秒去「重试打开一个
+   * 不存在的设备」既没有意义，又会在插回的瞬间正好落在长间隔里，让人以为
+   * 功能坏了。改成被动等热插拔事件：设备一出现就重开，与人的动作对齐。
+   */
+  | 'waiting-device'
 
 export interface ReconnectEvent {
   sessionId: string
@@ -456,6 +581,12 @@ export interface ErrorLogStats {
 export interface ConnectionInput {
   id?: string
   name: string
+  /** 连接类型；缺省 'ssh' */
+  kind?: ConnKind
+  /**
+   * SSH 连接必填。串口连接传空串（见 Connection.host 的注释：
+   * 这些字段保留必填形状，只对 kind='ssh' 有意义）。
+   */
   host: string
   port: number
   username: string
@@ -463,6 +594,8 @@ export interface ConnectionInput {
   password?: string
   privateKeyPath?: string
   passphrase?: string
+  /** 串口参数（kind = 'serial'） */
+  serial?: SerialConfig
   group: string
   tags: string[]
   color?: string
@@ -518,6 +651,8 @@ export interface CommandInput {
   icon?: string
   color?: string
   confirmRequired: boolean
+  /** 适用环境，见 Command.envs；缺省 = 两者都适用 */
+  envs?: ConnKind[]
   variables: CommandVariable[]
 }
 
@@ -793,6 +928,8 @@ export interface BatchSessionResult {
   sessionTitle: string
   host: string
   username: string
+  /** 统一显示名（同 SessionInfo.target），批量结果列表直接展示它 */
+  target: string
   status: BatchStatus
   stdout: string
   stderr: string

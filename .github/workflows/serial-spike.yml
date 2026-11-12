@@ -1,0 +1,80 @@
+name: Serial Native Spike
+
+# 目的：验证 serialport 的原生二进制在 CI 环境也能加载。
+#
+# 为什么单独开一个工作流，而不是塞进 release.yml：
+#   release.yml 只在 push tag 时跑，而原生模块出问题最想知道的时刻是「改依赖时」。
+#   这个工作流不打包、不上传、不发版，只做一件事：装依赖 + 在 Electron 里加载 .node。
+#   全程 3~5 分钟，可以随便触发。
+#
+# 触发条件：
+#   - package.json / package-lock.json 变动（依赖层面可能带进不兼容的二进制）
+#   - 本文件自身变动（改判定逻辑时要能自测）
+#   - 手动
+on:
+  push:
+    paths:
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/serial-spike.yml'
+      - 'scripts/verify-serial-native.cjs'
+      - 'scripts/serial-spike-main.cjs'
+  pull_request:
+    paths:
+      - 'package.json'
+      - 'package-lock.json'
+      - 'scripts/verify-serial-native.cjs'
+      - 'scripts/serial-spike-main.cjs'
+  workflow_dispatch:
+
+jobs:
+  spike:
+    # 只跑 windows：这是当前唯一发布平台，mac/linux 未发布（见 electron-builder.yml 注释）。
+    # 将来要发 mac 时再按 matrix 扩，现在扩了也只是空跑。
+    runs-on: windows-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      # npm ci 会跑 @serialport/bindings-cpp 的 node-gyp-build 安装脚本。
+      # 该脚本的语义是「有匹配的 prebuild 就直接用，没有才编译」——
+      # 这里就是要验它有 prebuild，所以不需要装 VS 工具链。
+      # 若这一步报 node-gyp 编译错误，说明 prebuild 缺失，那才是真问题。
+      - name: Install dependencies
+        run: npm ci
+
+      # 第一层：裸 Node 能加载。快，失败原因最清晰（缺二进制 / 架构不对）。
+      - name: Probe bindings under plain Node
+        run: node scripts/verify-serial-native.cjs
+
+      # 第二层：Electron 主进程能加载。这才是应用真实运行时。
+      # Electron 的 ABI 与同版本 Node 不同，只过第一层不代表打包后能用。
+      - name: Probe bindings under Electron
+        shell: pwsh
+        run: |
+          # 结果同时写文件（GUI 子系统可能吞掉 stdout），所以先跑再看文件
+          & node_modules/electron/dist/electron.exe scripts/serial-spike-main.cjs
+          $code = $LASTEXITCODE
+          if (Test-Path serial-spike-result.json) {
+            Write-Host "--- serial-spike-result.json ---"
+            Get-Content serial-spike-result.json
+          } else {
+            Write-Host "!! 未生成结果文件，Electron 可能根本没跑起来"
+            exit 1
+          }
+          exit $code
+
+      # 把结果留档，失败时能直接下载下来看，不用翻日志
+      - name: Upload spike report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: serial-spike-report
+          path: serial-spike-result.json
+          if-no-files-found: warn

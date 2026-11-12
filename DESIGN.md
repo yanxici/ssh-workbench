@@ -1,11 +1,15 @@
 # SSH Workbench — 整体方案与设计文档
 
 > 轻量级 SSH 客户端 + 嵌入式技术支持工作台
-> 更新时间：2026-10-29 ｜ 阶段：**v1.6.3**，P0–P4 已实现。
+> 更新时间：2026-11-12 ｜ 阶段：**v2.0.0**，P0–P4 已实现，串口控制台已并入。
 >
 > v1.1–v1.5：连接分组管理、大规模连接性能优化、断线自动重连、命令中心范围筛选、侧栏文件面板右键下载、分组 Combobox、命令卡文本溢出修复、应用内自动更新、SFTP 批量目录读取、文件面板跟随终端 cwd。
 >
 > v1.6：上传文件夹（§5.13）、主机指纹更新（§5.14，并修掉一直算错的指纹算法）、IPC 按域拆分（§5.15）、上传/下载链路收敛（§5.16）、引入 ESLint、拆掉 `main/index.ts` / `repository.ts` / `SettingsPanel.tsx` 三个上帝文件。
+>
+> v1.9：右侧命令栏列数跟栏宽走、卡片去图标与命令行、自绘提示浮层；发布链路补文档同步门禁。
+>
+> v2.0：**串口控制台**（§5.17）—— 传输层抽象、串口会话、按 USB 身份认设备、拔插自动恢复、命令「适用环境」标记。
 
 ---
 
@@ -13,7 +17,9 @@
 
 面向嵌入式设备技术支持场景的桌面工具：快速连上现场设备、执行常用制式命令、归档排查过程。
 
-**明确不做**：串口终端、AI 日志分析。
+**明确不做**：AI 日志分析。
+
+**串口只做 Console 救急**（v2.0.0 起，原「不做串口终端」的边界在 §5.17 改写）：不做十六进制收发、不做协议调试器、不做 XMODEM/YMODEM 传文件、不做断线期间的缓冲回放。判断标准是一条 —— Console 里敲命令，不用另开工具。
 
 ## 2. 技术选型与决策记录
 
@@ -22,7 +28,8 @@
 | 桌面框架 | **Electron 33 + electron-vite** | 经评估后确定（见下方决策记录）；Node 22 环境零额外前置，ssh2 生态成熟 |
 | 前端 | React 18 + TypeScript + Vite | 组件生态完整，类型贯通主/渲染进程 |
 | UI | Tailwind CSS（语义色变量）+ lucide-react | 主题切换只换 CSS 变量（7 套配色 × 明暗，见 §5.7）；图标按名字动态解析 |
-| 终端 | @xterm/xterm + addon-fit / addon-search / addon-web-links | 事实标准 |
+| 终端 | @xterm/xterm + addon-fit / addon-search / addon-web-links | 事实标准；SSH 与串口共用同一个终端组件 |
+| 串口 | serialport 13（`@serialport/bindings-cpp`）+ iconv-lite | bindings-cpp 提供 **NAPI v8 预编译**，Electron 33（ABI 130）与 Node 24 直接加载，不需要 rebuild；GBK / GB18030 解码靠 iconv-lite 流式处理 |
 | 文件传输 | zmodem.js（`rz` / `sz`）+ ssh2 SFTP 分块读写 | 终端内传文件；SFTP 支持暂停续传 |
 | SSH | ssh2（主进程） | 支持密码 / 私钥 / Agent / ProxyJump / SFTP / forwardOut，纯 JS 可运行 |
 | 状态管理 | Zustand | 轻、无样板代码 |
@@ -439,6 +446,39 @@ v1.6.1 收敛成：
 
 净效果：`FileExplorer` 1082→993 行，`SessionFileTree` 812→729 行，两者 6 行重复片段 **31 → 2**；`window.api.sftp.*` 的直接调用从 5 个面板收敛到 store 一处。
 
+### 5.17 串口控制台（v2.0.0）
+
+**要解决的问题**：现场的真实动作是「插上 USB 转串口线，敲 `dmesg` 看设备起没起来」。连接管理、命令库、会话录制、日志归档都在这个工具里，唯独最救急的那条通道在外面 —— 必须切另一个串口工具。v1.x 把它列为「明确不做」，理由是开发效率：传输层与会话层是照 ssh2 的形状写的。
+
+**做法：先抽传输层，再加串口**
+
+| 文件 | 职责 |
+|---|---|
+| `src/main/transport/types.ts` | `Transport` 接口：`open` / `write` / `writeBytes` / `resize` / `close` + `onData(raw, text)` / `onClose(error)` |
+| `sshTransport.ts` | 接管原先散在会话管理器里的解码：`StringDecoder('utf-8')`，stderr 混流 |
+| `serialTransport.ts` | 换行归一（CR / LF / CRLF）、流式 iconv 解码、DTR 脉冲（**只碰 DTR，不碰 RTS**） |
+| `memoryTransport.ts` | 内存假实现，验证脚本用 |
+| `serialResolve.ts` | 端口解析：`serialNumber` → `pnpId` → 保存的 `path` |
+| `serialPorts.ts` / `serialWatcher.ts` / `serialWatcherHolder.ts` | 枚举 + 指纹、2 秒轮询、单例持有 |
+| `serialLoader.ts` | 原生模块懒加载 |
+
+**关键决策**（都是踩过的坑，不是偏好）：
+
+- **解码下沉到传输层**。原先 `SessionRecord.decoder` 在会话管理器里对字节流做 UTF-8 解码，串口要 GBK 就得在这里加分支。改成传输层各自持解码器后，待写缓冲也按字节（`pendingRaw`）合帧，主进程不再假设「数据一定是 UTF-8」。
+- **存了 USB 身份却对不上时，绝不退化到 COM 号**。Windows 的 COM 号按枚举顺序分配，拔插或换 USB 口都会变，而另一台同型号设备可能正好占了旧号。静默连上去等于把命令敲到别人的板子上 —— 返回 `not-found`，让界面提示重选。唯一例外是平台根本给不出身份（Linux 的 `/dev/ttyUSB0` 常常没有 serialNumber / pnpId，整个列表都是空身份），此时才按 COM 号判定。
+- **拔插恢复不复用 SSH 退避**。SSH 用 1/2/4/8/16 秒退避重连是对的（对端可能只是重启）；串口拔线时按退避重开一个不存在的设备毫无意义，而且插回的瞬间常落在长间隔里，用户会以为功能坏了。改为把会话停在 `phase: 'waiting-device'`，由端口轮询驱动恢复，恢复成功后补发一个 `\r` 唤醒提示符（很多设备长时间无输入会停止回显）。
+- **DTR 自动复位默认关**。ESP32 / STM32 / Arduino 的自动下载电路把 DTR 接到 EN 脚，一拉就重启 —— 用户只是想看日志，结果把设备重启了，在现场是事故。串口连接也隐藏了「测试连接」按钮，理由相同：反复开关端口会触发 DTR。
+- **串口连接复用 `Connection`，只加 `kind`**，`host` / `port` / `username` / `authType` 落成空值而不是改成可选。改成可选会让 `connectConfig`、主机指纹校验、跳板链、导入导出、搜索几十处都要做类型收窄，收益只是「类型上更诚实」。
+- **串口会话全隐藏**指标 / 诊断 / 固件 / 备份 / 批量 / SFTP / 隧道。这些面板全部建立在「远端跑一条命令」上（主进程统一走 `getClient` + `execCollect`），串口没有 client，列出来只会拿到一句「该功能仅支持 SSH 会话」。判据是 `kind !== 'serial'` 而不是「是否 connected」，因为状态过滤各面板自己在做。
+- **统一显示名**。`src/shared/serialDisplay.ts` 的 `describeSerialTarget` 给出 `COM3 · 115200 8N1`，`connectionTarget` / `connectionAddress` 供渲染层用。原先 15 处手拼 `${username}@${host}`，串口的 username / host 都是空串，会显示成孤零零一个 `@`。
+- **原生模块不能静态 import**。`serialLoader.ts` 用变量形式 `require` 让 esbuild 无法静态解析 —— 否则打包后在没有对应二进制的环境（CI、裸 node 跑验证脚本）里直接抛 `No native build was found`，连主进程都起不来。懒加载同时把「只用 SSH 的用户不必付这笔启动开销」和「原生模块加载失败只影响串口」两件事一起解决了。
+- **命令「适用环境」**：`Command.envs?: ConnKind[]`（缺省 = 两者都适用），`src/shared/commandEnv.ts` 收口 `normalizeEnvs` / `appliesTo` / `filterByEnv` / `envLabel`。用数组而非三态字符串，因为判定只需一句 `includes`。种子命令只给 5 条只在完整 Linux 上可用的标 `['ssh']`（`nc -zv`、`curl -i`、`top -b -n 1`、`journalctl -b -p err`、`i2cdetect`），其余 36 条不动 —— `uname -a` / `dmesg` / `cat /proc/*` / `reboot` 在 BusyBox 上都很常见，一刀切会误伤。
+- **导出导入按 kind 分流**。原先「host 非空 + port 1..65535」的校验会把串口连接整条丢掉并计入 `invalid`，用户会看到「N 条字段不合法」却不知道是自己的串口。新增 `cleanSerial` 逐字段白名单（`baudRate: 0` 或 `dataBits: 9` 会让 serialport 在 open 时抛一串 C++ 侧错误，界面上看不出是哪条连接坏了）；`dupKey` 对串口改用端口路径，否则两台不同设备重名会被判重复。导入时按 USB 身份找回端口，找不到的置 `pathPending` 并提示重选。
+
+**打包**：`@serialport/bindings-cpp@13.0.0` 是 NAPI v8 预编译，Electron 33.4.11（ABI 130）与 Node 24 都能直接加载，`npmRebuild: false` 保持不动；electron-builder 25.x 会自动解包原生模块，`asarUnpack` 不需要写 `'**/*.node'`（对照实验确认，注释写进 `electron-builder.yml`）。
+
+**回归**：`scripts/verify-serial.cjs`（50 项，内存假实现 + 假端口：换行归一、GBK 解码、DTR 只动 DTR、拔线 → `waiting-device` → 插回自动恢复）、`verify-serial-native.cjs`、`serial-spike-main.cjs` / `serial-spike-packaged.cjs`（打包后原生模块能否加载）、`.github/workflows/serial-spike.yml`；`verify-conn-transfer.cjs` 补串口导出 / 导入 / USB 身份找回 / 待确认 / 参数非法五组用例。
+
 ## 6. 安全设计
 
 
@@ -452,6 +492,8 @@ v1.6.1 收敛成：
 | IPC 边界 | 通道白名单 + 统一错误包装，渲染层无任意 IPC 能力 |
 | 更新包完整性 | 走 `electron-updater` 内建的 sha512 校验（`latest.yml` 里的 hash）+ `allowDowngrade = false` 防降级；更新元数据来自 `resources/app-update.yml` 固定的 owner/repo，不接受运行时传入的任意 URL |
 | 更新链路只读观察 | 目录跟随只解析 xterm 收到的字节流，**不向 PTY 注入 hook**、不改远端环境（否则会在终端留可见回显、污染用户 shell） |
+| 串口设备身份 | 存了 USB 身份（serialNumber / pnpId）却对不上时**不退化到 COM 号**，宁可报错让用户重选 —— 避免把命令敲到占用了同一 COM 号的其他设备上（§5.17） |
+| 串口 DTR | 自动复位默认关；串口连接隐藏「测试连接」，避免反复开关端口触发 DTR 把设备重启 |
 
 ## 7. 分期路线
 
@@ -478,6 +520,8 @@ v1.6.1 收敛成：
 | **P4-f**（v1.5.1） | **文件面板响应性**：目录批量读取（`SFTP_LIST_MANY` / `SFTP_BOOTSTRAP` + 同帧合并 + TTL 缓存，§5.10）、**面板跟随终端 cwd**（输入追踪 + OSC 7，§5.11） | ✅ 完成 |
 | **P4-g**（v1.6.0） | **上传文件夹**（`keepRoot` 区分「保留目录名」与历史「铺平」语义，§5.13）、**主机指纹更新**（探测 → 旧新对比 → 确认写回，三处入口，§5.14），并修掉一直算错的指纹算法 | ✅ 完成 |
 | **P4-h**（v1.6.1~v1.6.3） | **可维护性专项**：IPC 按域拆分（§5.15）、上传/下载链路收敛进 store（§5.16）、引入 ESLint、拆掉最后两个上帝文件（`repository` 764→70、`SettingsPanel` 959→118） | ✅ 完成 |
+| **P5-a**（v1.9.0） | **命令栏排布**：列数跟栏宽走（§5.6）、卡片去图标与命令行、自绘提示浮层、发布链路补文档同步门禁 | ✅ 完成 |
+| **P5-b**（v2.0.0） | **串口控制台**：传输层抽象（`Transport`）、串口会话、按 USB 身份认设备、拔插自动恢复、命令「适用环境」标记、串口连接导出导入（§5.17） | ✅ 完成 |
 | **待办** | 插件系统（JS 脚本扩展命令/诊断/报告模板） | ⏳ 未开始 |
 | **已有独立安装包，暂无自动更新** | macOS（dmg）/ Linux（AppImage）不出更新元数据，`electron-updater` 当前只接了 Windows NSIS | ⏳ 未开始 |
 | **已确认不做** | 安全与审计（除已实现的主机指纹/凭据加密/危险命令确认外不再扩展)、工单集成、VNC/RDP 入口、网络诊断工具、命令栏浮动形态、Gitee 更新源（理由见 §9） | ⏭️ 用户明确不需要 |
@@ -485,6 +529,21 @@ v1.6.1 收敛成：
 > P3-a 附注：新增通用能力 `window.api.exec.run(sessionId, cmd, timeout)`（任意面板可执行一次性命令）；连接编辑器状态上收到 `uiStore`，支持任意面板带预设呼出（设备发现 →「新建连接」即用此能力）。
 
 ### 7.0 版本更新记录
+
+#### v2.0.0（2026-11-12）
+
+| 分类 | 内容 |
+|---|---|
+| **串口（范围）** | 只做 **Console 救急**：不做十六进制收发、不做协议调试器、不做 XMODEM/YMODEM 传文件、不做断线期间缓冲回放。成功标准是「Console 里敲命令，不用另开工具」。§1 原「明确不做：串口终端」已改写 |
+| **串口（传输层）** | 新增 `src/main/transport/`：`Transport` 接口（`open`/`write`/`writeBytes`/`resize`/`close` + `onData(raw,text)`/`onClose`），`sshTransport` / `serialTransport` / `memoryTransport` 三个实现。解码从会话管理器下沉到传输层，待写缓冲改为按字节合帧（`pendingRaw`）—— 主进程不再假设「收到的都是 UTF-8」 |
+| **串口（会话层）** | `SessionRecord` 加 `kind` / `target` / `transport` / `serialConfig`，`client` 变可选。新增 `openSerial()` / `waitForDevice()` / `resumeSerialSessions()`。拔线后停在 `phase: 'waiting-device'`，由 2 秒端口轮询驱动恢复（**不复用 SSH 的 1/2/4/8/16 秒退避** —— 拔线时按退避重开不存在的设备没意义，插回瞬间常落在长间隔里），恢复后补发 `\r` 唤醒提示符 |
+| **串口（设备身份）** | `resolveSerialPath` 按 `serialNumber` → `pnpId` → `path` 三级匹配。**存了身份对不上时不退化到 COM 号**：那说明端口上不是当初那台设备，静默连上去就是往陌生板子敲命令。例外：平台整体给不出身份时（Linux 常见）才按 COM 号 |
+| **串口（DTR）** | 自动复位默认关。ESP32 / STM32 的自动下载电路把 DTR 接到 EN 脚，一拉就重启。串口连接隐藏「测试连接」按钮，理由相同 |
+| **串口（原生模块）** | `serialLoader.ts` 用变量形式 `require`，让 esbuild 无法静态解析 —— 否则打包后在无二进制环境直接抛 `No native build was found`，主进程都起不来。`@serialport/bindings-cpp@13.0.0` 是 NAPI v8 预编译，`npmRebuild: false` 不用动；electron-builder 25.x 自动解包原生模块，`asarUnpack` 不必写 `'**/*.node'`（对照实验确认） |
+| **串口（界面）** | 连接编辑器加串口分支（端口下拉 + 刷新、波特率 / 数据位 / 校验 / 停止位 / 流控 / 编码 / 换行、DTR 开关、目标摘要预览）；`src/shared/serialDisplay.ts` 统一显示名（`COM3 · 115200 8N1`），渲染层 15 处手拼 `${username}@${host}` 全部改用 `session.target`（串口下会显示成孤零零一个 `@`）；七个面板会话来源改为 `useSshSessions()` 并补空态文案 |
+| **命令（适用环境）** | `Command` / `CommandInput` 加 `envs?: ConnKind[]`（缺省 = 两者都适用），新增 `src/shared/commandEnv.ts`。面板、命令中心、卡片浮层、编辑器全部接上；命令库头部计数改成过滤后的条数。种子命令只给 5 条标 `['ssh']`，其余 36 条不动（`uname -a` / `dmesg` / `cat /proc/*` / `reboot` 在 BusyBox 上很常见，一刀切会误伤） |
+| **导出导入** | `ExportedConn` 加 `kind` / `serial`；`cleanPayload` 按 kind 分流（原「host 非空 + port 1..65535」会把串口整条丢掉并计入 invalid）；新增 `cleanSerial` 逐字段白名单；`dupKey` 对串口改用端口路径（否则两台不同设备重名判重复）；导入时按 USB 身份找回端口，找不到置 `pathPending` 并提示「N 条的端口在本机找不到」 |
+| **回归** | 新增 `verify-serial.cjs`（50 项，内存假实现 + 假端口）、`verify-serial-native.cjs`、`serial-spike-main.cjs` / `serial-spike-packaged.cjs`、`.github/workflows/serial-spike.yml`；`verify-conn-transfer.cjs` 补串口五组用例 |
 
 #### v1.9.0（2026-11-11）
 
@@ -709,7 +768,11 @@ env -u ELECTRON_RUN_AS_NODE ./node_modules/electron/dist/electron.exe . --smoke 
 
 ## 9. 已知限制与技术债
 
-- 命令栏固定常驻右侧并固定三列（`WALL_COLS = 3`），不再提供「底部横条 / 浮动」形态 —— `commandPanelPosition` 字段仅为老配置兼容保留，渲染层已无消费者；
+- 命令栏固定常驻右侧，列数跟栏宽走（`wallColumns(width)`，v1.9.0 起），不再提供「底部横条 / 浮动」形态 —— `commandPanelPosition` 字段仅为老配置兼容保留，渲染层已无消费者；
+- **串口只做 Console 救急**（v2.0.0）：没有十六进制收发、没有协议调试器（Modbus / AT 帧解析等）、不支持 XMODEM / YMODEM 传文件、断线期间的串口输出不缓冲也不回放。要这些请用专门的串口工具；
+- **串口会话只提供终端**：指标、诊断、固件、备份、批量、SFTP、隧道全部只对 SSH 会话开放 —— 它们都建立在「远端跑一条命令」上，串口没有 `client`；
+- **串口换行只影响发送**：`newline` 配置作用于 `write()`，粘贴多行内容仍按原样发送；HEX 模式不存在，所以没有「不转换」的第三种选择；
+- **串口设备身份可能缺失**：廉价 CH340 的 `pnpId` 只有 VID/PID，同型号两台无法区分；Linux 的 `/dev/ttyUSB*` 常常完全没有身份字段，此时只能按 COM 号认设备，拔插后可能连到别的设备上（界面不会替你兜底）；
 - 快捷键已可自定义（含 Ctrl+K 命令中心），默认组合：Ctrl+N 新建连接 / Ctrl+K 命令中心 / Ctrl+, 设置 / Ctrl+B 折叠侧栏 / Ctrl+Alt+B 折叠命令栏 / Ctrl+Tab 切换标签 / Ctrl+Shift+W 关标签 / Ctrl+Shift+C/V 复制粘贴 / Ctrl+F 终端搜索；
 - 大量输出（如 `cat` 大文件）时合帧窗口可考虑自适应放大（当前固定 8ms）；
 - 中英同义表 `SYNONYMS` 是手工维护的 22 组，新增命令分组时不会自动扩展 —— 需要新词时改表并跑 `scripts/verify-synonyms.cjs`；
@@ -732,7 +795,7 @@ env -u ELECTRON_RUN_AS_NODE ./node_modules/electron/dist/electron.exe . --smoke 
 纯函数逻辑用 esbuild 打包成单文件后由 node 直接断言，不引入测试框架：
 
 ```bash
-node scripts/verify-command-search.cjs   # 模糊匹配 / 字段加权 / 排序 / 范围索引（49 项）
+node scripts/verify-command-search.cjs   # 模糊匹配 / 字段加权 / 排序 / 范围索引 / 适用环境过滤（57 项）
 node scripts/verify-synonyms.cjs         # 中英同义扩展 + 别名检索回归（28 项）
 node scripts/verify-layout.cjs           # 双栏宽度夹取 / 拖拽换算 / 方向 / 升级兼容（77 项）
 node scripts/verify-group-order.cjs      # 分组顺序与拖拽落点（18 项）
@@ -750,6 +813,9 @@ node scripts/verify-release-notes.cjs    # 发版日志链路：CI 不得用 --n
 node scripts/verify-docs-sync.cjs        # 文档同步：README 当前版本 / CHANGELOG 本版条目 / 最近更新首条（v1.9.0，6 项）
 node scripts/verify-command-wall.cjs     # 命令栏列数跟栏宽走 / 卡片宽度 / 方向键步长（v1.9.0，37 项）
 node scripts/perf-command-wall.cjs       # 真实 129 条命令渲染：三档宽度列数 / 全部等高 40px / 截断 ≤1 条（v1.9.0，20 项）
+node scripts/verify-serial.cjs           # 串口链路：换行归一 / GBK / DTR 只动 DTR / 拔线等待 → 插回恢复（v2.0.0，50 项）
+node scripts/verify-serial-native.cjs    # 原生模块能否在当前 Node ABI 下加载（v2.0.0）
+node scripts/verify-conn-transfer.cjs    # 导出导入：凭据 / 私钥去重 / 跳板重映射 / 串口 USB 身份 / 3000 条规模（v2.0.0 补串口用例）
 for f in scripts/verify-zmodem*.cjs; do node "$f"; done  # ZMODEM 协议 / 解码 / 渲染层 / 端到端（P4-c，4 个脚本）
 ```
 

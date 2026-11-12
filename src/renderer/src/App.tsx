@@ -509,6 +509,8 @@ if (__ZM_TEST__ && typeof window !== 'undefined') {
           connectionName: `设备 ${i + 1}`,
           host: `192.168.1.${10 + i}`,
           username: 'root',
+          kind: 'ssh' as const,
+          target: `root@192.168.1.${10 + i}`,
           title: `设备 ${i + 1}`,
           status: 'connected' as const,
           cols: 120,

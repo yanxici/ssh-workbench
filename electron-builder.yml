@@ -20,14 +20,19 @@ directories:
   # 本地打包输出目录。CI 也从这里解析（release.yml 的 Publish 步骤读这一行），
   # 两处口径必须一致 —— 硬编码目录名后失联过一次。
   #
-  # 目录名每版递增，但**不再保留旧产物**：dist-v14/v15/v16 已全部删除，
+  # 目录名每版递增，但**不再保留旧产物**：dist-v14/v15/v16/v18 已全部删除，
   # 本地只留 releases/v<当前版本>/ 一份已发布的成品（.gitignore 忽略）。
   # 历史教训：dist-v15 与 dist-v16 并存时，远端 latest.yml 与本地另一份 Setup
   # 被拿来互比，得出「更新链路断了」的错误结论 —— 同版本号两份字节不同的包
   # 是天然误判源。留档不等于留一份能混淆的对象。
   #
-  # 下一版打包前先把本行改成新目录（如 dist-v18），避免新包混进旧目录。
-  output: dist-v18
+  # 下一版打包前先把本行改成新目录（如 dist-v21），避免新包混进旧目录。
+  #
+  # v2.0.0 时从 dist-v19 换到 dist-v20 的直接原因还有一条：dist-v19 里
+  # 的 win-unpacked 有正在运行的实例（用户本机开着旧版），electron-builder
+  # 清空目录时删不掉 d3dcompiler_47.dll，报 Access is denied 直接中止。
+  # 换目录比「先关掉用户正在用的程序」更省事，也不影响正在跑的那份。
+  output: dist-v20
 # ssh2 的 cpu-features 为可选加密加速（纯 JS 回退即可），跳过 native rebuild 避免依赖本机 VS
 npmRebuild: false
 # 新增 ASAR 打包配置：启用压缩
@@ -48,6 +53,20 @@ files:
   - '!{tailwind.config.js,postcss.config.js,DESIGN.md,README.md}'
 asarUnpack:
   - resources/**
+  # 注意：**这里不需要为 .node 写规则**，尽管直觉上应该写。
+  #
+  # 做过对照实验（V2.0.0 串口接入时）：一份配置写 '**/*.node'，一份完全不写，
+  # 各打一个 win-unpacked，再用打包出的 exe 以 Node 模式加载 serialport。
+  # 两份产物结果完全相同 —— 都生成了
+  #   resources/app.asar.unpacked/node_modules/@serialport/bindings-cpp/prebuilds/win32-x64/*.node
+  # 且 SerialPort.list() 都能枚举到端口。
+  #
+  # 原因是 electron-builder 25.x 会自己识别原生模块（package.json 里带 binding.gyp
+  # 或 .node 二进制的包）并自动解包，不需要用户声明。写上去只是重复声明。
+  #
+  # 结论留在这里是为了防止以后有人「顺手补一条」然后以为它起了作用 ——
+  # 真正让串口能用的是「有这个 .node 文件」，而不是这条配置。
+  # 复验方法：ELECTRON_RUN_AS_NODE=1 "<产物>/SSH Workbench.exe" scripts/serial-spike-packaged.cjs <产物目录>
 # 窗口图标额外拷一份到 resources/ 根（asar 之外）。主进程优先读这个路径：
 # asar 内的路径虽然 Electron 能透明重定向，但窗口图标是在原生层加载的，
 # 放外面的普通文件最稳妥。

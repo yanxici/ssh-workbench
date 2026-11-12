@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
 import type { Command, CommandInput } from '@shared/types'
+import { normalizeEnvs } from '@shared/commandEnv'
 import { buildSeedCommands } from '../../data/seedCommands'
 import { JsonStore, dataDir } from '../jsonStore'
 
@@ -25,6 +26,7 @@ export async function saveCommand(input: CommandInput): Promise<Command> {
       icon: input.icon,
       color: input.color,
       confirmRequired: input.confirmRequired,
+      envs: normalizeEnvs(input.envs),
       variables: input.variables ?? []
     }
 
@@ -141,6 +143,7 @@ export async function importCommands(
       icon: typeof it.icon === 'string' ? it.icon : undefined,
       color: typeof it.color === 'string' ? it.color : undefined,
       confirmRequired: Boolean(it.confirmRequired),
+      envs: normalizeEnvs(it.envs),
       variables: Array.isArray(it.variables) ? it.variables : [],
       sortOrder: typeof it.sortOrder === 'number' ? it.sortOrder : normalized.length,
       useCount: 0,

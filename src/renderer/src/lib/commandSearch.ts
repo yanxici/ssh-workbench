@@ -13,7 +13,8 @@
  *   all / recent（最近用过）/ frequent（最常用）/ pinned（置顶收藏）/ 具体分组名
  */
 
-import type { Command } from '@shared/types'
+import type { Command, ConnKind } from '@shared/types'
+import { appliesTo } from '@shared/commandEnv'
 import { fuzzyMatch } from './fuzzy'
 
 export type ScopeKind = 'all' | 'recent' | 'frequent' | 'pinned' | 'group'
@@ -86,6 +87,7 @@ export function searchCommands({
   scope,
   sort = 'smart',
   pinnedIds,
+  env,
   now = Date.now()
 }: {
   commands: Command[]
@@ -94,6 +96,8 @@ export function searchCommands({
   sort?: SortMode
   /** 收藏置顶的命令 id（历史记录「收藏为命令」入口会写进来） */
   pinnedIds?: string[]
+  /** 当前活动会话的连接类型；缺省不过滤 */
+  env?: ConnKind
   now?: number
 }): RankedCommand[] {
   const pinned = new Set(pinnedIds ?? [])
@@ -103,6 +107,7 @@ export function searchCommands({
   const out: RankedCommand[] = []
 
   for (const c of commands) {
+    if (!appliesTo(c, env)) continue
     if (!inScope(c, scope, { pinnedIds, now })) continue
 
     if (!q) {
@@ -239,23 +244,37 @@ export function buildScopes(
     groupOrder = [],
     extraGroups = [],
     pinnedIds,
+    env,
     now = Date.now()
-  }: { groupOrder?: string[]; extraGroups?: string[]; pinnedIds?: string[]; now?: number }
+  }: {
+    groupOrder?: string[]
+    extraGroups?: string[]
+    pinnedIds?: string[]
+    /** 当前活动会话的连接类型；缺省不过滤 */
+    env?: ConnKind
+    now?: number
+  }
 ): ScopeEntry[] {
   const pinned = new Set(pinnedIds ?? [])
+  /**
+   * 范围索引里的计数必须与列表内容一致。
+   * 若「全部命令」显示 41 条、点进去只有 36 条，用户会以为命令丢了；
+   * 所以环境过滤要在统计之前做完，而不是留给列表渲染时再滤。
+   */
+  const pool = env ? commands.filter((c) => appliesTo(c, env)) : commands
   const counts = new Map<string, number>()
-  for (const c of commands) {
+  for (const c of pool) {
     const key = c.group || '默认'
     counts.set(key, (counts.get(key) ?? 0) + 1)
   }
   for (const g of extraGroups) if (g && !counts.has(g)) counts.set(g, 0)
 
-  const recent = commands.filter((c) => inScope(c, { kind: 'recent' }, { now })).length
-  const frequent = commands.filter((c) => inScope(c, { kind: 'frequent' }, { now })).length
-  const pinCount = commands.filter((c) => pinned.has(c.id)).length
+  const recent = pool.filter((c) => inScope(c, { kind: 'recent' }, { now })).length
+  const frequent = pool.filter((c) => inScope(c, { kind: 'frequent' }, { now })).length
+  const pinCount = pool.filter((c) => pinned.has(c.id)).length
 
   const entries: ScopeEntry[] = [
-    { scope: { kind: 'all' }, label: '全部命令', count: commands.length, depth: 0 },
+    { scope: { kind: 'all' }, label: '全部命令', count: pool.length, depth: 0 },
     { scope: { kind: 'recent' }, label: '最近使用', count: recent, depth: 0 },
     { scope: { kind: 'frequent' }, label: '最常用', count: frequent, depth: 0 },
     { scope: { kind: 'pinned' }, label: '已收藏', count: pinCount, depth: 0 }

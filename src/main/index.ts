@@ -12,6 +12,8 @@ import { metricsSampler } from './ssh/metrics'
 import { netScanner } from './ssh/netScan'
 import { initUpdater } from './updater'
 import { sessionManager } from './ssh/sessionManager'
+import { SerialWatcher } from './transport/serialWatcher'
+import { setSerialWatcher, getSerialWatcher } from './transport/serialWatcherHolder'
 import { sftpManager } from './ssh/sftpManager'
 import { tunnelManager } from './ssh/portForward'
 import { getMainWindow, setMainWindow } from './windowRef'
@@ -249,6 +251,28 @@ if (!gotLock) {
     log('ipc registered')
     bootLog('ipc registered')
 
+    /*
+     * 串口热插拔监听。
+     *
+     * 启动时机放在 IPC 注册之后：watcher 的第一次枚举是异步的，若在注册前
+     * 完成，渲染层还没订阅 EVT_SERIAL_PORTS，首次通知会丢。
+     *
+     * 失败不阻塞启动：串口是可选能力，监听起不来（原生模块缺失等）时
+     * SSH 全流程必须照常可用。
+     */
+    const serialWatcher = new SerialWatcher({
+      onPorts: (ports) => {
+        getMainWindow()?.webContents.send(IPC.EVT_SERIAL_PORTS, ports)
+        // 设备插回来了：让挂起的串口会话自己恢复（内部按 USB 身份匹配端口）
+        void sessionManager.resumeSerialSessions()
+      }
+    })
+    setSerialWatcher(serialWatcher)
+    void serialWatcher
+      .start()
+      .then((ports) => log(`serial watcher started, ${ports.length} port(s)`))
+      .catch((err) => log(`serial watcher failed: ${String(err)}`))
+
     createWindow()
     log('window created')
     bootLog('window created')
@@ -286,6 +310,9 @@ if (!gotLock) {
 
   app.on('window-all-closed', () => {
     bootLog('window-all-closed fired')
+    // 停掉串口轮询：它的 timer 已 unref，但显式停一次能让退出路径更干净，
+    // 也避免退出过程中还去枚举设备（Windows 上会短暂占用句柄）
+    getSerialWatcher()?.stop()
     if (process.platform !== 'darwin') app.quit()
   })
 }

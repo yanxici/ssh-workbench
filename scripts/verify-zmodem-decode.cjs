@@ -83,9 +83,21 @@ const SAMPLE = '登录成功：设备型号 GW-200，温度 23.5℃\r\nroot@host
   check('渲染层使用 TextDecoder', /new TextDecoder\('utf-8'\)/.test(zm))
   check('渲染层流式解码（stream: true）', /decode\(Uint8Array\.from\(toOctets\(octets\)\), \{ stream: true \}\)/.test(zm))
 
+  // V2.0.0 起解码下沉到传输层：sessionManager 只负责合帧与转发，
+  // 文本由各 Transport 自己解（SSH 固定 UTF-8，串口按连接配置的 charset）。
+  // 断言点因此从 sessionManager 移到两个实现上，判据本身不变：
+  // 必须用有状态的流式解码器，不能对每段分片独立 decode。
   const sm = fs.readFileSync(path.join(ROOT, 'src/main/ssh/sessionManager.ts'), 'utf8')
-  check('主进程仍保留 StringDecoder', /decoder: StringDecoder/.test(sm))
-  check('主进程一次性解码合并后的字节', /record\.decoder\.write\(raw\)/.test(sm))
+  check('主进程不再自行解码（交由传输层）', !/record\.decoder\.write/.test(sm))
+  check('主进程按原始字节合帧', /pendingRaw/.test(sm))
+
+  const sshT = fs.readFileSync(path.join(ROOT, 'src/main/transport/sshTransport.ts'), 'utf8')
+  check('SSH 传输用 StringDecoder 流式解码', /new StringDecoder\('utf-8'\)/.test(sshT))
+  check('SSH 传输把 stderr 并入同一路数据', /stderr\.on\('data'/.test(sshT))
+
+  const serT = fs.readFileSync(path.join(ROOT, 'src/main/transport/serialTransport.ts'), 'utf8')
+  check('串口传输用流式解码器', /stream: true|getDecoder\(charset\)/.test(serT))
+  check('串口传输区分原始字节与文本', /onData\(chunk, this\.decode\(chunk\)\)/.test(serT))
 })()
 
 console.log('')

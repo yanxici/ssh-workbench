@@ -3,7 +3,7 @@ import type { MetricsSample } from '@shared/types'
 import { cn } from '@/lib/utils'
 import { EmptyState } from '@/components/ui'
 import { useMetricsStore, type SessionSeries } from '@/stores/metricsStore'
-import { useSessionStore } from '@/stores/sessionStore'
+import { useSessionStore, useSshSessions } from '@/stores/sessionStore'
 
 /**
  * 资源仪表盘（覆盖主区域）：实时 CPU / 内存 / 磁盘 / 温度 / 网络曲线。
@@ -58,7 +58,7 @@ export function MetricsPanel(): JSX.Element | null {
  * ------------------------------------------------------------------ */
 
 function MonitorTargets(): JSX.Element {
-  const sessions = useSessionStore((s) => s.sessions)
+  const sessions = useSshSessions()
   const monitored = useMetricsStore((s) => s.monitored)
 
   return (
@@ -87,7 +87,8 @@ function MonitorTargets(): JSX.Element {
       <div className="scroll-thin min-h-0 flex-1 overflow-y-auto p-1.5">
         {sessions.length === 0 && (
           <div className="px-2 py-4 text-2xs leading-relaxed text-ink-3">
-            还没有打开任何会话。先建立 SSH 连接，再回到这里开启监控。
+            还没有可监控的会话。指标采集靠远端命令取数，只有 SSH 会话能监控；
+            串口会话是 Console 救急通道，不提供指标。
           </div>
         )}
         {sessions.map((s) => {
@@ -118,7 +119,7 @@ function MonitorTargets(): JSX.Element {
               <div className="min-w-0 flex-1">
                 <div className="truncate text-xs text-ink-2">{s.title}</div>
                 <div className="truncate font-mono text-3xs text-ink-3">
-                  {s.username}@{s.host}
+                  {s.target}
                 </div>
               </div>
               <button
@@ -179,7 +180,7 @@ function SessionCard({ series }: { series?: SessionSeries }): JSX.Element | null
         <Wifi size={13} className={cn('shrink-0', sessionGone ? 'text-ink-3' : 'text-success')} />
         <span className="text-xs font-semibold text-ink">{title}</span>
         <span className="font-mono text-3xs text-ink-3">
-          {session ? `${session.username}@${session.host}` : ''}
+          {session ? session.target : ''}
         </span>
         <span className="flex-1" />
         <span className="font-mono text-3xs text-ink-3">

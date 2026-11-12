@@ -16,6 +16,15 @@ A lightweight desktop SSH client with a built-in workbench for embedded-device t
 - In-app auto update: a badge in the title bar advertises new versions, with a version diff, the release notes and a one-click install (differential download, usually a few MB)
   > Only the NSIS installer supports auto-update. The portable exe and zip builds ship no update metadata — upgrade them by downloading the new version and overwriting.
 
+**Serial console** (v2.0.0)
+- Connect a device over USB-to-serial and type commands in the same tabbed terminal — no second tool needed for a field visit
+- Baud rate, data bits, parity, stop bits and flow control; line ending (CR / LF / CRLF, default CR) and encoding (UTF-8 / GBK / GB18030)
+- Port list refreshes itself (2 s poll): unplugging a cable shows "waiting for device", plugging it back reconnects automatically without burning a retry backoff
+- Devices are matched by USB identity (`serialNumber` → `pnpId` → COM number), so a device that comes back on a different COM port is still the same device — and a different device on the old COM port is never mistaken for it
+- DTR auto-reset is off by default (pulling DTR reboots ESP32 / STM32 boards with an auto-download circuit)
+- Serial sessions deliberately expose only the terminal: metrics, diagnostics, firmware, batch, SFTP and tunnels all run remote commands and stay SSH-only
+- Serial connections export / import like SSH ones; the USB identity travels with them, and a port that does not exist on the target machine is flagged "needs confirmation" instead of failing at connect time
+
 **Command panel**
 - One-click saved commands with `{{variables}}`, dangerous-command confirmation, groups, drag-and-drop, search, favorites and history
 - JSON import / export
@@ -95,9 +104,10 @@ Architecture, directory layout and roadmap (Chinese): [DESIGN.md](./DESIGN.md)
 
 ## Version
 
-Current: **v1.9.0**
+Current: **v2.0.0**
 
 Recent updates:
+- **v2.0.0** — serial console. A device on a USB-to-serial adapter now opens in the same terminal as an SSH session, so a field visit no longer needs a second tool. `Connection` gained a `kind`; the transport layer was extracted behind a `Transport` interface (`sshTransport` / `serialTransport` / `memoryTransport`) so the session manager no longer talks to ssh2 directly. Ports are matched by USB identity (`serialNumber` → `pnpId` → COM number) and deliberately do **not** fall back to the COM number when a stored identity fails to match — that would put commands on someone else's board. Unplugging a cable parks the session in `waiting-device` and a 2 s poll reconnects it when the device returns, without the SSH retry backoff. Serial sessions are hidden from metrics, diagnostics, firmware, backup, batch and SFTP, since all of those exec remote commands. Commands gained an "applies to" mark so `top -b` / `journalctl` no longer show up in a BusyBox serial console. `@serialport/bindings-cpp` ships NAPI v8 prebuilds, so no rebuild step was added
 - **v1.9.0** — command rail layout only. Columns now follow the pane width (3 / 4 / 5) instead of a hardcoded 3, so at the default 400 px width 4 columns fit and 129 saved commands no longer truncate: the old fixed layout clipped 93 of them to 4–6 characters. Cards drop the icon square and the command line so the name gets the full card width across two lines, and the state collapses to a 2 px accent strip (needs confirmation > pinned > has variables > plain); the full command moved into a zero-delay self-drawn tooltip (the native `title` had a ~1 s delay and could not wrap or highlight). Card height is a uniform 40 px — shorter than before. Arrow-key step now equals the real column count, so ↓ moves a row instead of landing in the adjacent column
 - **v1.8.1** — ZMODEM both directions. Downloads: `sz` no longer floods the terminal with protocol bytes and stalls mid-file (the receiver never ACKed ZCRCW; one unparseable frame aborted the whole session; ZRPOS resume had no landing path). Uploads: `rz` no longer sits at 0 bytes (the library waits for a ZSINIT ACK that never arrives, with no timeout), no longer kills the session on a late ZACK after a finished file, and no longer freezes the renderer (chunked sends with yields, 20 s timeouts on every wait). Verified by 5 new scenarios driving a real `Zmodem.Session.Receive()` peer
 - **v1.8.0** — IME composition guard across 13 Enter handlers (pinyin Enter ran half-typed commands), StatusBar transfer subscription collapsed to three scalar selectors, batch shortcut-conflict reset

@@ -37,6 +37,17 @@ export const IPC = {
   SESSION_BROADCAST: 'session:broadcast',
   SESSION_LIST: 'session:list',
 
+  /* ---------------- 串口设备 ---------------- */
+  /**
+   * 枚举当前可用串口。
+   *
+   * 不缓存到渲染层长期复用：USB 转串口设备可以在任意时刻插拔，
+   * 连接编辑器每次打开都该问主进程要一次最新的。
+   */
+  SERIAL_LIST: 'serial:list',
+  /** 主动刷新（用户点「刷新」按钮）：与 SERIAL_LIST 同源，但会顺带更新热插拔指纹 */
+  SERIAL_REFRESH: 'serial:refresh',
+
   /* ---------------- 常用命令 ---------------- */
   CMD_LIST: 'cmd:list',
   CMD_SAVE: 'cmd:save',
@@ -232,7 +243,14 @@ export const IPC = {
   EVT_BATCH_PROGRESS: 'evt:batch-progress',
   EVT_METRICS: 'evt:metrics',
   EVT_FW_LOG: 'evt:fw-log',
-  EVT_DISCOVER_PROGRESS: 'evt:discover-progress'
+  EVT_DISCOVER_PROGRESS: 'evt:discover-progress',
+  /**
+   * 串口端口列表变化（插拔）。
+   *
+   * 只在指纹真的变了才发：枚举结果的顺序抖动不该让界面刷新，
+   * 否则用户在下拉框里选端口的动作会被莫名打断。
+   */
+  EVT_SERIAL_PORTS: 'evt:serial-ports'
 } as const
 
 export type IpcChannel = (typeof IPC)[keyof typeof IPC]

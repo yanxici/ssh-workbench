@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
-import type { Connection, ConnectionInput } from '@shared/types'
+import type { Connection, ConnectionInput, ConnKind, SerialConfig } from '@shared/types'
 import { JsonStore, dataDir } from '../jsonStore'
 import { deleteSecret, getSecret, setSecret } from '../vault'
 
@@ -9,6 +9,38 @@ import { deleteSecret, getSecret, setSecret } from '../vault'
  *
  * 凭据落在 vault 里（safeStorage 加密），这个文件只管「连到哪、用什么认证方式」。
  */
+
+/**
+ * 串口参数的落盘归一化。
+ *
+ * 只保留显式白名单字段，且对数值做区间收敛：connections.json 是纯文本、
+ * 用户可以手改，一个 baudRate: 0 或 dataBits: 9 会让 serialport 在 open
+ * 时抛一串 C++ 侧的错误，不如在这里就纠回合法值。
+ */
+function normalizeSerial(serial: ConnectionInput['serial']): SerialConfig | undefined {
+  if (!serial) return undefined
+  const baud = Number(serial.baudRate)
+  const dataBits = Number(serial.dataBits)
+  const stopBits = Number(serial.stopBits)
+  return {
+    path: (serial.path ?? '').trim(),
+    baudRate: Number.isFinite(baud) && baud > 0 ? Math.floor(baud) : 115200,
+    dataBits: ([5, 6, 7, 8] as const).includes(dataBits as 5 | 6 | 7 | 8)
+      ? (dataBits as SerialConfig['dataBits'])
+      : 8,
+    stopBits: ([1, 1.5, 2] as const).includes(stopBits as 1 | 1.5 | 2)
+      ? (stopBits as SerialConfig['stopBits'])
+      : 1,
+    parity: serial.parity ?? 'none',
+    flowControl: serial.flowControl ?? 'none',
+    charset: serial.charset ?? 'utf-8',
+    newline: serial.newline ?? 'cr',
+    autoReset: serial.autoReset === true,
+    usbSerialNumber: serial.usbSerialNumber || undefined,
+    usbPnpId: serial.usbPnpId || undefined,
+    pathPending: serial.pathPending === true
+  }
+}
 
 const connStore = new JsonStore<Connection[]>(join(dataDir(), 'connections.json'), () => [])
 
@@ -30,12 +62,22 @@ export async function saveConnection(input: ConnectionInput): Promise<Connection
   let saved!: Connection
 
   await connStore.update((list) => {
+    const kind: ConnKind = input.kind === 'serial' ? 'serial' : 'ssh'
     const base = {
+      kind,
+      /*
+       * 串口连接的 host/port/username/authType 一律落成空值。
+       *
+       * 为什么不把这些字段改成可选：改成可选会让 connectConfig、主机指纹
+       * 校验、跳板链、导入导出、搜索等几十处全部要做类型收窄，收益只是
+       * 「类型上更诚实」。这里统一成空串/0，读取方按 kind 分支即可。
+       */
+      host: kind === 'serial' ? '' : input.host.trim(),
+      port: kind === 'serial' ? 0 : input.port,
+      username: kind === 'serial' ? '' : input.username.trim(),
+      authType: kind === 'serial' ? 'password' : input.authType,
+      serial: kind === 'serial' ? normalizeSerial(input.serial) : undefined,
       name: input.name.trim(),
-      host: input.host.trim(),
-      port: input.port,
-      username: input.username.trim(),
-      authType: input.authType,
       privateKeyPath: input.privateKeyPath?.trim() || undefined,
       group: input.group.trim() || '默认',
       tags: input.tags ?? [],

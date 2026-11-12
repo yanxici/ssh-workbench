@@ -259,7 +259,7 @@ export function TabBar(): JSX.Element {
               }}
               onDoubleClick={() => startRename(s.id, s.title)}
               onContextMenu={(e) => openMenu(e, s.id)}
-              title={editingId === s.id ? undefined : `${s.username}@${s.host}`}
+              title={editingId === s.id ? undefined : s.target}
             >
               <span className={cn('h-1.5 w-1.5 shrink-0 rounded-full', STATUS_DOT[s.status])} />
 

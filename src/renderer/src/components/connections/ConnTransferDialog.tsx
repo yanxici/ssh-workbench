@@ -251,10 +251,19 @@ function ImportDialog({ onClose }: { onClose: () => void }): JSX.Element | null 
     if (res.updated > 0) parts.push(`覆盖 ${res.updated}`)
     if (res.skipped > 0) parts.push(`跳过重复 ${res.skipped}`)
     if (res.invalid > 0) parts.push(`格式不对忽略 ${res.invalid}`)
+    const details: string[] = []
+    if (res.keysWritten > 0) details.push(`已保存 ${res.keysWritten} 个私钥文件`)
+    /*
+     * 端口待确认要在导入完成的提示里说清楚：用户以为导入完就能连，
+     * 结果点开发现连不上（本机没有那个 COM 号），会以为是导入坏了。
+     */
+    if (res.pendingPorts > 0) {
+      details.push(`${res.pendingPorts} 条串口连接的端口需要重新选择（对方机器上的 COM 号在本机不适用）`)
+    }
     useToastStore.getState().push({
-      kind: 'success',
+      kind: res.pendingPorts > 0 ? 'warning' : 'success',
       title: `导入完成：${parts.join('，')}`,
-      detail: res.keysWritten > 0 ? `已保存 ${res.keysWritten} 个私钥文件` : undefined
+      detail: details.length > 0 ? details.join('；') : undefined
     })
     onClose()
   }
@@ -326,6 +335,15 @@ function ImportDialog({ onClose }: { onClose: () => void }): JSX.Element | null 
               <Stat label="带凭据" value={preview.withSecrets} />
               <Stat label="私钥文件" value={preview.keyCount} />
             </div>
+
+            {preview.serialCount > 0 && (
+              <div className="text-2xs leading-relaxed text-ink-3">
+                其中 {preview.serialCount} 条是串口连接。
+                {preview.pendingPorts > 0
+                  ? ` 有 ${preview.pendingPorts} 条的端口在本机找不到，导入后需要重新选择端口才能连接。`
+                  : ' 端口已按 USB 身份对上，导入后可直接使用。'}
+              </div>
+            )}
 
             <Field label="包含分组" hint={`${preview.groups.length} 个`}>
               <div className="scroll-thin max-h-32 overflow-y-auto rounded-md border border-edge-soft bg-app px-2.5 py-1.5 text-xs text-ink-2">

@@ -1,5 +1,6 @@
 import { create } from 'zustand'
-import type { Command, CommandInput } from '@shared/types'
+import type { Command, CommandInput, ConnKind } from '@shared/types'
+import { appliesTo } from '@shared/commandEnv'
 import { call } from '@/lib/ipc'
 import { sortGroupNames } from '@/lib/groupOrder'
 import { searchCommands } from '@/lib/commandSearch'
@@ -221,12 +222,14 @@ export function groupCommands(
   commands: Command[],
   keyword: string,
   extraGroups: string[] = [],
-  groupOrder: string[] = []
+  groupOrder: string[] = [],
+  env?: ConnKind
 ): CommandGroup[] {
   const kw = keyword.trim()
   if (!kw) {
     const map = new Map<string, Command[]>()
     for (const c of commands) {
+      if (!appliesTo(c, env)) continue
       const key = c.group || '默认'
       const list = map.get(key)
       if (list) list.push(c)
@@ -245,7 +248,8 @@ export function groupCommands(
     query: kw,
     scope: { kind: 'all' },
     sort: 'smart',
-    pinnedIds: savedPinned()
+    pinnedIds: savedPinned(),
+    env
   }).filter((r) => r.hit)
 
   const map = new Map<string, Command[]>()

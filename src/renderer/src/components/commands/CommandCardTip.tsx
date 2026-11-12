@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
+import type { ConnKind } from '@shared/types'
+import { envLabel, normalizeEnvs } from '@shared/commandEnv'
 
 /**
  * 命令卡片的悬停浮层。
@@ -15,13 +17,16 @@ export function CommandCardTip({
   anchor,
   name,
   command,
-  useCount
+  useCount,
+  envs
 }: {
   /** 卡片在屏幕坐标系里的矩形；null = 不显示 */
   anchor: { x: number; y: number; w: number; h: number } | null
   name: string
   command: string
   useCount: number
+  /** 适用环境；缺省 = 两者都适用，此时不显示这一行，避免满屏都是「全部环境」 */
+  envs?: ConnKind[]
 }): JSX.Element | null {
   const ref = useRef<HTMLDivElement>(null)
   const [pos, setPos] = useState<{ x: number; y: number } | null>(null)
@@ -69,6 +74,16 @@ export function CommandCardTip({
         {useCount > 0 ? `用过 ${useCount} 次` : '还没用过'}
         <span className="mx-1 text-ink-3/50">·</span>
         单击执行 · Ctrl+单击编辑
+        {/*
+          只在「限定了环境」时补一句：默认命令两者都适用，
+          给每条都标「全部环境」等于给每条都加噪音。
+        */}
+        {normalizeEnvs(envs) && (
+          <>
+            <span className="mx-1 text-ink-3/50">·</span>
+            {envLabel(envs)}
+          </>
+        )}
       </div>
     </div>
   )

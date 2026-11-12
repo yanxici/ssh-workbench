@@ -152,7 +152,7 @@ async function main() {
       })
     })
     /* -L 隧道的远端出口：把通道桥到 origin */
-    client.on('tcpip', (accept, reject, info) => {
+    client.on('tcpip', (accept, _reject, _info) => {
       const ch = accept()
       const up = net.connect(originPort, '127.0.0.1')
       ch.on('close', () => up.destroy())

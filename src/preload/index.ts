@@ -44,6 +44,7 @@ import type {
   ParsedSshCommand,
   ReconnectEvent,
   RemoteFile,
+  SerialPortInfo,
   SessionDataEvent,
   SessionInfo,
   SessionLogFile,
@@ -186,9 +187,20 @@ export const api = {
     list: (): Promise<IpcResult<SessionInfo[]>> => invoke(IPC.SESSION_LIST)
   },
 
+  /**
+   * 串口设备枚举。
+   *
+   * 渲染层不缓存这份列表：USB 转串口可以在任意时刻插拔，连接编辑器
+   * 每次打开都该拿最新的。插拔变化走 on.serialPorts 主动推送。
+   */
+  serial: {
+    list: (): Promise<IpcResult<SerialPortInfo[]>> => invoke(IPC.SERIAL_LIST),
+    /** 用户点「刷新」：返回最新列表，并同步主进程热插拔监听的指纹 */
+    refresh: (): Promise<IpcResult<SerialPortInfo[]>> => invoke(IPC.SERIAL_REFRESH)
+  },
+
   command: {
-    list: (): Promise<IpcResult<Command[]>> => invoke(IPC.CMD_LIST),
-    save: (input: CommandInput): Promise<IpcResult<Command>> => invoke(IPC.CMD_SAVE, input),
+    list: (): Promise<IpcResult<Command[]>> => invoke(IPC.CMD_LIST),    save: (input: CommandInput): Promise<IpcResult<Command>> => invoke(IPC.CMD_SAVE, input),
     remove: (id: string): Promise<IpcResult<void>> => invoke(IPC.CMD_DELETE, id),
     reorder: (ids: string[]): Promise<IpcResult<void>> => invoke(IPC.CMD_REORDER, ids),
     renameGroup: (from: string, to: string): Promise<IpcResult<number>> =>
@@ -539,6 +551,9 @@ export const api = {
     fwLog: (cb: (e: FirmwareLogEvent) => void): (() => void) => subscribe(IPC.EVT_FW_LOG, cb),
     discoverProgress: (cb: (e: DiscoverProgressEvent) => void): (() => void) =>
       subscribe(IPC.EVT_DISCOVER_PROGRESS, cb),
+    /** 串口端口插拔：只有指纹真的变了才推 */
+    serialPorts: (cb: (e: SerialPortInfo[]) => void): (() => void) =>
+      subscribe(IPC.EVT_SERIAL_PORTS, cb),
     updateStatus: (cb: (e: UpdateStatus) => void): (() => void) =>
       subscribe(IPC.EVT_UPDATE_STATUS, cb)
   }

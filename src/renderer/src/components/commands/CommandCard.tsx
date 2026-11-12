@@ -145,7 +145,13 @@ export function CommandCard({
       */}
       {anchor &&
         createPortal(
-          <CommandCardTip anchor={anchor} name={c.name} command={c.command} useCount={c.useCount} />,
+          <CommandCardTip
+            anchor={anchor}
+            name={c.name}
+            command={c.command}
+            useCount={c.useCount}
+            envs={c.envs}
+          />,
           document.body
         )}
     </>

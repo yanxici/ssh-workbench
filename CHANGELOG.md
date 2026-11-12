@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-11-12
+
+### Added（串口控制台：设备连上就能敲命令）
+
+**背景**：这个功能在 v1.x 的方案里被列为「明确不做」。当时的理由是开发效率 —— 传输层与会话层是照 ssh2 的形状写的，塞进一个串口等于把两层都翻一遍。但现场的真实动作是「插上 USB 转串口线，敲 `dmesg` 看设备起没起来」，而这件事此前必须切到另一个工具：连接管理、命令库、会话录制、日志归档全都在 SSH Workbench 里，唯独最救急的那条通道在外面。v2.0.0 补上它。
+
+**范围**：只做 **Console 救急**。不做十六进制收发、不做协议调试器、不做 XMODEM/YMODEM 传文件、不做断线期间的串口缓冲回放。成功标准是一条：Console 里敲命令，不用另开工具。
+
+**改动**：
+
+- `src/shared/types.ts`：`ConnKind = 'ssh' | 'serial'`；`Connection` / `ConnectionInput` 加 `kind?` 与 `serial?: SerialConfig`；`SessionInfo` 加 `kind` 与统一的 `target` 显示名。串口连接的 `host` / `port` / `username` / `authType` 一律落成空值（`''` / `0` / `'password'`），而不是把这些字段改成可选 —— 改成可选会让 `connectConfig`、主机指纹校验、跳板链、导入导出、搜索等几十处都要做类型收窄，收益只是「类型上更诚实」。
+- `SerialConfig`：`path`、`baudRate`、`dataBits`、`stopBits`、`parity`、`flowControl`、`charset`（utf-8 / gbk / gb18030）、`newline`（cr / lf / crlf，默认 **cr** —— 串口控制台普遍认 `\r`）、`autoReset`（**默认关**）、`usbSerialNumber` / `usbPnpId`、`pathPending`。
+- 新增 `src/main/transport/`（传输层抽象）：`types.ts` 定义 `Transport` 接口（`open` / `write` / `writeBytes` / `resize` / `close` + `onData(raw, text)` / `onClose(error)`）；`sshTransport.ts` 接管原先散在会话管理器里的解码逻辑（`StringDecoder('utf-8')`，stderr 混流）；`serialTransport.ts` 做换行归一、流式 iconv 解码、DTR 脉冲（只碰 DTR，不碰 RTS）；`memoryTransport.ts` 给验证脚本用。
+- `src/main/ssh/sessionManager.ts` 改为面向 `Transport`：`SessionRecord` 加 `kind` / `target` / `transport` / `serialConfig`，`client` 变可选，待写缓冲拆成 `pendingText` / `pendingRaw`（按字节合帧，解码下沉到传输层）。新增 `openSerial()`、`waitForDevice()`、`resumeSerialSessions()`。
+- **拔插恢复**：串口断线不复用 SSH 的 1/2/4/8/16 秒退避 —— 拔线时按退避重开一个不存在的设备毫无意义，而且插回的瞬间常落在长间隔里，用户会以为功能坏了。改为把会话停在 `phase: 'waiting-device'`，由端口轮询（2 秒）驱动恢复；恢复成功后补发一个 `\r` 唤醒提示符（很多设备长时间无输入会停止回显）。
+- **设备身份**：`src/main/transport/serialResolve.ts` 按 `serialNumber` → `pnpId` → 保存的 `path` 三级匹配。**存了 USB 身份却对不上时不退化到 COM 号**：那说明现在插在这个端口上的不是当初那台设备，静默连上去就是往陌生板子敲命令。唯一例外是平台根本给不出身份（Linux 的 `/dev/ttyUSB0` 常常没有 serialNumber/pnpId），此时按 COM 号判定。
+- 新增 `serialPorts.ts`（枚举 + 指纹）、`serialWatcher.ts`（2 秒轮询，只在指纹变化时推送）、`serialWatcherHolder.ts`、`serialLoader.ts`（**变量形式 require**，让 esbuild 无法静态解析原生模块，否则打包后报 `No native build was found`）。
+- 新增 IPC `serial:list` / `serial:refresh` 与事件 `evt:serial-ports`；`preload` 暴露 `serial.list` / `serial.refresh` / `on.serialPorts`。
+- 渲染层：`src/shared/serialDisplay.ts` 提供 `describeSerialTarget`（`COM3 · 115200 8N1`）、`connectionTarget`、`connectionAddress`；原先 15 处手拼 `${username}@${host}` 全部改用 `session.target`（串口的 username/host 是空串，会显示成孤零零一个 `@`）。`sessionStore` 新增 `isSshSession` / `useSshSessions` / `useActiveEnv`。
+- 连接编辑器加串口分支：端口下拉 + 刷新、波特率 / 数据位 / 校验 / 停止位 / 流控 / 编码 / 换行、DTR 自动复位开关、目标摘要预览。串口下隐藏「测试连接」—— 反复开关端口会触发 DTR，把设备重启一次。
+- 七个面板（指标 / 诊断 / 固件 / 备份 / 批量 / 文件 / 隧道）的会话来源改为 `useSshSessions()`，并补了空态文案（「串口会话是 Console 救急通道，不提供指标」等）。理由：这些面板全部建立在「远端跑一条命令」上，串口没有 client，列出来只会拿到一句「该功能仅支持 SSH 会话」。
+- 命令「适用环境」：`Command` / `CommandInput` 加 `envs?: ConnKind[]`（缺省 = 两者都适用），新增 `src/shared/commandEnv.ts`（`normalizeEnvs` / `appliesTo` / `filterByEnv` / `envLabel`）。命令面板、命令中心、卡片浮层、编辑器全部接上；命令库头部计数改成过滤后的条数。种子命令里给 5 条只在完整 Linux 上可用的标 `envs: ['ssh']`（`nc -zv`、`curl -i`、`top -b -n 1`、`journalctl -b -p err`、`i2cdetect`），其余 36 条不动 —— `uname -a` / `dmesg` / `cat /proc/*` / `reboot` 在 BusyBox 上都很常见，一刀切会误伤。
+- 导出导入支持串口：`connTransfer` 的 `ExportedConn` 加 `kind` / `serial`；`cleanPayload` 按 kind 分流（原先「host 非空 + port 1..65535」的校验会把串口连接整条丢掉并计入 invalid）；新增 `cleanSerial` 逐字段白名单校验（`baudRate: 0` 或 `dataBits: 9` 会让 serialport 在 open 时抛一串 C++ 侧错误，用户在界面上看不出是哪条连接坏了）；`dupKey` 对串口改用端口路径，否则两台不同设备重名会被判重复。导入时按 USB 身份找回端口，找不到的置 `pathPending` 并在对话框里提示「N 条的端口在本机找不到，导入后需要重新选择端口」。
+- 打包：`@serialport/bindings-cpp@13.0.0` 是 **NAPI v8 预编译**，Electron 33.4.11（ABI 130）与 Node 24 都能直接加载，`npmRebuild: false` 保持不动；electron-builder 25.x 会自动解包原生模块，`asarUnpack` 不需要写 `'**/*.node'`（对照实验已确认，注释写进 `electron-builder.yml`）。
+
+**新增验证**：`scripts/verify-serial.cjs`（50 项，内存假实现 + 假端口，覆盖换行归一、GBK 解码、DTR 只动 DTR、拔线 → `waiting-device` → 插回自动恢复）、`scripts/verify-serial-native.cjs`、`scripts/serial-spike-main.cjs` / `serial-spike-packaged.cjs`（打包后原生模块能否加载）、`.github/workflows/serial-spike.yml`；`verify-conn-transfer.cjs` 补串口导出 / 导入 / USB 身份找回 / 待确认 / 参数非法五组用例。
+
 ## [1.9.0] - 2026-11-11
 
 ### Changed（命令栏：列数跟栏宽走，名字不再被截断）

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { AlertTriangle, Braces, Loader2 } from 'lucide-react'
-import type { Command, CommandInput, CommandVariable } from '@shared/types'
+import type { Command, CommandInput, CommandVariable, ConnKind } from '@shared/types'
+import { normalizeEnvs } from '@shared/commandEnv'
 import { useCommandStore } from '@/stores/commandStore'
 import { useToastStore } from '@/stores/toastStore'
 import { useSettingsStore } from '@/stores/settingsStore'
@@ -36,6 +37,8 @@ export function CommandEditor({
   const [icon, setIcon] = useState('Terminal')
   const [color, setColor] = useState('')
   const [confirmRequired, setConfirmRequired] = useState(false)
+  /** undefined = 两种环境都适用（默认，不落库） */
+  const [envs, setEnvs] = useState<ConnKind[] | undefined>(undefined)
   const [variables, setVariables] = useState<CommandVariable[]>([])
   const [saving, setSaving] = useState(false)
 
@@ -48,6 +51,7 @@ export function CommandEditor({
     setIcon(initial?.icon ?? 'Terminal')
     setColor(initial?.color ?? '')
     setConfirmRequired(initial?.confirmRequired ?? false)
+    setEnvs(normalizeEnvs(initial?.envs))
     setVariables(initial?.variables ?? [])
     setSaving(false)
   }, [open, initial, presetGroup])
@@ -96,6 +100,7 @@ export function CommandEditor({
       icon,
       color: color || undefined,
       confirmRequired,
+      envs,
       variables
     }
     const saved = await save(input)
@@ -112,6 +117,17 @@ export function CommandEditor({
   const extraGroups = useSettingsStore((s) => s.settings.commandGroups)
   const groupOptions = [
     ...new Set([...commands.map((c) => c.group), ...(extraGroups ?? [])].filter(Boolean))
+  ]
+
+  /**
+   * 三态在这里折成三个 key 比较：normalizeEnvs 已经把「标了两种」和「没标」
+   * 都归成 undefined，所以这里只需要区分 all / ssh / serial。
+   */
+  const envKey = normalizeEnvs(envs)?.join(',') ?? 'all'
+  const ENV_CHOICES: Array<{ key: string; label: string; value: ConnKind[] | undefined }> = [
+    { key: 'all', label: '全部环境', value: undefined },
+    { key: 'ssh', label: '仅 SSH', value: ['ssh'] },
+    { key: 'serial', label: '仅串口', value: ['serial'] }
   ]
 
   return (
@@ -252,6 +268,31 @@ export function CommandEditor({
                 )}
                 style={{ background: c }}
               />
+            ))}
+          </div>
+        </Field>
+
+        {/* 适用环境 */}
+        <Field
+          label="适用环境"
+          hint="串口会话里只显示标了「串口」或「全部环境」的命令"
+          className="col-span-2"
+        >
+          <div className="flex gap-1">
+            {ENV_CHOICES.map((choice) => (
+              <button
+                key={choice.key}
+                type="button"
+                onClick={() => setEnvs(choice.value)}
+                className={cn(
+                  'h-7 flex-1 rounded-md border text-xs transition-colors',
+                  envKey === choice.key
+                    ? 'border-accent/60 bg-accent/15 text-accent'
+                    : 'border-edge bg-raised text-ink-3 hover:text-ink-2'
+                )}
+              >
+                {choice.label}
+              </button>
             ))}
           </div>
         </Field>

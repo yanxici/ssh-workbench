@@ -119,7 +119,6 @@ async function main() {
   check('列表长度仍为 1', (await repo.listConnections()).length === 1)
 
   // password: undefined = 保持原值
-  const secretMod = require(outfile)
   check('getConnection 能取到', (await repo.getConnection(saved.id))?.name === '改名后')
 
   await repo.touchConnection(saved.id)

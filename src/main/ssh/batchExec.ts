@@ -92,7 +92,8 @@ class BatchRunner {
       sessionId,
       sessionTitle: info?.title ?? sessionId,
       host: info?.host ?? '',
-      username: info?.username ?? ''
+      username: info?.username ?? '',
+      target: info?.target ?? ''
     }
 
     this.onProgress?.({ runId, sessionId, status: 'running' })

@@ -30,6 +30,7 @@ import type { Command } from '@shared/types'
 import { groupCommands, useCommandStore } from '@/stores/commandStore'
 import { useUiStore } from '@/stores/uiStore'
 import { runCommand } from '@/stores/executionStore'
+import { useActiveEnv } from '@/stores/sessionStore'
 import { useToastStore } from '@/stores/toastStore'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { cn } from '@/lib/utils'
@@ -112,6 +113,11 @@ export function CommandPanel({
   const groupOrder = useSettingsStore((s) => s.settings.commandGroupOrder)
   // undefined 时回退到模块级空数组，保证引用稳定（见 EMPTY_IDS 注释）
   const pinnedIds = useSettingsStore((s) => s.settings.pinnedCommandIds) ?? EMPTY_IDS
+  /**
+   * 当前活动会话的连接类型：串口会话里要把「只能在完整 Linux 上跑」的命令滤掉。
+   * 没有活动会话时是 undefined，此时不过滤 —— 空面板比过滤后只剩几条更糟。
+   */
+  const env = useActiveEnv()
   const createGroup = useCommandStore((s) => s.createGroup)
   const setGroupOrder = useCommandStore((s) => s.setGroupOrder)
   const openCommandCenter = useUiStore((s) => s.openCommandCenter)
@@ -163,9 +169,9 @@ export function CommandPanel({
   const ranked = useMemo(
     () =>
       filtered
-        ? searchCommands({ commands, query: keyword, scope, sort, pinnedIds })
+        ? searchCommands({ commands, query: keyword, scope, sort, pinnedIds, env })
         : [],
-    [filtered, commands, keyword, scope, sort, pinnedIds]
+    [filtered, commands, keyword, scope, sort, pinnedIds, env]
   )
 
   /** 命中元信息（别名 / 高亮区间），按命令 id 索引，只在搜索态下有值 */
@@ -182,7 +188,8 @@ export function CommandPanel({
   }, [ranked])
 
   const groups = useMemo(() => {
-    if (!filtered) return groupCommands(commands, keyword, extraGroups ?? [], groupOrder ?? [])
+    if (!filtered)
+      return groupCommands(commands, keyword, extraGroups ?? [], groupOrder ?? [], env)
 
     const map = new Map<string, Command[]>()
     for (const r of ranked) {
@@ -200,7 +207,7 @@ export function CommandPanel({
     return [...map.keys()]
       .sort((a, b) => (score.get(b) ?? 0) - (score.get(a) ?? 0))
       .map((group) => ({ group, items: map.get(group) ?? [] }))
-  }, [filtered, commands, keyword, extraGroups, groupOrder, ranked])
+  }, [filtered, commands, keyword, extraGroups, groupOrder, ranked, env])
 
   /** 扁平化的结果顺序，用于键盘 ↑↓ 导航 */
   const flat = useMemo(
@@ -348,6 +355,35 @@ export function CommandPanel({
     void reorder(globalIds)
   }
 
+  /** 头部计数显示「当前环境可见的条数」—— 与列表一致，否则数字和内容对不上 */
+  const visibleCount = useMemo(
+    () => groups.reduce((n, g) => n + g.items.length, 0),
+    [groups]
+  )
+
+  /**
+   * 空态文案分三种，不能一律「换个关键字试试」：
+   * 命令库是空的、当前环境过滤掉了、真的搜不到 —— 三种情况的下一步动作完全不同。
+   */
+  const emptyTitle =
+    commands.length === 0
+      ? '还没有常用命令'
+      : visibleCount === 0 && !searching
+        ? '当前环境下没有可用命令'
+        : '没有匹配的命令'
+  const emptyHint =
+    commands.length === 0
+      ? '点右上角 + 新建一条；也可以按 Ctrl+K 打开命令中心'
+      : visibleCount === 0 && !searching
+        ? '这个会话的连接类型过滤掉了全部命令；其余命令标记为仅 SSH 适用'
+        : '换个关键字，或按 Ctrl+K 在命令中心里全局检索'
+  const emptyHintShort =
+    commands.length === 0
+      ? '点右上角 + 新建一条'
+      : visibleCount === 0 && !searching
+        ? '其余命令仅适用于 SSH 会话'
+        : '换个关键字试试'
+
   const duplicate = async (c: Command): Promise<void> => {
     await save({
       name: `${c.name} 副本`,
@@ -357,6 +393,7 @@ export function CommandPanel({
       icon: c.icon,
       color: c.color,
       confirmRequired: c.confirmRequired,
+      envs: c.envs,
       variables: c.variables
     })
   }
@@ -433,7 +470,7 @@ export function CommandPanel({
       <div className="panel-head">
         <Play size={13} className="shrink-0 text-ink-3" />
         <span className="panel-title">常用命令</span>
-        <span className="panel-count">{commands.length}</span>
+        <span className="panel-count">{visibleCount}</span>
         <span className="flex-1" />
         <button
           className="btn-icon h-6 w-6"
@@ -567,23 +604,15 @@ export function CommandPanel({
           (horizontal ? (
             <EmptyState
               icon={<Play size={24} />}
-              title={commands.length === 0 ? '还没有常用命令' : '没有匹配的命令'}
-              hint={
-                commands.length === 0
-                  ? '点右上角 + 新建一条；也可以按 Ctrl+K 打开命令中心'
-                  : '换个关键字，或按 Ctrl+K 在命令中心里全局检索'
-              }
+              title={emptyTitle}
+              hint={emptyHint}
             />
           ) : (
             /* 窄栏里 56px 图标 + 两行长文案会挤成一团，这里用紧凑版 */
             <div className="flex flex-col items-center gap-1.5 px-3 py-10 text-center">
               <Search size={16} className="mb-0.5 text-ink-3/70" />
-              <div className="text-xs text-ink-2">
-                {commands.length === 0 ? '还没有常用命令' : '没有匹配的命令'}
-              </div>
-              <div className="text-2xs leading-relaxed text-ink-3">
-                {commands.length === 0 ? '点右上角 + 新建一条' : '换个关键字试试'}
-              </div>
+              <div className="text-xs text-ink-2">{emptyTitle}</div>
+              <div className="text-2xs leading-relaxed text-ink-3">{emptyHintShort}</div>
               <button
                 className="mt-1 rounded-md border border-edge-soft px-2 py-1 text-2xs text-ink-2 transition-colors hover:border-edge hover:bg-hover hover:text-ink"
                 onClick={() => openCommandCenter(keyword)}

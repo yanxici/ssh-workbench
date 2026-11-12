@@ -28,7 +28,7 @@ import { call } from '@/lib/ipc'
 import { cn, formatBytes, formatTime } from '@/lib/utils'
 import { ConfirmDialog, EmptyState } from '@/components/ui'
 import { useDiagStore } from '@/stores/diagStore'
-import { useSessionStore } from '@/stores/sessionStore'
+import { useSessionStore, useSshSessions } from '@/stores/sessionStore'
 import { useToastStore } from '@/stores/toastStore'
 import { DiagSectionEditor } from './DiagSectionEditor'
 import { BundleDialog } from './BundleDialog'
@@ -135,7 +135,7 @@ function RunView({ onEditSection }: { onEditSection: (s: DiagSection | null) => 
   const statuses = useDiagStore((s) => s.statuses)
   const lastReport = useDiagStore((s) => s.lastReport)
 
-  const sessions = useSessionStore((s) => s.sessions)
+  const sessions = useSshSessions()
   const activeId = useSessionStore((s) => s.activeId)
   const targetSession =
     sessions.find((s) => s.id === activeId && s.status === 'connected') ??
@@ -271,10 +271,12 @@ function RunView({ onEditSection }: { onEditSection: (s: DiagSection | null) => 
             目标会话：
             {targetSession ? (
               <span className="text-ink-2">
-                {targetSession.title}（{targetSession.username}@{targetSession.host}）
+                {targetSession.title}（{targetSession.target}）
               </span>
             ) : (
-              <span className="text-warning">无在线会话，请先连接设备</span>
+              <span className="text-warning">
+                无在线 SSH 会话，请先连接设备（串口会话不提供诊断）
+              </span>
             )}
           </span>
           <span className="flex-1" />

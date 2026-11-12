@@ -141,7 +141,6 @@ async function main() {
   check('50 次并发都返回数字', conc.every((x) => typeof x === 'number'))
   const afterConc = await listConnections()
   const mineConc = afterConc.filter((c) => ids.includes(c.id))
-  const expectedTags = ['only', 'zzz', ...Array.from({ length: 50 }, (_, i) => 'c' + i)]
   // ids[0] 有 zzz，其他只有 only；c0..c49 应全部出现在每一条上
   const allHaveAll = mineConc.every((c) =>
     Array.from({ length: 50 }, (_, i) => 'c' + i).every((t) => c.tags.includes(t))

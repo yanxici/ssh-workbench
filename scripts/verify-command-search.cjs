@@ -9,12 +9,16 @@ const esbuild = require('esbuild')
 const ROOT = path.join(__dirname, '..')
 const out = path.join(ROOT, '.tsc-verify', 'command-search.cjs')
 fs.mkdirSync(path.dirname(out), { recursive: true })
+// commandSearch.ts 从 v2.0.0 起引用 @shared/commandEnv（命令的「适用环境」），
+// buildSync 没有 tsconfig paths，必须显式给 alias，否则 bundle 报 Could not resolve。
+const SHARED_ALIAS = { '@shared': path.join(ROOT, 'src/shared') }
 esbuild.buildSync({
   entryPoints: [path.join(ROOT, 'src/renderer/src/lib/commandSearch.ts')],
   bundle: true,
   platform: 'node',
   format: 'cjs',
   outfile: out,
+  alias: SHARED_ALIAS,
   logLevel: 'error'
 })
 const { inScope, usageScore, searchCommands, buildScopes, sameScope } = require(out)
@@ -190,6 +194,30 @@ eq('name 排序按名称', byName.map((r) => r.command.name).length, 6)
 
 const scoped = searchCommands({ commands, query: '', scope: { kind: 'group', group: '系统' }, now })
 eq('scope 收窄结果集', scoped.length, 2)
+
+/* ------------------------------------------------------------------ *
+ *  env：命令的「适用环境」（v2.0.0）
+ *  用独立 fixture，避免给上面的 commands 加 envs 打乱既有计数断言。
+ * ------------------------------------------------------------------ */
+const envCommands = [
+  cmd({ id: 'e-any', name: 'uname', command: 'uname -a', group: '系统' }),
+  cmd({ id: 'e-both', name: 'dmesg', command: 'dmesg | tail', group: '系统', envs: ['ssh', 'serial'] }),
+  cmd({ id: 'e-ssh', name: 'top', command: 'top -b -n 1', group: '系统', envs: ['ssh'] }),
+  cmd({ id: 'e-serial', name: 'help', command: 'help', group: '串口', envs: ['serial'] })
+]
+const ids = (list) => list.map((r) => r.command.id).sort()
+// 不传 env 时不做任何过滤 —— 没有活动会话的场景，界面要保持原样
+eq('不传 env 不过滤', ids(searchCommands({ commands: envCommands, query: '', scope: { kind: 'all' }, now })), ['e-any', 'e-both', 'e-serial', 'e-ssh'])
+// envs 缺省 = 两者都适用；['ssh','serial'] 等价于缺省
+eq('串口环境滤掉仅 SSH 命令', ids(searchCommands({ commands: envCommands, query: '', scope: { kind: 'all' }, now, env: 'serial' })), ['e-any', 'e-both', 'e-serial'])
+eq('SSH 环境滤掉仅串口命令', ids(searchCommands({ commands: envCommands, query: '', scope: { kind: 'all' }, now, env: 'ssh' })), ['e-any', 'e-both', 'e-ssh'])
+eq('env 与 scope 叠加', searchCommands({ commands: envCommands, query: '', scope: { kind: 'group', group: '串口' }, now, env: 'ssh' }).length, 0)
+// 计数必须与列表同源，否则「全部命令 4 条」点进去只有 3 条
+eq('buildScopes 全部计数按 env 收敛', buildScopes(envCommands, { now, env: 'serial' })[0].count, 3)
+eq('buildScopes 分组计数按 env 收敛', buildScopes(envCommands, { now, env: 'serial' }).find((s) => s.label === '系统').count, 2)
+// 分组被环境滤空后不再出现在结果里，只有 extraGroups 显式带上才会保留成 0 —— 与面板里「空分组仍显示」一致
+eq('buildScopes 被滤空的分组默认消失', buildScopes(envCommands, { now, env: 'ssh' }).find((s) => s.label === '串口'), undefined)
+eq('buildScopes extraGroups 保留空分组且计数为 0', buildScopes(envCommands, { now, env: 'ssh', extraGroups: ['串口'] }).find((s) => s.label === '串口').count, 0)
 
 /* ------------------------------------------------------------------ *
  *  buildScopes

@@ -1,6 +1,7 @@
 import { useMemo } from 'react'
 import { create } from 'zustand'
-import type { ConnStatus, ReconnectEvent } from '@shared/types'
+import type { ConnKind, ConnStatus, Connection, ReconnectEvent } from '@shared/types'
+import { connectionTarget } from '@shared/serialDisplay'
 import type { Terminal } from '@xterm/xterm'
 import type { FitAddon } from '@xterm/addon-fit'
 import type { SearchAddon } from '@xterm/addon-search'
@@ -26,6 +27,18 @@ export interface SessionUi {
   connectionName: string
   host: string
   username: string
+  /**
+   * 连接类型。缺省按 'ssh'（V1.x 会话没有这个字段）。
+   * 串口会话的 host/username 是空串，凡是要展示地址的地方都不能自己拼。
+   */
+  kind?: ConnKind
+  /**
+   * 统一显示名：SSH 为 `user@host`，串口为 `COM3 · 115200 8N1`。
+   *
+   * 打开标签时本地先用 shared/serialDisplay 算一遍（标签要立刻有名字，
+   * 等主进程回话就有一帧空白），主进程 list() 里给的是同一个函数的结果。
+   */
+  target: string
   title: string
   status: ConnStatus
   error?: string
@@ -64,7 +77,14 @@ interface SessionState {
   /** 取消自动重连（用户主动关闭标签时） */
   cancelReconnect: (id: string) => void
 
-  open: (conn: { id: string; name: string; host: string; username: string }) => string
+  open: (conn: {
+    id: string
+    name: string
+    host: string
+    username: string
+    kind?: ConnKind
+    serial?: Connection['serial']
+  }) => string
   /** 断开 / 失败的会话原地重连（同一标签、保留终端内容） */
   reconnect: (id: string) => void
   /** 在指定会话的 SSH 连接上新建一个终端标签（免重新登录），返回新会话 id */
@@ -114,6 +134,8 @@ export const useSessionStore = create<SessionState>()((set, get) => ({
       connectionName: conn.name,
       host: conn.host,
       username: conn.username,
+      kind: conn.kind,
+      target: connectionTarget(conn),
       title: conn.name,
       status: 'connecting',
       cols: 80,
@@ -184,6 +206,8 @@ export const useSessionStore = create<SessionState>()((set, get) => ({
       connectionName: host.connectionName,
       host: host.host,
       username: host.username,
+      kind: host.kind,
+      target: host.target,
       title: `${host.connectionName} (${n})`,
       status: 'connecting',
       cols: host.cols,
@@ -330,4 +354,40 @@ export function useSessionById(id: string | null): SessionUi | null {
 export function useSessionIndex(): Map<string, SessionUi> {
   const sessions = useSessionStore((s) => s.sessions)
   return useMemo(() => new Map(sessions.map((x) => [x.id, x])), [sessions])
+}
+
+/** 会话是否为 SSH 类型（串口会话缺省不算） */
+export function isSshSession(s: Pick<SessionUi, 'kind'>): boolean {
+  return s.kind !== 'serial'
+}
+
+/**
+ * 只取 SSH 会话。
+ *
+ * 为什么要有这个 selector：指标、诊断、固件、配置备份、批量执行这些功能
+ * 全都建立在「对远端跑一条命令」上（主进程侧统一走 sessionManager.getClient
+ * 拿 ssh2 Client 再 execCollect）。串口没有 client，让它出现在这些面板的
+ * 设备下拉里，用户选了只会拿到一句「该功能仅支持 SSH 会话」—— 那不如根本
+ * 不列出来。串口在 V2.0.0 的定位就是 Console 救急，不是万能终端。
+ *
+ * 注意这里按「是否串口」判，不是按「是否 connected」判：状态过滤各面板自己
+ * 已经在做了，混在一起会让两处规则互相盖住。
+ */
+export function useSshSessions(): SessionUi[] {
+  const sessions = useSessionStore((s) => s.sessions)
+  return useMemo(() => sessions.filter(isSshSession), [sessions])
+}
+
+/**
+ * 当前活动会话的连接类型（用于命令面板的「适用环境」过滤）。
+ *
+ * 返回 undefined 表示没有活动会话 —— 此时命令面板不做环境过滤，
+ * 让人在没连接的时候也能翻看全部命令，而不是打开面板看到一片空白。
+ * 只订阅 kind 一个字段，切换标签以外的状态变化（延迟探测、输出）不会触发重渲染。
+ */
+export function useActiveEnv(): ConnKind | undefined {
+  return useSessionStore((s) => {
+    const active = s.sessions.find((x) => x.id === s.activeId)
+    return active?.kind
+  })
 }

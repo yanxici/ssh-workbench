@@ -650,6 +650,11 @@ export function FileExplorer({
 
   /* ---------- 未连接：引导去连接 ---------- */
   if (!session || !connected) {
+    /*
+     * 串口会话走到这里说明它不是 SFTP 会话 —— 串口上跑不了 SFTP，
+     * 单独给一句说明，否则用户会以为「连上了但文件面板坏了」。
+     */
+    const serialOnly = session?.kind === 'serial'
     return (
       <div className="flex h-full flex-col">
         <div className="panel-head">
@@ -660,13 +665,17 @@ export function FileExplorer({
         <ExplorerTabs tab={tab} onChange={setTab} />
         <div className="flex flex-1 flex-col items-center justify-center gap-2 px-5 text-center">
           <FolderOpen size={26} className="text-ink-3/60" />
-          <div className="text-xs font-medium text-ink-2">还没有连接任何设备</div>
+          <div className="text-xs font-medium text-ink-2">
+            {serialOnly ? '串口会话不提供文件浏览' : '还没有连接任何设备'}
+          </div>
           <div className="text-2xs leading-relaxed text-ink-3">
-            文件浏览器需要先建立 SSH 连接；连上之后这里会自动显示远端目录。
+            {serialOnly
+              ? '文件浏览依赖 SFTP，只能用于 SSH 连接。串口会话是 Console 救急通道，请直接在终端里敲命令。'
+              : '文件浏览器需要先建立 SSH 连接；连上之后这里会自动显示远端目录。'}
           </div>
           <button className="btn btn-primary mt-1 h-7 px-3 text-2xs" onClick={onBrowseSessions}>
             <Terminal size={12} />
-            去连接设备
+            {serialOnly ? '切换到 SSH 会话' : '去连接设备'}
           </button>
         </div>
       </div>
