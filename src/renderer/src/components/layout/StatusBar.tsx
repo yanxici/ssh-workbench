@@ -1,9 +1,11 @@
+import type * as React from 'react'
 import { useEffect, useState } from 'react'
 import { useShallow } from 'zustand/react/shallow'
 import {
   ArrowDownToLine,
   ArrowUpFromLine,
   CircleDot,
+  FolderInput,
   GitBranch,
   Unplug
 } from 'lucide-react'
@@ -11,6 +13,7 @@ import type { ConnStatus, TransferTask } from '@shared/types'
 import { useSessionById, useSessionStore } from '@/stores/sessionStore'
 import { useConnectionStore } from '@/stores/connectionStore'
 import { useSftpStore } from '@/stores/sftpStore'
+import { useTrzszStore } from '@/stores/trzszStore'
 import { call } from '@/lib/ipc'
 import { cn, latencyLevel } from '@/lib/utils'
 
@@ -72,6 +75,24 @@ const STATUS_TEXT: Record<ConnStatus, string> = {
   error: '连接错误'
 }
 
+/*
+ * 连接中阶段的细分文案。
+ *
+ * 为什么值得区分：用户看到「连接中」卡住时，下一步动作完全取决于卡在哪 ——
+ * tcp 未通要查网络/防火墙，auth 卡住要查凭据或键盘交互，jump 卡住要查跳板机。
+ * 只说「连接中」等于什么都没说。
+ */
+const PHASE_LABEL: Record<string, string> = {
+  tcp: '建立 TCP…',
+  handshake: '握手 / 协商…',
+  auth: '认证中…',
+  jump: '经跳板机…',
+  shell: '打开终端…'
+}
+function STATUS_PHASE_TEXT(phase: string): string | undefined {
+  return PHASE_LABEL[phase]
+}
+
 const STATUS_DOT: Record<ConnStatus, string> = {
   connecting: 'bg-warning animate-pulse-soft',
   connected: 'bg-success',
@@ -93,7 +114,7 @@ const LATENCY_CLS = {
  * 问题是这个字符在字体的中线偏上、宽度随字号变化，相邻项一多就出现
  * 高低不齐的「锯齿」。改成 1px×9px 的纯色方块，垂直居中由 flex 保证。
  */
-function Sep(): JSX.Element {
+function Sep(): React.JSX.Element {
   return <span className="h-[9px] w-px shrink-0 bg-edge" />
 }
 
@@ -107,7 +128,7 @@ function Sep(): JSX.Element {
  * 不能每次渲染都问，所以按 sessionId 缓存，并在切换活动会话时才重查。
  * 非 Git 目录 / 未连接时静默不显示 —— 这里不该出现「not a git repository」这种噪音。
  */
-export function StatusBar(): JSX.Element {
+export function StatusBar(): React.JSX.Element {
   const activeId = useSessionStore((s) => s.activeId)
   // 只订阅当前会话本身；旧写法会在任意会话变化时重跑 find
   const session = useSessionById(activeId)
@@ -127,8 +148,18 @@ export function StatusBar(): JSX.Element {
   )
   const showDock = useSftpStore((s) => s.showDock)
 
+
   const sessionId = session?.id ?? null
   const connected = session?.status === 'connected'
+  /*
+   * trzsz 传输条：只订阅「当前活动会话」那一条状态。
+   *
+   * 不订阅整个 bySession：别的标签在传大文件时每秒改好几次状态，
+   * 状态栏是常驻组件，会跟着白重渲染，而它要显示的只是当前这一格。
+   * 没在传时返回 undefined —— zustand 用 === 比较，
+   * 于是别的会话的更新不会惊动这里。
+   */
+  const trzsz = useTrzszStore((s) => (sessionId ? s.bySession[sessionId] : undefined))
   const [branch, setBranch] = useState<string | null>(null)
 
   /* ---------- Git 分支：活动会话变更或有连接时查一次 ---------- */
@@ -161,7 +192,7 @@ export function StatusBar(): JSX.Element {
         <>
           <span className="flex items-center gap-1.5">
             <span className={cn('h-1.5 w-1.5 rounded-full', STATUS_DOT[session.status])} />
-            <span className="text-ink-2">{STATUS_TEXT[session.status]}</span>
+            <span className="text-ink-2">{(session.phase && STATUS_PHASE_TEXT(session.phase)) || STATUS_TEXT[session.status]}</span>
           </span>
 
           <Sep />
@@ -219,6 +250,22 @@ export function StatusBar(): JSX.Element {
               {activeCount} 项 · {activePct}%
             </span>
           </button>
+          <Sep />
+        </>
+      )}
+
+      {trzsz && (
+        <>
+          <span
+            className="flex min-w-0 items-center gap-1 text-accent"
+            title={trzsz.file ? `trzsz 正在接收：${trzsz.file}` : 'trzsz 正在传输'}
+          >
+            <FolderInput size={10} className="shrink-0" />
+            <span className="max-w-[160px] truncate">{trzsz.file ?? 'trzsz'}</span>
+            {trzsz.percent !== undefined && (
+              <span className="tabular-nums">{trzsz.percent}%</span>
+            )}
+          </span>
           <Sep />
         </>
       )}

@@ -1,3 +1,4 @@
+import type * as React from 'react'
 import { useEffect, useState } from 'react'
 import {
   AlertTriangle,
@@ -126,6 +127,43 @@ const AUTH_OPTIONS: Array<{ value: AuthType; label: string }> = [
 /** 常用波特率。Console 口绝大多数是 115200 或 9600，其余留着能手输 */
 const BAUD_PRESETS = ['9600', '19200', '38400', '57600', '115200', '230400', '460800', '921600']
 
+/**
+ * 串口一键预设。
+ *
+ * 只有「7628 U-Boot 控制台」这一条，因为它是唯一有明确文档参数的场景：
+ * 过道盘点 7628 板子的刷机说明写死了 57600 8N1、无流控、CR 换行。
+ * 其余设备没有权威参数，与其猜一堆预设不如让人手填 —— 猜错一个数据位，
+ * 现场看到的是乱码，比没预设更难排查。
+ */
+const SERIAL_PRESETS: Array<{
+  label: string
+  hint: string
+  apply: Pick<
+    FormState,
+    | 'serialBaud'
+    | 'serialDataBits'
+    | 'serialStopBits'
+    | 'serialParity'
+    | 'serialFlow'
+    | 'serialCharset'
+    | 'serialNewline'
+  >
+}> = [
+  {
+    label: '7628 U-Boot 控制台',
+    hint: '57600 8N1 · 无流控 · CR',
+    apply: {
+      serialBaud: '57600',
+      serialDataBits: 8,
+      serialStopBits: 1,
+      serialParity: 'none',
+      serialFlow: 'none',
+      serialCharset: 'utf-8',
+      serialNewline: 'cr'
+    }
+  }
+]
+
 const DATA_BITS_OPTIONS: SerialDataBits[] = [5, 6, 7, 8]
 
 const STOP_BITS_OPTIONS: Array<{ value: SerialStopBits; label: string }> = [
@@ -180,7 +218,7 @@ export function ConnectionEditor({
   initial: Connection | null
   preset?: Partial<ConnectionInput>
   onClose: () => void
-}): JSX.Element {
+}): React.JSX.Element {
   const save = useConnectionStore((s) => s.save)
   const connections = useConnectionStore((s) => s.connections)
 
@@ -361,6 +399,13 @@ export function ConnectionEditor({
 
   const buildInput = (forceClearSecret = false, asNew = false): ConnectionInput => ({
     id: asNew ? undefined : initial?.id,
+    /*
+     * 另存为新设备时告诉主进程「凭据从原连接复制一份」。
+     * 新记录是新 id，保险箱里没有它的条目，不带这个字段就会出现
+     * 「另存并连接」后立刻又要输密码的割裂感。用户本次填了密码时
+     * 主进程仍以填写的为准（见 saveConnection 里的优先级）。
+     */
+    reuseSecretFrom: asNew ? initial?.id : undefined,
     kind: form.kind,
     name: form.name.trim(),
     /*
@@ -430,7 +475,10 @@ export function ConnectionEditor({
       useToastStore.getState().push({
         kind: 'success',
         title: asNew ? `已另存为新设备「${saved.name}」并连接` : `正在连接「${saved.name}」`,
-        detail: asNew ? `原连接「${initial?.name ?? ''}」保持不变` : undefined
+        detail: asNew
+          ? `原连接「${initial?.name ?? ''}」保持不变` +
+            (hasSecret ? '，已沿用其保存的凭据' : '')
+          : undefined
       })
       onClose()
       return
@@ -956,6 +1004,23 @@ export function ConnectionEditor({
                 </div>
               </div>
             )}
+
+            {/* 一键套用已知设备的串口参数：省掉"57600 还是 115200"的试错 */}
+            <div className="col-span-2 -mb-1 flex flex-wrap items-center gap-1.5">
+              <span className="text-2xs text-ink-3">常用预设</span>
+              {SERIAL_PRESETS.map((preset) => (
+                <button
+                  key={preset.label}
+                  type="button"
+                  className="btn h-6 px-2 text-2xs"
+                  onClick={() => setForm((f) => ({ ...f, ...preset.apply }))}
+                  title={`套用 ${preset.hint}`}
+                >
+                  {preset.label}
+                </button>
+              ))}
+              <span className="text-3xs text-ink-3">套用后仍可逐项修改</span>
+            </div>
 
             <Field label="波特率" hint="多数 Console 口是 115200，老设备常见 9600">
               <Combobox

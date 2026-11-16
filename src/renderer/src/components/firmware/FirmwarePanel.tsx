@@ -1,3 +1,4 @@
+import type * as React from 'react'
 import { useEffect, useState, type ReactNode } from 'react'
 import {
   CheckCircle2,
@@ -21,14 +22,14 @@ import { useSshSessions } from '@/stores/sessionStore'
  * 固件升级助手（覆盖主区域）：选择 → 上传 → 校验 → 升级 → 重启等待 → 启动日志。
  * 每一步都有明确的状态与产物，升级命令完全可编辑（兼容各家厂商脚本）。
  */
-export function FirmwarePanel(): JSX.Element | null {
+export function FirmwarePanel(): React.JSX.Element | null {
   const panelOpen = useFirmwareStore((s) => s.panelOpen)
   if (!panelOpen) return null
 
   const close = (): void => useFirmwareStore.setState({ panelOpen: false })
 
   return (
-    <div className="fixed inset-x-0 bottom-[26px] top-[38px] z-30 flex flex-col bg-app">
+    <div className="panel-shell fixed inset-x-0 z-30 flex flex-col bg-app">
       {/* 标题栏 */}
       <div className="flex h-9 shrink-0 items-center gap-2 border-b border-edge bg-panel px-3">
         <Rocket size={14} className="text-accent" />
@@ -72,7 +73,7 @@ function StepCard({
   hint?: string
   status: 'todo' | 'doing' | 'done' | 'warn'
   children: ReactNode
-}): JSX.Element {
+}): React.JSX.Element {
   return (
     <div className="rounded-lg border border-edge-soft bg-panel">
       <div className="flex items-center gap-2 border-b border-edge-soft px-3 py-2">
@@ -105,7 +106,7 @@ function StepCard({
  *  目标设备
  * ------------------------------------------------------------------ */
 
-function TargetBar(): JSX.Element {
+function TargetBar(): React.JSX.Element {
   // 固件升级靠 SFTP 传包 + 远端命令，串口会话在这里选了也只会报「仅支持 SSH」
   const sessions = useSshSessions()
   const sessionId = useFirmwareStore((s) => s.sessionId)
@@ -141,7 +142,7 @@ function TargetBar(): JSX.Element {
  *  ① 选择固件
  * ------------------------------------------------------------------ */
 
-function StepSelectFile(): JSX.Element {
+function StepSelectFile(): React.JSX.Element {
   const file = useFirmwareStore((s) => s.file)
   return (
     <StepCard index={1} title="选择固件文件" status={file ? 'done' : 'todo'}>
@@ -167,7 +168,7 @@ function StepSelectFile(): JSX.Element {
  *  ② 上传
  * ------------------------------------------------------------------ */
 
-function StepUpload(): JSX.Element {
+function StepUpload(): React.JSX.Element {
   const file = useFirmwareStore((s) => s.file)
   const remoteDir = useFirmwareStore((s) => s.remoteDir)
   const uploadTaskId = useFirmwareStore((s) => s.uploadTaskId)
@@ -237,7 +238,7 @@ function StepUpload(): JSX.Element {
  *  ③ 校验
  * ------------------------------------------------------------------ */
 
-function StepVerify(): JSX.Element {
+function StepVerify(): React.JSX.Element {
   const uploadedPath = useFirmwareStore((s) => s.uploadedPath)
   const verifying = useFirmwareStore((s) => s.verifying)
   const verify = useFirmwareStore((s) => s.verify)
@@ -282,7 +283,7 @@ function StepVerify(): JSX.Element {
  *  ④ 执行升级
  * ------------------------------------------------------------------ */
 
-function StepUpgrade(): JSX.Element {
+function StepUpgrade(): React.JSX.Element {
   const uploadedPath = useFirmwareStore((s) => s.uploadedPath)
   const command = useFirmwareStore((s) => s.upgradeCommand)
   const timeoutMs = useFirmwareStore((s) => s.upgradeTimeoutMs)
@@ -426,7 +427,7 @@ function StepUpgrade(): JSX.Element {
  *  ⑤ 重启与等待上线
  * ------------------------------------------------------------------ */
 
-function StepReboot(): JSX.Element {
+function StepReboot(): React.JSX.Element {
   const rebootCommand = useFirmwareStore((s) => s.rebootCommand)
   const rebooting = useFirmwareStore((s) => s.rebooting)
   const waitPort = useFirmwareStore((s) => s.waitPort)

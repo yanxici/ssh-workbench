@@ -1,3 +1,4 @@
+import type * as React from 'react'
 import { useEffect, useState } from 'react'
 import type { TunnelConfig, TunnelInput, TunnelType } from '@shared/types'
 import { isWildcardHost, needsLanGrant } from '@shared/bindHost'
@@ -83,7 +84,7 @@ export function TunnelEditor({
   /** 传入表示编辑，null 表示新建 */
   initial: TunnelConfig | null
   onClose: () => void
-}): JSX.Element {
+}): React.JSX.Element {
   const connections = useConnectionStore((s) => s.connections)
   const [form, setForm] = useState<FormState>(EMPTY)
   const [saving, setSaving] = useState(false)

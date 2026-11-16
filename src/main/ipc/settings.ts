@@ -43,6 +43,11 @@ export function registerSettingsIpc(): void {
   )
 
   /* ---------------- 剪贴板 ---------------- */
+  /*
+   * Electron 45：clipboard.readText / writeText 改为返回 Promise（对齐 W3C
+   * Clipboard API，RFC 0019）。handle() 本身接受 Promise 返回值，所以这里只需让
+   * 它自然返回 —— 关键是**不要**把返回值当字符串继续用。
+   */
   handle(IPC.CLIP_READ, () => clipboard.readText())
   handle(IPC.CLIP_WRITE, (text: string) => clipboard.writeText(text))
 }

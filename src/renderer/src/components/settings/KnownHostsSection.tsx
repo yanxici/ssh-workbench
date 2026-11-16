@@ -1,3 +1,4 @@
+import type * as React from 'react'
 import { useEffect, useState } from 'react'
 import { Fingerprint, Loader2, RefreshCw, Trash2 } from 'lucide-react'
 import { ConfirmDialog } from '@/components/ui'
@@ -46,7 +47,7 @@ async function probeHost(
   }
 }
 
-export function KnownHostsSection(): JSX.Element {
+export function KnownHostsSection(): React.JSX.Element {
   const [knownHosts, setKnownHosts] = useState<KnownHost[]>([])
   /** 正在探测/更新指纹的 host:port（按钮转圈）；'*' 表示批量 */
   const [probeBusy, setProbeBusy] = useState<string | null>(null)

@@ -17,7 +17,15 @@ export const SHORTCUT_ACTIONS: Array<{ id: ShortcutAction; label: string; defaul
   { id: 'closeTab', label: '关闭当前标签', default: 'Ctrl+Shift+W' },
   { id: 'terminalSearch', label: '终端内搜索', default: 'Ctrl+F' },
   { id: 'terminalCopy', label: '复制', default: 'Ctrl+Shift+C' },
-  { id: 'terminalPaste', label: '粘贴', default: 'Ctrl+Shift+V' }
+  { id: 'terminalPaste', label: '粘贴', default: 'Ctrl+Shift+V' },
+  /*
+   * 分屏之间移动焦点。用 Ctrl+Alt+方向键而不是 Ctrl+方向键：
+   * 后者在终端里是「按词移动光标」，bash/readline 重度使用者离不开它。
+   */
+  { id: 'paneLeft', label: '焦点移到左侧分屏', default: 'Ctrl+Alt+ArrowLeft' },
+  { id: 'paneRight', label: '焦点移到右侧分屏', default: 'Ctrl+Alt+ArrowRight' },
+  { id: 'paneUp', label: '焦点移到上方分屏', default: 'Ctrl+Alt+ArrowUp' },
+  { id: 'paneDown', label: '焦点移到下方分屏', default: 'Ctrl+Alt+ArrowDown' }
 ]
 
 /** 归一化：把用户输入/存储的字符串解析为可比较的结构 */
@@ -80,4 +88,32 @@ export function resolveShortcuts(map: ShortcutMap | undefined): Record<ShortcutA
     out[action.id] = map?.[action.id] || action.default
   }
   return out
+}
+/* ------------------------------------------------------------------ *
+ *  动作作用域（阶段 4）
+ * ------------------------------------------------------------------ */
+
+/**
+ * 每个动作属于哪个作用域。
+ *
+ * 作用域决定了「重复是否算冲突」：同作用域重复是真冲突，
+ * 跨作用域重复不算（终端聚焦时以终端为准）。详见 shortcutConflict.ts。
+ */
+export type ShortcutScope = 'global' | 'terminal'
+
+export const SHORTCUT_SCOPE: Record<ShortcutAction, ShortcutScope> = {
+  commandCenter: 'global',
+  newConnection: 'global',
+  settings: 'global',
+  togglePanel: 'global',
+  toggleCommandRail: 'global',
+  nextTab: 'global',
+  closeTab: 'global',
+  terminalSearch: 'terminal',
+  terminalCopy: 'terminal',
+  terminalPaste: 'terminal',
+  paneLeft: 'global',
+  paneRight: 'global',
+  paneUp: 'global',
+  paneDown: 'global'
 }

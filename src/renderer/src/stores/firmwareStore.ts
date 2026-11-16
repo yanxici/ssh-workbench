@@ -9,6 +9,7 @@ import { call } from '@/lib/ipc'
 import { uid } from '@/lib/utils'
 import { useSessionStore } from './sessionStore'
 import { useToastStore } from './toastStore'
+import { notifyTask } from '@/lib/taskNotify'
 
 /**
  * 固件升级助手状态（五步向导：选择 → 上传 → 校验 → 升级 → 重启等待）。
@@ -210,18 +211,37 @@ export const useFirmwareStore = create<FirmwareState>()((set, get) => ({
     set({ upgrading: false, upgradeRunId: null })
     if (result) {
       set({ upgradeResult: result })
+      /*
+       * 固件升级是这里最"必须通知"的一类：刷机脚本跑起来之后终端里没有
+       * 任何可交互的东西，用户只能等。成功/取消/异常三条路径都要提示，
+       * 否则"刷完了没反应"会让人以为卡死而重复触发。
+       */
+      const connId = useSessionStore.getState().sessions.find((s) => s.id === sessionId)
+        ?.connectionId
       if (result.status === 'done' && result.exitCode === 0) {
-        useToastStore.getState().push({ kind: 'success', title: '升级命令执行成功（退出码 0）' })
+        void notifyTask({
+          kind: 'firmware',
+          title: '升级命令执行成功（退出码 0）',
+          connectionId: connId,
+          sessionId
+        })
       } else if (result.status === 'cancelled') {
-        useToastStore.getState().push({ kind: 'info', title: '升级命令已取消' })
+        void notifyTask({
+          kind: 'firmware',
+          title: '升级命令已取消',
+          connectionId: connId,
+          sessionId
+        })
       } else {
-        useToastStore.getState().push({
-          kind: 'warning',
+        void notifyTask({
+          kind: 'firmware',
           title: '升级命令执行结束（请核对输出）',
           detail:
             result.exitCode === null
               ? '连接中断：升级脚本可能已重启设备，属正常现象'
-              : `退出码 ${result.exitCode}`
+              : `退出码 ${result.exitCode}`,
+          connectionId: connId,
+          sessionId
         })
       }
     }

@@ -4,6 +4,7 @@ import { basename } from 'node:path'
 import { IPC } from '@shared/ipc'
 import type { TunnelInput } from '@shared/types'
 import { dialogParent } from '../windowRef'
+import { dialogDefaultPath, rememberDialogPick } from '../util/dialogDirs'
 import { handle } from './handle'
 import { backupStore } from '../store/backups'
 import { createBackup, diffBackup, restoreBackup } from '../ssh/configBackup'
@@ -58,13 +59,14 @@ export function registerBackupTunnelIpc(): void {
   handle(IPC.LOG_EXPORT, async (path: string) => {
     const res = await dialog.showSaveDialog(dialogParent() as BrowserWindow, {
       title: '导出会话日志',
-      defaultPath: basename(path),
+      defaultPath: dialogDefaultPath('report', basename(path)),
       filters: [
         { name: 'Asciinema Cast', extensions: ['cast'] },
         { name: '所有文件', extensions: ['*'] }
       ]
     })
     if (res.canceled || !res.filePath) return { canceled: true }
+    rememberDialogPick('report', res.filePath, false)
     await fs.copyFile(path, res.filePath)
     return { canceled: false, path: res.filePath }
   })

@@ -7,7 +7,8 @@ import type {
   ReconnectEvent,
   SerialConfig,
   SerialPortInfo,
-  SessionInfo
+  SessionInfo,
+  ConnPhase
 } from '@shared/types'
 import type { Transport, TransportEvents } from '../transport/types'
 import { SshTransport } from '../transport/sshTransport'
@@ -19,6 +20,16 @@ import { listSerialPorts } from '../transport/serialPorts'
 import { describeSerialTarget } from '@shared/serialDisplay'
 import { getConnection, getSettings, touchConnection } from '../store/repository'
 import { recorder } from './recorder'
+import {
+  looksLikeTrzsz,
+  looksLikeTrzszMissing,
+  stripTrzszHandshake,
+  trzszManager,
+  type TrzszBridgeHooks,
+  type TrzszSession,
+  type TrzszState
+} from './trzszBridge'
+import { pickTrzszSaveDirectory, pickTrzszSendFiles } from './trzszDialogs'
 import { getSecret } from '../store/vault'
 import {
   buildConnectConfig,
@@ -42,8 +53,15 @@ import {
 
 export interface SessionEvents {
   onData: (sessionId: string, data: string, raw: Buffer) => void
-  onStatus: (sessionId: string, status: ConnStatus, error?: string) => void
+  onStatus: (sessionId: string, status: ConnStatus, error?: string, phase?: ConnPhase) => void
   onLatency: (sessionId: string, ms: number) => void
+  /**
+   * trzsz 传输状态（可选：主进程启动早期可能还没接上）。
+   *
+   * 为什么不用 push 到 onData 里当普通文本：状态条要的是「有没有在传、传哪个文件、多少」，
+   * 而进度条文本每 200ms 重绘一次、还要从里面正则抠，渲染层不该重复解析。
+   */
+  onTrzszState?: (sessionId: string, state: TrzszState) => void
 }
 
 interface SessionRecord {
@@ -57,6 +75,7 @@ interface SessionRecord {
   /** 一行显示用的目标描述，SSH 为 user@host，串口为 COM3 · 115200 8N1 */
   target: string
   status: ConnStatus
+  phase?: ConnPhase
   error?: string
   createdAt: number
   cols: number
@@ -254,6 +273,11 @@ class SessionManager {
     return this.sessions.get(sessionId)?.client
   }
 
+  /** 会话当前连接状态；不存在时返回 undefined（SFTP 断线续传要靠它判断链路是否回来） */
+  statusOf(sessionId: string): ConnStatus | undefined {
+    return this.sessions.get(sessionId)?.status
+  }
+
   /** 会话类型；不存在时返回 undefined */
   kindOf(sessionId: string): ConnKind | undefined {
     return this.sessions.get(sessionId)?.kind
@@ -373,14 +397,23 @@ class SessionManager {
     // 占位传输层：真正的 SshTransport 要等连接建立后才构造（它需要 client）。
     // 先放一个不可用的实现，保证 open 返回前到达的 write/resize 有地方落。
     this.sessions.set(sessionId, record)
-    this.emitStatus(record, 'connecting')
+    this.emitStatus(record, 'connecting', undefined, 'tcp')
 
     try {
       const cfg = await buildConnectConfig(conn, secret, settings)
 
+      this.emitStatus(record, 'connecting', undefined, 'handshake')
       // ---- 建立连接（含跳板链；SOCKS5/HTTP 代理作用于第一条 socket）----
+      /*
+       * 阶段广播的诚实边界：ssh2 的 `connect()` 把「握手 + 认证」合成一次异步调用，
+       * 主进程拿不到两者之间的分界点，所以这里只有 tcp / handshake / jump / shell 四个
+       * 可观测阶段。类型里保留 'auth' 是为了将来换成分步握手时能直接用，
+       * 但**当前不会发出** —— 与其编一个假的 auth 状态，不如不显示。
+       */
+      const useJump = conn.proxyJump && conn.proxyJump.length > 0
+      if (useJump) this.emitStatus(record, 'connecting', undefined, 'jump')
       const client =
-        conn.proxyJump && conn.proxyJump.length > 0
+        useJump
           ? await this.connectThroughJumps(record, conn, cfg, settings, secret.proxyPassword)
           : await connectWithOptionalProxy(cfg, {
               host: conn.host,
@@ -400,13 +433,15 @@ class SessionManager {
       client.setMaxListeners(0)
       record.client = client
       this.wireClientEvents(record)
-      this.emitStatus(record, 'connected')
+      this.emitStatus(record, 'connecting', undefined, 'shell')
       // 后台预热 SFTP：把首次打开文件面板的握手延迟提前吃掉
       void this.prewarmSftp(record.id)
 
       // ---- 打开交互式 shell ----
       record.transport = new SshTransport({ getClient: () => Promise.resolve(client) }, this.transportEvents(record))
       await record.transport.open({ cols: record.cols, rows: record.rows })
+      // shell 打开完才算真正可用；这一步的 status 仍应是 connecting（有 phase=shell）
+      this.emitStatus(record, 'connected')
 
       await touchConnection(connectionId)
       // 延迟探测：起全局节拍器即可，单会话不再各自挂定时器
@@ -730,9 +765,17 @@ class SessionManager {
   write(sessionId: string, data: string): void {
     const rec = this.sessions.get(sessionId)
     if (!rec || rec.status !== 'connected') return
+    /*
+     * trzsz 已接管这个会话时，输入必须先过过滤器：
+     * 传输中它只放行 Ctrl-C（用来中断），其余按键一律吞掉 ——
+     * 否则用户误敲的字符会被当成协议数据塞进远端，传输直接错帧。
+     * 非传输态下 processTerminalInput 就是原样转发，等于没有额外开销。
+     */
+    const trzsz = trzszManager.get(sessionId)
+    if (trzsz) trzsz.processInput(data)
     // 换行转换、字符编码全部在传输层内部完成：串口按连接的 charset/newline，
     // SSH 原样透传（远端 locale 由服务端决定）
-    rec.transport.write(data)
+    else rec.transport.write(data)
     recorder.appendInput(sessionId, data)
   }
 
@@ -745,6 +788,9 @@ class SessionManager {
   writeBytes(sessionId: string, data: Buffer): void {
     const rec = this.sessions.get(sessionId)
     if (!rec || rec.status !== 'connected') return
+    // 传输中不接受二进制：ZMODEM 与 trzsz 不会同时进行，
+    // 把 ZMODEM 的帧写进 trzsz 的 base64 流里只会两边都坏掉。
+    if (trzszManager.get(sessionId)?.active) return
     rec.transport.writeBytes(data)
   }
 
@@ -753,6 +799,8 @@ class SessionManager {
     if (!rec) return
     rec.cols = cols
     rec.rows = rows
+    // 进度条按列宽排版（trzsz 内部按中文双宽算），窗口变了要同步过去
+    trzszManager.get(sessionId)?.setColumns(cols)
     // 串口实现里是空操作（设备没有终端尺寸），SSH 实现才真正下发 setWindow
     rec.transport.resize(cols, rows)
   }
@@ -791,6 +839,9 @@ class SessionManager {
     if (record.closed) return
     record.closed = true
     this.flush(record)
+    // 断开即丢弃过滤器：远端那边的 trz/tsz 也跟着会话一起没了，
+    // 留着只会在下一轮握手时用旧的 columns / 旧的目录记忆
+    trzszManager.drop(record.id)
     recorder.stop(record.id)
     this.cleanup(record)
     if (this.sessions.get(record.id) === record) this.sessions.delete(record.id)
@@ -1110,9 +1161,85 @@ class SessionManager {
     const text = record.pendingText.join('')
     record.pendingRaw = []
     record.pendingText = []
+    /*
+     * trzsz 分流。
+     *
+     * 只在文本里出现 ::TRZSZ:TRANSFER: 握手串时才为这个会话创建过滤器；
+     * 创建之前一个字节都不碰，普通终端与 ZMODEM 的行为完全不变。
+     * 一旦存在，本会话的文本全部改由过滤器产出（它会把非传输态的文本原样吐回）。
+     *
+     * 握手那一帧的 raw 不再下发给渲染层：trzsz 走的是文本协议，
+     * 让渲染层的 ZMODEM Sentry 看到这串反而会误判成二进制头。
+     */
+    const trzsz = record.kind === 'ssh' ? this.trzszFor(record, text) : undefined
+    if (trzsz) {
+      const shown = trzsz.processServerOutput(text)
+      if (shown) this.handlers?.onData(record.id, shown, Buffer.alloc(0))
+      // 录制：握手整行剔掉（回放时那是一屏乱码），其余照常
+      const recorded = stripTrzszHandshake(text)
+      if (recorded) recorder.appendOutput(record.id, recorded)
+      return
+    }
+    /*
+     * 没有过滤器时也认一次「远端没装 trz/tsz」。
+     *
+     * 用户手敲 trz 时我们不会创建过滤器（只在看到握手才建），
+     * 于是上面那条分支根本没人看输出 —— 提示就永远出不来。
+     * 这里只做一次正则匹配，命中才发一条状态事件，不产生任何分配。
+     */
+    if (record.kind === 'ssh' && text && looksLikeTrzszMissing(text)) {
+      this.handlers?.onTrzszState?.(record.id, { active: false, notice: 'no-remote-trz' })
+    }
     if (text || raw.length) {
       this.handlers?.onData(record.id, text, raw)
       if (text) recorder.appendOutput(record.id, text)
+    }
+  }
+
+  /* ------------------------------------------------------------------ *
+   *  trzsz（trz / tsz）
+   * ------------------------------------------------------------------ */
+
+  /** 已存在就复用；只有文本里出现握手串才新建 */
+  private trzszFor(record: SessionRecord, text: string): TrzszSession | undefined {
+    const existing = trzszManager.get(record.id)
+    if (existing) return existing
+    if (!text || !looksLikeTrzsz(text)) return undefined
+    return trzszManager.ensure(record.id, this.trzszHooks(record), record.cols)
+  }
+
+  /**
+   * 给渲染层用：主动上传（拖文件进终端 / 右键「发送文件」）。
+   *
+   * 这里会「无条件先建过滤器」—— 用户拖文件时还没出现过握手串，
+   * 但 uploadFiles 本身就会先发 Ctrl-C 再发 trz 把远端拉进接收态。
+   * 非 SSH 会话或未连接时返回 undefined，由调用方给出提示。
+   */
+  ensureTrzsz(sessionId: string): TrzszSession | undefined {
+    const rec = this.sessions.get(sessionId)
+    if (!rec || rec.kind !== 'ssh' || rec.status !== 'connected') return undefined
+    return trzszManager.ensure(rec.id, this.trzszHooks(rec), rec.cols)
+  }
+
+  private trzszHooks(record: SessionRecord): TrzszBridgeHooks {
+    return {
+      // 协议帧全是可打印文本（base64 加行尾换行），直接走传输层，不录制
+      // （录制里出现一串 base64 对回放没有意义，还会把行撑爆）
+      sendToServer: (data: string) => {
+        const rec = this.sessions.get(record.id)
+        if (!rec || rec.status !== 'connected') return
+        rec.transport.write(data)
+      },
+      // 进度条、Saved 文案都由 trzsz 自己拼好，当普通会话数据下发，
+      // 于是回滚、搜索、会话录制全都自动生效
+      emitText: (text: string) => {
+        if (!text) return
+        this.handlers?.onData(record.id, text, Buffer.alloc(0))
+        recorder.appendOutput(record.id, text)
+      },
+      emitState: (state: TrzszState) => this.handlers?.onTrzszState?.(record.id, state),
+      pickSaveDirectory: pickTrzszSaveDirectory,
+      pickSendFiles: pickTrzszSendFiles
     }
   }
 
@@ -1227,14 +1354,15 @@ class SessionManager {
     }
   }
 
-  private emitStatus(record: SessionRecord, status: ConnStatus, error?: string): void {
+  private emitStatus(record: SessionRecord, status: ConnStatus, error?: string, phase?: ConnPhase): void {
     record.status = status
+    record.phase = status === 'connecting' ? phase : undefined
     record.error = error
     // 同一 sessionId 已被新记录（重连）占用：旧记录的状态不再外发
     const current = this.sessions.get(record.id)
     if (current && current !== record) return
     this.settleReadyWaiters(record.id, status, error)
-    this.handlers?.onStatus(record.id, status, error)
+    this.handlers?.onStatus(record.id, status, error, record.phase)
   }
 }
 

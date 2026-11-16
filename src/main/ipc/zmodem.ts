@@ -1,9 +1,10 @@
-import { app, BrowserWindow, dialog } from 'electron'
+import { BrowserWindow, dialog } from 'electron'
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { basename, extname, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { IPC } from '@shared/ipc'
 import { dialogParent } from '../windowRef'
+import { dialogDefaultPath, rememberDialogDir, rememberDialogPick } from '../util/dialogDirs'
 import { handle } from './handle'
 import { sessionManager } from '../ssh/sessionManager'
 
@@ -20,9 +21,11 @@ export function registerZmodemIpc(): void {
     const res = await dialog.showOpenDialog(dialogParent() as BrowserWindow, {
       title: '选择要通过 ZMODEM 发送的文件',
       buttonLabel: '发送',
+      defaultPath: dialogDefaultPath('file'),
       properties: ['openFile', 'multiSelections']
     })
     if (res.canceled || res.filePaths.length === 0) return { canceled: true, files: [] }
+    rememberDialogPick('file', res.filePaths[0], false)
     const files = res.filePaths.map((p) => {
       const buf = readFileSync(p)
       return { name: basename(p), size: buf.length, data: buf.toString('base64') }
@@ -64,10 +67,11 @@ export function registerZmodemIpc(): void {
     const res = await dialog.showOpenDialog(dialogParent() as BrowserWindow, {
       title: '选择接收文件的保存文件夹',
       buttonLabel: '保存到此处',
-      defaultPath: app.getPath('downloads'),
+      defaultPath: dialogDefaultPath('folder'),
       properties: ['openDirectory', 'createDirectory']
     })
     if (res.canceled || !res.filePaths.length) return { canceled: true }
+    rememberDialogDir('folder', res.filePaths[0])
     pruneZm()
     const token = randomUUID()
     zmDirTokens.set(token, { dir: res.filePaths[0], at: Date.now() })

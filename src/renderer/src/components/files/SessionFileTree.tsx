@@ -1,3 +1,4 @@
+import type * as React from 'react'
 import { useEffect, useRef, useState } from 'react'
 import { loadDir, peekDir } from '@/lib/dirCache'
 import {
@@ -81,7 +82,7 @@ export function SessionFileTree({
   title: string
   onClose: () => void
   onOpenTransfer: () => void
-}): JSX.Element {
+}): React.JSX.Element {
   const version = useSftpStore((s) => s.treeVersion)
   const bumpTree = useSftpStore((s) => s.bumpTree)
   const openEditor = useSftpStore((s) => s.openEditor)
@@ -331,7 +332,7 @@ function TreeLevel({
   onRefresh: () => void
   /** 打开上传目标目录确认框（dir 为该行的落点） */
   onUploadTo: (dir: string) => void
-}): JSX.Element {
+}): React.JSX.Element {
   const [files, setFiles] = useState<RemoteFile[] | null>(null)
   /** 大目录默认只渲染前 300 项，用户点「展开全部」后才铺满 */
   const [showAll, setShowAll] = useState(false)
@@ -522,7 +523,7 @@ function TreeRow({
   onEnterDir: (dir: string) => void
   onRefresh: () => void
   onUploadTo: (dir: string) => void
-}): JSX.Element {
+}): React.JSX.Element {
   const { menu, openMenu, closeMenu } = useContextMenu<string>()
   // 上传执行链路统一在 store 里，这一层只负责「点了 → 刷新这级目录」
   const downloadTo = useSftpStore((s) => s.downloadTo)

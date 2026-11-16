@@ -3,6 +3,8 @@ import type { BatchProgressEvent, BatchSessionResult, BatchStatus } from '@share
 import { call } from '@/lib/ipc'
 import { uid } from '@/lib/utils'
 import { useToastStore } from './toastStore'
+import { notifyTask } from '@/lib/taskNotify'
+import { useSessionStore } from './sessionStore'
 
 /**
  * 多设备批量执行面板状态。
@@ -75,6 +77,9 @@ export const useBatchStore = create<BatchState>()((set, get) => ({
     }
 
     const runId = uid()
+    // 快照必须在 await 之前拿：await 之后 get().selectedSessionIds 可能已被
+    // 用户改掉，那份"这次跑了哪些"的信息就丢了
+    const runOrderSnapshot = [...selectedSessionIds]
     const statuses: Record<string, BatchStatus> = {}
     for (const id of selectedSessionIds) statuses[id] = 'running'
 
@@ -93,9 +98,23 @@ export const useBatchStore = create<BatchState>()((set, get) => ({
     set({ running: false, runId: null })
     if (results) {
       const ok = results.filter((r) => r.status === 'done').length
-      useToastStore.getState().push({
-        kind: ok === results.length ? 'success' : 'info',
-        title: `批量执行完成：${ok}/${results.length} 台正常返回`
+      /*
+       * 走 notifyTask 而不是直接 push toast：
+       * 批量执行是最典型的长任务（20 台设备各跑一条命令，动辄一两分钟），
+       * 用户发起后基本都会切走。窗口失焦时由 notifyTask 升级成系统通知，
+       * 聚焦时仍是原来那条 toast，文案保持一致。
+       *
+       * 归属连接取「第一次选中的那台」—— 通知点击后落到哪个标签都合理，
+       * 取第一台是因为 runOrder 的第一项就是用户勾选顺序里的第一个。
+       */
+      const firstId = runOrderSnapshot[0]
+      const firstSess = useSessionStore.getState().sessions.find((s) => s.id === firstId)
+      void notifyTask({
+        kind: 'batch',
+        title: `批量执行完成：${ok}/${results.length} 台正常返回`,
+        detail: ok === results.length ? undefined : `${results.length - ok} 台异常，详见批量面板`,
+        connectionId: firstSess?.connectionId,
+        sessionId: firstId
       })
     }
   },

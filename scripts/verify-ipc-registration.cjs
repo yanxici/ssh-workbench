@@ -121,15 +121,30 @@ async function main() {
   })
 
   await app.whenReady()
+  /*
+   * Electron 自己也会往 ipcMain 上注册内部通道。
+   *
+   * Electron 43 起出现了一个 IMPORT_SHARED_TEXTURE_RELEASE_RENDERER_TO_MAIN
+   * （共享纹理释放的渲染层 -> 主进程通道）。它在我们 registerAllIpc() 之前就
+   * 已经存在，跟 shared/ipc.ts 没有任何关系。
+   *
+   * 不做基线扣除的话，「没有多余注册」这条会稳定报红，而红的原因是框架
+   * 换版本，不是我们漏改常量 —— 一条会因为无关原因变红的断言，久了就没人看。
+   * 所以先快照「注册前已有的通道」，再从结果里减掉。
+   *
+   * 判据没有被削弱：我们自己多注册的通道仍然不在 baseline 里，照样会被抓出来。
+   */
+  const baseline = new Set(ipcMain._invokeHandlers.keys())
   const { registerAllIpc } = require(bundle)
   registerAllIpc()
   const registered = [...ipcMain._invokeHandlers.keys()]
   const expected = invokeChannels.map((c) => c.value)
+  const ours = registered.filter((c) => !baseline.has(c))
   const notRegistered = expected.filter((c) => !registered.includes(c))
-  const extra = registered.filter((c) => !expected.includes(c))
+  const extra = ours.filter((c) => !expected.includes(c))
 
   check(
-    `注册数量覆盖全部通道（${registered.length}/${expected.length}）`,
+    `注册数量覆盖全部通道（${ours.length}/${expected.length}）`,
     notRegistered.length === 0,
     notRegistered.slice(0, 8)
   )
@@ -157,7 +172,7 @@ async function main() {
     app.exit(1)
     return
   }
-  console.log(`IPC 完整性自检全部通过（${registered.length} 个通道）\n`)
+  console.log(`IPC 完整性自检全部通过（${ours.length} 个自注册通道）\n`)
   app.exit(0)
 }
 

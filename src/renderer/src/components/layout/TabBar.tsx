@@ -1,3 +1,4 @@
+import type * as React from 'react'
 import {
   useCallback,
   useEffect,
@@ -6,13 +7,35 @@ import {
   useState,
   type MouseEvent as ReactMouseEvent
 } from 'react'
-import { X, Plus, Pencil, XCircle, CircleSlash2, Loader2, RefreshCw, SquarePlus } from 'lucide-react'
+import {
+  BellOff,
+  BellRing,
+  Columns2,
+  Rows2,
+  X,
+  Plus,
+  Pencil,
+  XCircle,
+  CircleSlash2,
+  Loader2,
+  RefreshCw,
+  SquarePlus
+} from 'lucide-react'
 import type { ConnStatus } from '@shared/types'
 import { useSessionStore } from '@/stores/sessionStore'
 import { useUiStore } from '@/stores/uiStore'
 import { cn } from '@/lib/utils'
 import { ContextMenu, useContextMenu, type MenuEntry } from '@/components/ui'
 import { isImeComposing } from '@/lib/ime'
+import { useSettingsStore } from '@/stores/settingsStore'
+import { takeFlashTarget, toggleMuteConnection, watchFlash, clearFlashTarget } from '@/lib/taskNotify'
+import { isMuted, normalizeNotifyPrefs } from '@/lib/notifyPlan'
+import { useSplitStore } from '@/stores/splitStore'
+import { isNestedPane } from '@/lib/paneRegistry'
+import { MAX_PANES, countLeaves, leafIds } from '@/lib/paneTree'
+
+/** 「刚跑完」的标签高亮持续时间。0.6s 的动画 + 一次停顿，太短会看不见 */
+const FLASH_MS = 1200
 
 const STATUS_DOT: Record<ConnStatus, string> = {
   connecting: 'bg-warning animate-pulse-soft',
@@ -46,12 +69,10 @@ const MIN_THUMB = 24
  * 3) 只有 wheel 事件按 deltaY 映射成横向位移，鼠标滚轮才能在标签条上滚动（触控板
  *    原生就支持横向，两种都给）。
  */
-export function TabBar(): JSX.Element {
+export function TabBar(): React.JSX.Element {
   const sessions = useSessionStore((s) => s.sessions)
   const activeId = useSessionStore((s) => s.activeId)
   const setActive = useSessionStore((s) => s.setActive)
-  const close = useSessionStore((s) => s.close)
-  const closeOthers = useSessionStore((s) => s.closeOthers)
   const setTitle = useSessionStore((s) => s.setTitle)
   const reorder = useSessionStore((s) => s.reorder)
   const reconnect = useSessionStore((s) => s.reconnect)
@@ -61,6 +82,25 @@ export function TabBar(): JSX.Element {
    * 旧实现每个标签各 find 一次，标签一多就是 O(n²)；
    * 且每次会话状态变化都要重扫。改成一次建索引 + 复用。
    */
+  /*
+   * 标签硬上限（阶段 3，Q11=a）。
+   *
+   * 会话标签此前无上限：开 40 个 SSH 会话就挂 40 个标签节点，每个都带闭包、
+   * 拖拽监听与状态订阅，且标签条本身横向滚动 —— 这是「打开很多会话后 UI 变钝」
+   * 的来源之一。20 是「同时比对多台现场设备」的常见上限。
+   *
+   * 超出的会话不会被「丢掉」：它们仍在侧栏连接列表里，只是不占标签位；
+   * 下方会提示还有几个未显示，避免「标签凭空消失」的困惑。
+   */
+  const MAX_TABS = 20
+  /*
+   * 标签 = 顶层的那些会话。分屏格不单独成为标签 —— 它们本来就在同一屏里，
+   * 各占一个标签位会让标签条多出「同一连接开了三个」的错觉。
+   * 过滤放在 slice 之前，否则 20 个上限会被隐藏的格子白白吃掉名额。
+   */
+  const tabs = sessions.filter((x) => !isNestedPane(x.id))
+  const hiddenTabs = Math.max(0, tabs.length - MAX_TABS)
+
   const sessionById = useMemo(() => new Map(sessions.map((x) => [x.id, x])), [sessions])
   const reconnectById = useSessionStore((s) => s.reconnectById)
   const activeSession = activeId ? sessionById.get(activeId) : undefined
@@ -117,6 +157,36 @@ export function TabBar(): JSX.Element {
     return () => el.removeEventListener('wheel', onWheel)
   }, [])
 
+  /*
+   * 任务完成后在对应标签上闪一下。
+   *
+   * 为什么不是「高亮直到用户看一眼」：那会变成一个需要手动消除的状态，
+   * 而用户点通知回来时已经盯着那个标签了 —— 只需要一次提示性闪烁，
+   * 而且它必须自己消失，否则这个标记会永远挂在那里失去意义。
+   */
+  const [flashId, setFlashId] = useState<string | null>(null)
+  useEffect(() => {
+    let timer: number | null = null
+    const sync = (): void => {
+      const t = takeFlashTarget()
+      if (!t) return
+      clearFlashTarget()
+      setFlashId(t.sessionId)
+      if (timer !== null) window.clearTimeout(timer)
+      timer = window.setTimeout(() => {
+        setFlashId(null)
+        timer = null
+      }, FLASH_MS)
+    }
+    const off = watchFlash(sync)
+    // 挂载时先把遗留请求吃掉：通知点击可能发生在组件挂载之前
+    sync()
+    return () => {
+      off()
+      if (timer !== null) window.clearTimeout(timer)
+    }
+  }, [])
+
   const maxScroll = Math.max(0, scroll.view - scroll.width)
   const overflow = maxScroll > 1
   const trackW = scroll.width
@@ -167,9 +237,34 @@ export function TabBar(): JSX.Element {
     setEditingId(null)
   }
 
+  /*
+   * 静音按**连接**记，不按会话记。
+   *
+   * 用户在"这台设备又在刷日志"的时刻点静音，意图是"这台机器别烦我"，
+   * 而会话 id 每次启动都会变（重连也会换），按会话记等于下次启动就失效。
+   * 代价是同一连接开多个标签会一起静音 —— 这恰好也是用户期望的。
+   */
+  const notifyPrefs = normalizeNotifyPrefs(useSettingsStore((s) => s.settings.taskNotify))
+  const muted = (connectionId?: string): boolean => isMuted(notifyPrefs.mutedConnectionIds, connectionId)
+
+  const trees = useSplitStore((s) => s.trees)
+  const splitPane = useSplitStore((s) => s.splitPane)
+  const closePane = useSplitStore((s) => s.closePane)
+  const closeOtherTabsOf = useSplitStore((s) => s.closeOtherTabs)
+  /** 该标签的分屏格数；1 = 没分屏 */
+  const paneCount = (id: string): number => (trees[id] ? countLeaves(trees[id]) : 1)
+  /** 右键的目标可能是一个嵌套格（从终端右键进来的场景）；分屏一律按标签主人算 */
+  const ownerOf = (id: string): string => {
+    for (const [ownerId, node] of Object.entries(trees)) {
+      if (leafIds(node).includes(id)) return ownerId
+    }
+    return id
+  }
+
   const menuItems = (id: string): MenuEntry[] => {
     const s = sessionById.get(id)
     const canReconnect = s && (s.status === 'disconnected' || s.status === 'error')
+    const connId = s?.connectionId
     return [
       ...(canReconnect
         ? [{ label: '重新连接', icon: <RefreshCw size={12} />, onClick: () => reconnect(id) }]
@@ -187,12 +282,54 @@ export function TabBar(): JSX.Element {
           if (s) startRename(id, s.title)
         }
       },
-      { label: '关闭', icon: <XCircle size={12} />, onClick: () => close(id) },
+      /*
+       * 文案随状态切换，不用勾选态：MenuEntry 没有 checked 字段，而
+       * 「本连接不弹通知」/「恢复本连接通知」两句本身就说明了当前状态，
+       * 比一个需要眼睛去对齐的小方框更快读懂。
+       */
+      {
+        label: muted(connId) ? '恢复本连接通知' : '本连接不弹通知',
+        icon: muted(connId) ? <BellRing size={12} /> : <BellOff size={12} />,
+        disabled: !connId || !notifyPrefs.enabled,
+        onClick: () => {
+          if (!connId) return
+          toggleMuteConnection(connId, !muted(connId))
+        }
+      },
+      /*
+       * 分屏入口放在标签右键里，不做「把标签拖到边缘」。
+       * 拖拽已经有「调整标签顺序」这一层含义，再加落点分屏要在
+       * 拖拽悬停时判断落在左/右/上/下哪个 1/4 区，误触率很高；
+       * 右键两步点到，行为可预期。
+       */
+      {
+        label: '向右分屏',
+        icon: <Columns2 size={12} />,
+        disabled: s?.status !== 'connected' || paneCount(ownerOf(id)) >= MAX_PANES,
+        onClick: () => splitPane(id, 'row')
+      },
+      {
+        label: '向下分屏',
+        icon: <Rows2 size={12} />,
+        disabled: s?.status !== 'connected' || paneCount(ownerOf(id)) >= MAX_PANES,
+        onClick: () => splitPane(id, 'col')
+      },
+      /*
+       * 「关闭」按分屏状态分两种语义：
+       *   有分屏时 = 只关这一格（标签留着，剩下几格还能用）；
+       *   没分屏时 = 关标签。
+       * 不用两个菜单项 —— 用户看到的那块只有一个「x」，语义跟着它走最自然。
+       */
+      {
+        label: paneCount(ownerOf(id)) > 1 ? '关闭此分屏' : '关闭',
+        icon: <XCircle size={12} />,
+        onClick: () => closePane(id)
+      },
       {
         label: '关闭其他标签',
         icon: <CircleSlash2 size={12} />,
-        disabled: sessions.length <= 1,
-        onClick: () => closeOthers(id)
+        disabled: paneCount(ownerOf(id)) < 1 || tabs.length <= 1,
+        onClick: () => closeOtherTabsOf(ownerOf(id))
       }
     ]
   }
@@ -217,7 +354,7 @@ export function TabBar(): JSX.Element {
         data-tab-strip=""
         className="tabs-scroll no-drag flex h-full min-w-0 shrink items-stretch gap-px"
       >
-        {sessions.map((s, i) => {
+        {tabs.slice(0, MAX_TABS).map((s, i) => {
           // 该标签的自动重连进度（有就说明正在自动恢复）
           const rc = reconnectById[s.id]
           const isActive = s.id === activeId
@@ -252,7 +389,9 @@ export function TabBar(): JSX.Element {
                 isActive
                   ? 'bg-app text-ink'
                   : 'bg-on-brand/15 text-on-brand/85 hover:bg-on-brand/25 hover:text-on-brand',
-                dropTarget === i && dragIndex !== null && dragIndex !== i && 'bg-on-brand/35'
+                dropTarget === i && dragIndex !== null && dragIndex !== i && 'bg-on-brand/35',
+                // 闪一下：绿色底光 0.6s 内淡出，非激活标签也看得见
+                flashId === s.id && 'animate-flash-ok'
               )}
               onMouseDown={(e) => {
                 if (e.button === 0) setActive(s.id)
@@ -320,15 +459,28 @@ export function TabBar(): JSX.Element {
                     ? 'text-ink-3 hover:bg-hover hover:text-ink'
                     : 'text-on-brand/70 hover:bg-on-brand/20 hover:text-on-brand'
                 )}
-                title="关闭标签"
+                title={paneCount(s.id) > 1 ? '关闭此分屏' : '关闭标签'}
                 onClick={(e) => {
                   e.stopPropagation()
-                  close(s.id)
+                  /*
+                   * 走 closePane 而不是 sessionStore.close：
+                   * 有分屏时它只摘掉这一格把树收缩，标签整体还在；
+                   * 没分屏时它内部就是 close(id)，语义完全一致。
+                   */
+                  closePane(s.id)
                 }}
               >
                 <X size={12} />
               </button>
-            </div>
+              {hiddenTabs > 0 && (
+          <div
+            className="flex shrink-0 items-center px-2 text-2xs text-ink-3"
+            title={`另有 ${hiddenTabs} 个会话未显示标签（超过上限 ${MAX_TABS}），可在左侧连接列表切换`}
+          >
+            +{hiddenTabs}
+          </div>
+        )}
+      </div>
           )
         })}
       </div>

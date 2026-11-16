@@ -1,16 +1,18 @@
 import { app, BrowserWindow, Menu, shell } from 'electron'
-import { appendFileSync } from 'node:fs'
+import { appendFileSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { electronApp, is, optimizer } from '@electron-toolkit/utils'
 import { IPC } from '@shared/ipc'
 import { registerAllIpc } from './ipc'
 import { getSettings, seedCommandsIfNeeded } from './store/repository'
+import { updateSettings } from './app/settingsService'
 import { batchRunner } from './ssh/batchExec'
 import { diagnosticsRunner } from './ssh/diagnostics'
 import { firmwareOps } from './ssh/firmware'
 import { metricsSampler } from './ssh/metrics'
 import { netScanner } from './ssh/netScan'
 import { initUpdater } from './updater'
+import { tftpServer } from './tftp/server'
 import { sessionManager } from './ssh/sessionManager'
 import { SerialWatcher } from './transport/serialWatcher'
 import { setSerialWatcher, getSerialWatcher } from './transport/serialWatcherHolder'
@@ -59,7 +61,33 @@ bootLog('boot: module loaded')
 
 // 终端工具用 canvas 渲染，无需 GPU 加速；禁用可避免远程桌面/虚拟机/老机器上的
 // GPU 进程崩溃（GPU 崩溃会导致整个应用退出），对技术支持场景的稳定性至关重要。
-app.disableHardwareAcceleration()
+/*
+ * 是否强制软件渲染。
+ *
+ * 关键约束：`disableHardwareAcceleration()` 必须在 whenReady 之前**同步**调用，
+ * 而 getGPUInfo 是异步的 —— 所以这里只能同步读一次 settings.json。
+ * 读文件失败（首次启动/文件损坏）一律当 false，保持硬件加速。
+ *
+ * 为什么不改成异步：Electron 在 app ready 之后再调用该 API 会抛错且不生效。
+ */
+function readSoftwareRenderSync(): boolean {
+  try {
+    const p = join(app.getPath('userData'), 'data', 'settings.json')
+    const raw = readFileSync(p, 'utf-8')
+    const parsed = JSON.parse(raw) as { experimental?: { softwareRender?: boolean } }
+    return parsed?.experimental?.softwareRender === true
+  } catch {
+    return false
+  }
+}
+
+const softwareRender = readSoftwareRenderSync()
+if (softwareRender) {
+  app.disableHardwareAcceleration()
+  bootLog('software render forced by settings.experimental.softwareRender')
+} else {
+  // 默认**不**关加速：终端走 WebGL 需要 GPU。崩溃时由下面的自愈逻辑降级。
+}
 
 /* ------------------------------------------------------------------ *
  *  窗口
@@ -175,6 +203,27 @@ if (!gotLock) {
 
     app.on('child-process-gone', (_event, details) => {
       console.error('[main] child process gone:', details)
+      /*
+       * 自愈式降级：GPU 进程连续崩说明这台机器的显卡/驱动不可靠（远程桌面、老显卡、
+       * 虚拟机的半虚拟化驱动都常见）。这时继续用硬件加速只会反复崩。
+       *
+       * 做法：把 settings.experimental.softwareRender 置 true 并落盘 —— 下次启动
+       * 在 whenReady 之前就关掉硬件加速，终端自动回落到 DOM 渲染。
+       *
+       * 为什么只认 type === 'GPU'：渲染进程崩溃（OOM、页面异常）与显卡无关，
+       * 不该由它触发全局降级。
+       */
+      if (details.type !== 'GPU') return
+      void (async () => {
+        try {
+          const cur = await getSettings()
+          if (cur.experimental?.softwareRender === true) return
+          await updateSettings({ experimental: { ...cur.experimental, softwareRender: true } })
+          console.error('[main] GPU crashed; software rendering will be used on next launch')
+        } catch (e) {
+          console.error('[main] failed to persist software render flag:', e)
+        }
+      })()
     })
 
     // 无边框自绘标题栏：去掉默认菜单（菜单的加速键也一并不存在，属预期）
@@ -191,10 +240,18 @@ if (!gotLock) {
           data,
           raw: raw?.length ? raw.toString('base64') : undefined
         }),
-      onStatus: (sessionId, status, error) =>
-        getMainWindow()?.webContents.send(IPC.EVT_SESSION_STATUS, { sessionId, status, error }),
+      onStatus: (sessionId, status, error, phase) =>
+        getMainWindow()?.webContents.send(IPC.EVT_SESSION_STATUS, { sessionId, status, error, phase }),
       onLatency: (sessionId, ms) =>
-        getMainWindow()?.webContents.send(IPC.EVT_SESSION_LATENCY, { sessionId, ms })
+        getMainWindow()?.webContents.send(IPC.EVT_SESSION_LATENCY, { sessionId, ms }),
+      /*
+       * trzsz 传输状态。
+       *
+       * 只发状态条需要的那几个字段，不发进度条文本 —— 进度条本身是普通终端输出，
+       * 已经在 onData 里下发了。两条路分开的好处是重绘频率互不影响。
+       */
+      onTrzszState: (sessionId, state) =>
+        getMainWindow()?.webContents.send(IPC.EVT_TRZSZ_STATE, { sessionId, ...state })
     })
 
     /*
@@ -234,6 +291,12 @@ if (!gotLock) {
 
     firmwareOps.setLogHandler((event) => {
       getMainWindow()?.webContents.send(IPC.EVT_FW_LOG, event)
+    })
+
+    // 内置 TFTP 服务端：刷 7628 时 U-Boot 的 RRQ / 重传 / 完成都从这里出去，
+    // 串口引导条靠它显示现场排错信息
+    tftpServer.setLogHandler((event) => {
+      getMainWindow()?.webContents.send(IPC.EVT_TFTP_LOG, event)
     })
 
     netScanner.setProgressHandler((event) => {
@@ -313,6 +376,8 @@ if (!gotLock) {
     // 停掉串口轮询：它的 timer 已 unref，但显式停一次能让退出路径更干净，
     // 也避免退出过程中还去枚举设备（Windows 上会短暂占用句柄）
     getSerialWatcher()?.stop()
+    // TFTP 持有 69 端口和文件句柄，退出必须关；否则下次启动会报端口被占用
+    tftpServer.stop()
     if (process.platform !== 'darwin') app.quit()
   })
 }

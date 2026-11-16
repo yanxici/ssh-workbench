@@ -1,3 +1,4 @@
+import type * as React from 'react'
 import { useEffect, useState } from 'react'
 import { Eraser, History, Play, Search, Star } from 'lucide-react'
 import type { CommandHistoryEntry } from '@shared/types'
@@ -13,7 +14,7 @@ import { ConfirmDialog, EmptyState } from '@/components/ui'
  * 命令历史（侧栏「历史」页）：
  * 全局搜索所有会话的历史命令，可一键重新执行或收藏为常用命令。
  */
-export function HistoryPanel(): JSX.Element {
+export function HistoryPanel(): React.JSX.Element {
   const connections = useConnectionStore((s) => s.connections)
   const [entries, setEntries] = useState<CommandHistoryEntry[]>([])
   const [keyword, setKeyword] = useState('')

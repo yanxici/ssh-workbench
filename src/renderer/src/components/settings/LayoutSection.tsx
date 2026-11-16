@@ -1,3 +1,4 @@
+import type * as React from 'react'
 import { RotateCcw } from 'lucide-react'
 import type { LayoutSizes } from '@shared/types'
 import { KEYS, PANE_LABEL, PANE_SPECS, clampPane } from '@/lib/layout'
@@ -5,7 +6,7 @@ import { useSettingsStore } from '@/stores/settingsStore'
 import { useToastStore } from '@/stores/toastStore'
 
 /** 设置 → 侧栏宽度（与拖动分隔条共用同一套 clamp 规则） */
-export function LayoutSection(): JSX.Element {
+export function LayoutSection(): React.JSX.Element {
   const settings = useSettingsStore((s) => s.settings)
   const update = useSettingsStore((s) => s.update)
 

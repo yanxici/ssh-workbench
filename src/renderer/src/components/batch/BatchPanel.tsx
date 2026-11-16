@@ -1,3 +1,4 @@
+import type * as React from 'react'
 import { useMemo, useState } from 'react'
 import {
   Boxes,
@@ -27,14 +28,14 @@ import { useToastStore } from '@/stores/toastStore'
  * 勾选多个在线会话 → 广播同一条命令 → 并行执行、分别收集输出。
  * 卡片视图看单台详情；对比视图把各设备输出并排排列，方便找差异。
  */
-export function BatchPanel(): JSX.Element | null {
+export function BatchPanel(): React.JSX.Element | null {
   const panelOpen = useBatchStore((s) => s.panelOpen)
   if (!panelOpen) return null
 
   const close = (): void => useBatchStore.setState({ panelOpen: false })
 
   return (
-    <div className="fixed inset-x-0 bottom-[26px] top-[38px] z-30 flex flex-col bg-app">
+    <div className="panel-shell fixed inset-x-0 z-30 flex flex-col bg-app">
       {/* 标题栏 */}
       <div className="flex h-9 shrink-0 items-center gap-2 border-b border-edge bg-panel px-3">
         <Boxes size={14} className="text-accent" />
@@ -58,7 +59,7 @@ export function BatchPanel(): JSX.Element | null {
  *  左：设备会话选择
  * ------------------------------------------------------------------ */
 
-function SessionPicker(): JSX.Element {
+function SessionPicker(): React.JSX.Element {
   const sessions = useSshSessions()
   const selected = useBatchStore((s) => s.selectedSessionIds)
 
@@ -66,7 +67,7 @@ function SessionPicker(): JSX.Element {
   const selSet = new Set(selected)
 
   return (
-    <div className="flex w-[248px] shrink-0 flex-col border-r border-edge bg-panel">
+    <div className="flex rail-w shrink-0 flex-col border-r border-edge bg-panel">
       <div className="flex shrink-0 items-center gap-1.5 border-b border-edge-soft px-2.5 py-1.5">
         <span className="text-2xs font-semibold text-ink-2">目标设备</span>
         <span className="text-2xs text-ink-3">
@@ -140,7 +141,7 @@ function SessionPicker(): JSX.Element {
  *  右：命令输入 + 结果
  * ------------------------------------------------------------------ */
 
-function CommandAndResults(): JSX.Element {
+function CommandAndResults(): React.JSX.Element {
   const command = useBatchStore((s) => s.command)
   const timeoutMs = useBatchStore((s) => s.timeoutMs)
   const running = useBatchStore((s) => s.running)
@@ -294,7 +295,7 @@ function CommandAndResults(): JSX.Element {
  *  结果视图组件
  * ------------------------------------------------------------------ */
 
-function BatchStatusIcon({ status }: { status: BatchStatus | undefined }): JSX.Element {
+function BatchStatusIcon({ status }: { status: BatchStatus | undefined }): React.JSX.Element {
   switch (status) {
     case 'running':
       return <Loader2 size={13} className="shrink-0 animate-spin text-accent" />
@@ -328,7 +329,7 @@ function statusText(status: BatchStatus | undefined): string {
   }
 }
 
-function BatchResultCard({ sessionId }: { sessionId: string }): JSX.Element {
+function BatchResultCard({ sessionId }: { sessionId: string }): React.JSX.Element {
   const result = useBatchStore((s) => s.results[sessionId])
   const status = useBatchStore((s) => s.statuses[sessionId])
   const session = useSessionStore((s) => s.sessions.find((x) => x.id === sessionId))
@@ -404,7 +405,7 @@ function BatchResultCard({ sessionId }: { sessionId: string }): JSX.Element {
   )
 }
 
-function BatchColumn({ sessionId }: { sessionId: string }): JSX.Element {
+function BatchColumn({ sessionId }: { sessionId: string }): React.JSX.Element {
   const result = useBatchStore((s) => s.results[sessionId])
   const status = useBatchStore((s) => s.statuses[sessionId])
   const session = useSessionStore((s) => s.sessions.find((x) => x.id === sessionId))

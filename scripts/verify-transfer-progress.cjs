@@ -41,6 +41,8 @@ fs.writeFileSync(
   stub,
   `exports.sessionManager = {
     waitUntilReady: async () => {},
+    statusOf: () => 'connected',
+    isReconnecting: () => false,
     getClient: () => ({ sftp: (cb) => cb(null, globalThis.__FAKE_SFTP__) })
   }`
 )
@@ -335,7 +337,12 @@ async function caseError() {
   console.log('\nerror: 读取失败时带原因并清理半截文件')
   const size = 2 * 1024 * 1024
   const files = new Map([['/remote/err.bin', payload(size)]])
-  const { wrapper } = makeSftp({ files, delayMs: 2, readError: 'connection lost' })
+  /*
+   * 这里必须用「不可自愈」的错误。链路级故障（connection lost / ECONNRESET）
+   * 现在会走断线重连续传，重试预算内根本不会落 error —— 用那种错误测这条，
+   * 测的是重试而不是失败上报。权限类错误才是真正的终态失败。
+   */
+  const { wrapper } = makeSftp({ files, delayMs: 2, readError: 'permission denied' })
   globalThis.__FAKE_SFTP__ = wrapper
   const mgr = new SftpManager()
   const events = collect(mgr)
@@ -345,7 +352,7 @@ async function caseError() {
 
   const error = events.find((e) => e.status === 'error')
   check('发出 error 事件', !!error, events.map((e) => e.status))
-  check('error 带原因', !!error && error.error === 'connection lost', error && error.error)
+  check('error 带原因', !!error && error.error === 'permission denied', error && error.error)
   check('没有 done 事件', !events.some((e) => e.status === 'done'))
   check('半截文件已清理', !fs.existsSync(path.join(dir, 'err.bin')))
 }

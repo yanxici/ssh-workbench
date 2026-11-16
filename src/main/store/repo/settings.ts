@@ -79,6 +79,14 @@ export const DEFAULT_SETTINGS: AppSettings = {
     scrollback: 5000
   },
   uiShellVersion: UI_SHELL_VERSION,
+  /*
+   * 实验性开关默认全部关闭：新 token 必须先让用户/我在设置里显式打开，
+   * 才不会出现「升级后视觉突然变了但不知道是哪一步」的情况。
+   *
+   * 缺省值写在这里而不是渲染层 FALLBACK：主进程是 settings.json 的唯一写入方，
+   * 两边各写一份必然漂移（阶段 0 审计里就有 FALLBACK 与 DEFAULT_SETTINGS 不一致的先例）。
+   */
+  experimental: { tokens: {}, terminalRenderer: 'dom' },
   commandPanelPosition: 'right',
   latencyProbe: true,
   autoLog: true,
@@ -113,7 +121,30 @@ export const DEFAULT_SETTINGS: AppSettings = {
     autoCheck: true,
     autoDownload: false,
     proxyUrl: ''
-  }
+  },
+  /*
+   * 任务完成通知。
+   *
+   * enabled/system 默认开：跑完一条三分钟的固件升级、或者 20 台设备的批量
+   * 巡检，用户早就切去干别的了，回来才发现跑完了 —— 这类"结果需要知道但
+   * 不需要盯"的任务，通知是唯一有用的形态。
+   *
+   * heuristic 默认关：见 TaskNotifyPrefs 里的注释，猜错的代价比漏报高。
+   * sound 默认关：现场办公室一排人都在用，默认响会被要求关掉。
+   */
+  taskNotify: {
+    enabled: true,
+    system: true,
+    sound: false,
+    heuristic: false,
+    mutedConnectionIds: []
+  },
+  /*
+   * 分屏布局默认空表。
+   * 不预置任何树 —— 没有树的连接就是单格标签，
+   * 这比「每个连接都预置一棵单叶树」少一整类「树里只有一个叶子」的边界情况。
+   */
+  splitLayout: {}
 }
 
 function mergeSettings(base: AppSettings, patch: Partial<AppSettings>): AppSettings {
@@ -121,6 +152,20 @@ function mergeSettings(base: AppSettings, patch: Partial<AppSettings>): AppSetti
     ...base,
     ...patch,
     terminal: { ...base.terminal, ...(patch.terminal ?? {}) },
+    /*
+     * experimental 必须逐键合并。
+     * 老配置里存的是 `{ tokens: {} }`（没有 terminalRenderer），整段覆盖会把
+     * 默认后端抹掉，之后每次读设置都要靠调用点自己 `?? 'dom'` 兜底 —— 一处漏写
+     * 就回到 WebGL 字形变小的老问题上。合并后缺省值始终在。
+     */
+    experimental: { ...base.experimental, ...(patch.experimental ?? {}) },
+    /*
+     * taskNotify 同样逐键合并。mutedConnectionIds 是数组，合并时整体覆盖 ——
+     * 但正因为是数组，patch 里只要出现这个键就必须是**完整**的静音列表
+     * （渲染层每次都是把新数组整个传上来），否则会被默认的空数组清掉。
+     */
+    taskNotify: { ...base.taskNotify, ...(patch.taskNotify ?? {}) } as AppSettings['taskNotify'],
+    splitLayout: patch.splitLayout ?? base.splitLayout,
     dangerPatterns: patch.dangerPatterns ?? base.dangerPatterns
   }
 }

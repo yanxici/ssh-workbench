@@ -1,3 +1,4 @@
+import type * as React from 'react'
 import { useEffect, useState } from 'react'
 import { FolderOpen, Loader2, Package, Sparkles } from 'lucide-react'
 import type { BundlePreview } from '@shared/types'
@@ -16,7 +17,7 @@ export function BundleDialog({
 }: {
   reportId: string
   onClose: () => void
-}): JSX.Element {
+}): React.JSX.Element {
   const [preview, setPreview] = useState<BundlePreview | null>(null)
   const [includeLogs, setIncludeLogs] = useState(true)
   const [includeHistory, setIncludeHistory] = useState(true)
@@ -168,7 +169,7 @@ function BundleRow({
   checked: boolean
   disabled?: boolean
   onChange: (v: boolean) => void
-}): JSX.Element {
+}): React.JSX.Element {
   return (
     <div
       className={cn(

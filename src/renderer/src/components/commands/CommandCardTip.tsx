@@ -1,3 +1,4 @@
+import type * as React from 'react'
 import { useEffect, useRef, useState } from 'react'
 import type { ConnKind } from '@shared/types'
 import { envLabel, normalizeEnvs } from '@shared/commandEnv'
@@ -27,7 +28,7 @@ export function CommandCardTip({
   useCount: number
   /** 适用环境；缺省 = 两者都适用，此时不显示这一行，避免满屏都是「全部环境」 */
   envs?: ConnKind[]
-}): JSX.Element | null {
+}): React.JSX.Element | null {
   const ref = useRef<HTMLDivElement>(null)
   const [pos, setPos] = useState<{ x: number; y: number } | null>(null)
 

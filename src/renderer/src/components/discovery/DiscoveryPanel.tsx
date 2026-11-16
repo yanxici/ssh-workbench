@@ -1,3 +1,4 @@
+import type * as React from 'react'
 import { Copy, Plug, Radar, RefreshCw, Search, Wifi, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { guessVendor } from '@shared/arpVendor'
@@ -10,7 +11,13 @@ import { useToastStore } from '@/stores/toastStore'
  * - 网段扫描：从本机对目标网段做 TCP 探针（无需管理员权限），补 ARP 厂商与反向 DNS；
  * - mDNS：查询网络中的 DNS-SD 服务（_ssh / _http 等），适合快速找到开了广播的设备。
  */
-export function DiscoveryPanel(): JSX.Element | null {
+/*
+ * 发现结果硬上限（阶段 3）。/24 网段扫描就有 254 个存活候选，/16 更多；
+ * 原实现无上限全量渲染。500 覆盖现场常见网段，超出时下方给出提示。
+ */
+const MAX_HOSTS = 500
+
+export function DiscoveryPanel(): React.JSX.Element | null {
   const panelOpen = useDiscoveryStore((s) => s.panelOpen)
   const tab = useDiscoveryStore((s) => s.tab)
 
@@ -19,7 +26,7 @@ export function DiscoveryPanel(): JSX.Element | null {
   const close = (): void => useDiscoveryStore.setState({ panelOpen: false })
 
   return (
-    <div className="fixed inset-x-0 bottom-[26px] top-[38px] z-30 flex flex-col bg-app">
+    <div className="panel-shell fixed inset-x-0 z-30 flex flex-col bg-app">
       <div className="flex h-9 shrink-0 items-center gap-2 border-b border-edge bg-panel px-3">
         <Radar size={14} className="text-accent" />
         <span className="text-xs font-semibold">设备发现</span>
@@ -61,7 +68,7 @@ export function DiscoveryPanel(): JSX.Element | null {
  *  网段扫描
  * ------------------------------------------------------------------ */
 
-function ScanView(): JSX.Element {
+function ScanView(): React.JSX.Element {
   const ifaces = useDiscoveryStore((s) => s.ifaces)
   const cidr = useDiscoveryStore((s) => s.cidr)
   const portsText = useDiscoveryStore((s) => s.portsText)
@@ -168,7 +175,12 @@ function ScanView(): JSX.Element {
             <span className="flex-1" />
             <span className="text-3xs text-ink-3">点击「新建连接」可直接把 IP 填进连接编辑器</span>
           </div>
-          {hosts.map((h) => (
+          {hosts.length > MAX_HOSTS && (
+            <div className="px-2 py-1 text-2xs text-ink-3">
+              仅显示前 {MAX_HOSTS} 项，共 {hosts.length} 项 —— 请缩小网段后重新扫描
+            </div>
+          )}
+          {hosts.slice(0, MAX_HOSTS).map((h) => (
             <div
               key={h.ip}
               className="flex items-center gap-2.5 border-b border-edge-soft/60 px-3 py-1.5 last:border-b-0 hover:bg-hover/40"
@@ -228,7 +240,7 @@ function ScanView(): JSX.Element {
  *  mDNS
  * ------------------------------------------------------------------ */
 
-function MdnsView(): JSX.Element {
+function MdnsView(): React.JSX.Element {
   const running = useDiscoveryStore((s) => s.mdnsRunning)
   const done = useDiscoveryStore((s) => s.mdnsDone)
   const services = useDiscoveryStore((s) => s.mdnsServices)

@@ -1,3 +1,4 @@
+import type * as React from 'react'
 import {
   Fragment,
   useEffect,
@@ -15,6 +16,7 @@ import {
   X,
   XCircle
 } from 'lucide-react'
+import { createPortal } from 'react-dom'
 import { cn } from '@/lib/utils'
 import { useToastStore } from '@/stores/toastStore'
 import { isImeComposing } from '@/lib/ime'
@@ -37,7 +39,7 @@ export function Modal({
   children: ReactNode
   footer?: ReactNode
   width?: string
-}): JSX.Element | null {
+}): React.JSX.Element | null {
   useEffect(() => {
     if (!open) return
     const onKey = (e: KeyboardEvent): void => {
@@ -84,7 +86,7 @@ export function Field({
   hint?: string
   children: ReactNode
   className?: string
-}): JSX.Element {
+}): React.JSX.Element {
   return (
     <div className={className}>
       <div className="field-label">
@@ -120,7 +122,7 @@ export function Combobox({
   placeholder?: string
   className?: string
   inputClassName?: string
-}): JSX.Element {
+}): React.JSX.Element {
   const [open, setOpen] = useState(false)
   /** null = 用户还没打字，显示全量；非 null = 当前输入串，按它过滤 */
   const [typed, setTyped] = useState<string | null>(null)
@@ -285,7 +287,7 @@ export function Toggle({
   checked: boolean
   onChange: (next: boolean) => void
   disabled?: boolean
-}): JSX.Element {
+}): React.JSX.Element {
   return (
     <button
       type="button"
@@ -301,8 +303,8 @@ export function Toggle({
           14px 旋钮的合法区间是 left 0~14px，取 1px / 14px 保证两端都不越界。 */}
       <span
         className={cn(
-          'absolute top-[1px] h-[14px] w-[14px] rounded-full bg-white shadow-sm transition-[left] duration-150',
-          checked ? 'left-[14px]' : 'left-[1px]'
+          'absolute top-px h-[14px] w-[14px] rounded-full bg-white shadow-sm transition-[left] duration-150',
+          checked ? 'left-[14px]' : 'left-px'
         )}
       />
     </button>
@@ -329,7 +331,7 @@ export function ConfirmDialog({
   danger?: boolean
   onConfirm: () => void
   onCancel: () => void
-}): JSX.Element | null {
+}): React.JSX.Element | null {
   useEffect(() => {
     if (!open) return
     const onKey = (e: KeyboardEvent): void => {
@@ -392,7 +394,7 @@ export function PromptDialog({
   confirmText?: string
   onConfirm: (value: string) => void
   onCancel: () => void
-}): JSX.Element | null {
+}): React.JSX.Element | null {
   const [value, setValue] = useState(defaultValue)
 
   useEffect(() => {
@@ -469,7 +471,7 @@ export function EmptyState({
   title: string
   hint?: string
   action?: ReactNode
-}): JSX.Element {
+}): React.JSX.Element {
   /*
    * 空态观感取舍：
    * 原来图标外面套了一个 56px 圆角描边方块（border + bg-panel），远看像个
@@ -510,7 +512,7 @@ export function ContextMenu({
   y: number
   items: MenuEntry[]
   onClose: () => void
-}): JSX.Element {
+}): React.JSX.Element {
   const ref = useRef<HTMLDivElement>(null)
   const [pos, setPos] = useState({ x, y })
 
@@ -542,10 +544,23 @@ export function ContextMenu({
     }
   }, [onClose])
 
-  return (
+  /*
+   * 必须 portal 到 body，直接原地渲染是"菜单能弹出但点了没反应"的根因。
+   *
+   * 这个组件的绝大多数调用点都在标题栏里（标签右键、连接右键、终端右键……），
+   * 而标题栏挂着 `-webkit-app-region: drag`。Chromium 会把 drag 区内的鼠标消息
+   * 交给窗口管理器做拖窗，子元素只有显式声明 `no-drag` 才收得到。`position: fixed`
+   * 只改绘制位置、不改 DOM 归属 —— 菜单在视觉上飞出了标题栏，DOM 上仍是 drag 区的
+   * 后代，于是每一颗按钮的 mouseup 都被吞掉：hover 有反馈，点击零效果。
+   * （TabBar.tsx 顶部的历史注释记录过同一个坑：滚动条挂在 drag-region 里拖不动。）
+   *
+   * portal 到 body 之后，整棵菜单彻底脱离任何 drag 子树；再叠一层 `no-drag` 是给
+   * 万一将来有调用点把 body 自身设成 drag 的兜底，代价为零。
+   */
+  return createPortal(
     <div
       ref={ref}
-      className="menu"
+      className="menu no-drag"
       style={{ left: pos.x, top: pos.y }}
       onMouseDown={(e) => e.stopPropagation()}
       onContextMenu={(e) => e.preventDefault()}
@@ -554,6 +569,7 @@ export function ContextMenu({
         <Fragment key={i}>
           {item.separatorBefore && <div className="menu-sep" />}
           <button
+            type="button"
             className={cn('menu-item', item.danger && 'menu-item-danger')}
             disabled={item.disabled}
             onClick={() => {
@@ -568,7 +584,8 @@ export function ContextMenu({
           </button>
         </Fragment>
       ))}
-    </div>
+    </div>,
+    document.body
   )
 }
 
@@ -594,14 +611,14 @@ export function useContextMenu<T>(): {
  *  Toast
  * ------------------------------------------------------------------ */
 
-const TOAST_ICON: Record<string, { icon: JSX.Element; cls: string }> = {
+const TOAST_ICON: Record<string, { icon: React.JSX.Element; cls: string }> = {
   success: { icon: <CheckCircle2 size={14} />, cls: 'text-success' },
   warning: { icon: <AlertTriangle size={14} />, cls: 'text-warning' },
   error: { icon: <XCircle size={14} />, cls: 'text-danger' },
   info: { icon: <Info size={14} />, cls: 'text-accent' }
 }
 
-export function ToastHost(): JSX.Element {
+export function ToastHost(): React.JSX.Element {
   const toasts = useToastStore((s) => s.toasts)
   const dismiss = useToastStore((s) => s.dismiss)
 

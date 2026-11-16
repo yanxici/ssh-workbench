@@ -1,9 +1,10 @@
+import type * as React from 'react'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { Toggle } from '@/components/ui'
 import { Row } from './sectionUi'
 
 /** 设置 → 行为（延迟探测 / 自动录像 / 重连 / 跟随终端 / 指纹校验 / 会话恢复） */
-export function BehaviorSection(): JSX.Element {
+export function BehaviorSection(): React.JSX.Element {
   const settings = useSettingsStore((s) => s.settings)
   const update = useSettingsStore((s) => s.update)
 

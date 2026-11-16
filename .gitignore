@@ -42,5 +42,17 @@ releases/
 .demo/
 .shots/
 
+# 字体渲染探针的一次性截图与设置副本（tmp-probe/*.png、*.json、*.py），不入库
+tmp-probe/
+
 # 串口原生模块 spike 的临时产物（asar 对照实验 / 结果 json）
 serial-spike-result.json
+
+# 一次性排查脚本（截图 / 坐标标定 / CDP 探针），只在本地跑，不入库。
+# _osclick.ps1 是 verify-tabmenu-os.cjs / verify-tabbar-os.cjs 的操作系统级点击依赖，必须入库。
+scripts/_*
+!scripts/_osclick.ps1
+
+# 本地临时工作区与回归报告（截图、user-data-dir、e2e 日志）
+.tmp/
+reports/

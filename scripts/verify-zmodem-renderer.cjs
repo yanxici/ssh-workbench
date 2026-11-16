@@ -847,6 +847,67 @@ function nameOf(buf) {
       'elapsed=' + elapsed)
   }
 
+  /* ---------- 17：终态快照不再往界面恢复（切走再切回不该重放已完成的面板） ---------- */
+  {
+    const { lib } = loadLib()
+    const sessionId = 's-terminal-snap-' + Math.random().toString(36).slice(2)
+    const events = []
+    lib.watchZmodem(sessionId, (p) => events.push(p))
+    lib.ensureZmodem(sessionId, {
+      write: () => {},
+      send: () => {},
+      confirm: async () => true,
+      afterTransfer: () => {}
+    })
+
+    const enc = new Zmodem.ZDLE()
+    enc.set_escape_ctrl_chars(true)
+    const hex = (name, args) => Buffer.from(Zmodem.Header.build(name, args || []).to_hex())
+    const sub = (payload, fe) =>
+      Buffer.from(Zmodem.Subpacket.build(Array.from(payload), fe).encode16(enc))
+    const info = (name, size) =>
+      Buffer.concat([Buffer.from(name), Buffer.from([0]), Buffer.from(size + ' 0 100644 0')])
+    const feed = (buf) => lib.feedZmodem(sessionId, buf.toString('base64'), buf.toString('latin1'))
+    const total = 1200
+
+    feed(hex('ZRQINIT', [0, 0, 0, 0]))
+    for (let i = 0; i < 40; i++) await tick()
+    feed(Buffer.concat([hex('ZFILE', [0]), sub(info('snap.bin', total), 'end_ack')]))
+    for (let i = 0; i < 40; i++) await tick()
+
+    const mid = lib.getZmodemProgress(sessionId)
+    check('传输进行中仍能恢复进度快照（切标签页回来面板还在）',
+      !!mid && (mid.phase === 'active' || mid.phase === 'detected'),
+      JSON.stringify(mid))
+
+    feed(Buffer.concat([hex('ZDATA', [0]), sub(Buffer.alloc(total, 0x41), 'end_ack')]))
+    for (let i = 0; i < 60; i++) await tick()
+    feed(hex('ZEOF', [total]))
+    for (let i = 0; i < 80; i++) await tick()
+
+    const doneEv = events.filter((e) => e.phase === 'done').pop()
+    check('实时 watcher 仍然收到 done（面板当场能提示已保存）', !!doneEv,
+      JSON.stringify(events.map((e) => e.phase)))
+    check('完成后不再从快照恢复面板（切走再切回不会重放）',
+      lib.getZmodemProgress(sessionId) === null,
+      JSON.stringify(lib.getZmodemProgress(sessionId)))
+
+    // 再切一次「标签页」：重新挂载只会调用 getZmodemProgress，仍必须是空
+    check('重复读取快照仍为空（重挂载幂等）',
+      lib.getZmodemProgress(sessionId) === null,
+      JSON.stringify(lib.getZmodemProgress(sessionId)))
+    check('完成态字节数与文件大小一致（快照过滤没影响收尾）',
+      doneEv && doneEv.bytesDone === total, JSON.stringify(doneEv))
+
+    // 中断同样是终态：error 快照也不该被恢复
+    lib.abortZmodem(sessionId)
+    for (let i = 0; i < 10; i++) await tick()
+    const afterAbort = lib.getZmodemProgress(sessionId)
+    check('中断后的 error 快照同样不恢复', afterAbort === null, JSON.stringify(afterAbort))
+
+    lib.detachZmodem(sessionId)
+  }
+
   console.log('')
   if (fails.length) {
     console.log('失败项：')

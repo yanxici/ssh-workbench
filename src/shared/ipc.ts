@@ -48,6 +48,19 @@ export const IPC = {
   /** 主动刷新（用户点「刷新」按钮）：与 SERIAL_LIST 同源，但会顺带更新热插拔指纹 */
   SERIAL_REFRESH: 'serial:refresh',
 
+  /* ---------------- 内置 TFTP 服务端（U-Boot 刷机供固件） ---------------- */
+  /**
+   * 起一个内置 TFTP 服务端，把固件目录共享给板子。
+   *
+   * 现场刷机流程里这一步原来是「PC 打开 tftp 工具，选固件路径」——
+   * 也就是说刷一块板子要先装一个第三方 TFTP 软件。这里把它收进主进程，
+   * 端口固定 69（U-Boot 的 tftpboot 默认只发 69），只支持读。
+   */
+  TFTP_START: 'tftp:start',
+  TFTP_STOP: 'tftp:stop',
+  /** 查询当前状态（是否在跑、本机 IP、已传多少字节） */
+  TFTP_STATE: 'tftp:state',
+
   /* ---------------- 常用命令 ---------------- */
   CMD_LIST: 'cmd:list',
   CMD_SAVE: 'cmd:save',
@@ -114,6 +127,17 @@ export const IPC = {
   ZM_SAVE_APPEND: 'zm:save-append',
   ZM_SAVE_FINISH: 'zm:save-finish',
   ZM_SEND_BYTES: 'zm:send-bytes',
+
+  /* ---------------- trzsz 文件传输（trz / tsz） ---------------- */
+  /**
+   * 主动上传：拖文件进终端，或右键「发送文件」。
+   *
+   * 与 ZMODEM 的区别：zmodem 由远端发起 sz/rz，这边被动响应；
+   * trzsz 支持本地主动推，所以要一条从渲染层来的入口。
+   */
+  TRZSZ_UPLOAD: 'trzsz:upload',
+  /** 中断当前传输（等价于终端里按 Ctrl-C） */
+  TRZSZ_CANCEL: 'trzsz:cancel',
 
   /* ---------------- 本地文件系统（文件管理器左侧栏） ---------------- */
   LOCAL_HOME: 'local:home',
@@ -216,6 +240,14 @@ export const IPC = {
   WIN_MINIMIZE: 'win:minimize',
   WIN_TOGGLE_MAX: 'win:toggle-max',
   WIN_CLOSE: 'win:close',
+  /** 把窗口提到前台并聚焦（点系统通知时用） */
+  WIN_FOCUS: 'win:focus',
+  /** 查询窗口当前是否聚焦（渲染层据此决定发不发系统通知） */
+  WIN_IS_FOCUSED: 'win:is-focused',
+
+  /* ---------------- 任务完成通知 ---------------- */
+  /** 弹一条系统级通知（Windows 操作中心） */
+  NOTIFY_SHOW: 'notify:show',
 
   /* ---------------- 应用内更新 ---------------- */
   /** 读取当前更新状态（渲染层首帧对齐用，不会错过启动时的那一次检测） */
@@ -250,7 +282,24 @@ export const IPC = {
    * 只在指纹真的变了才发：枚举结果的顺序抖动不该让界面刷新，
    * 否则用户在下拉框里选端口的动作会被莫名打断。
    */
-  EVT_SERIAL_PORTS: 'evt:serial-ports'
+  EVT_SERIAL_PORTS: 'evt:serial-ports',
+  /** 内置 TFTP 服务端日志：U-Boot 发起 RRQ、重传、完成、失败 */
+  EVT_TFTP_LOG: 'evt:tftp-log',
+  /**
+   * 用户点了系统通知。
+   *
+   * 为什么由主进程发：通知对象活在主进程，渲染层拿不到它的 click。
+   * 主进程收到 click 先 restore/focus 窗口，再把 sessionId 转发过来，
+   * 渲染层才知道该切哪个标签。
+   */
+  EVT_NOTIFY_CLICK: 'evt:notify-click',
+  /**
+   * trzsz 传输状态（有没有在传 / 传哪个文件 / 百分比 / 远端没装 trz）。
+   *
+   * 进度条本身不走这条：它是普通终端文本（\r 原地重绘），
+   * 混在会话数据里下发，回滚和搜索才有内容。这条只喂状态条。
+   */
+  EVT_TRZSZ_STATE: 'evt:trzsz-state'
 } as const
 
 export type IpcChannel = (typeof IPC)[keyof typeof IPC]

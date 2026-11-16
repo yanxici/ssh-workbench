@@ -5,7 +5,354 @@ All notable changes to SSH Workbench will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.9] - 2026-11-16
+
+### Fixed（ZMODEM 浮层：切走标签再切回来，结束的传输又"重现"一次）
+
+**症状**：传输结束后浮层按 done 2.5s / error 6s 自动收起，但切到别的标签再切回来，浮层会重新出现一次再消失 —— 看起来像传输又跑了一遍。
+
+**根因**：`lastProgress` 存的是最后一次进度快照，生命周期跟会话一致，只有 `detachZmodem` 才清。`ZmodemOverlay` 每次挂载都会调 `getZmodemProgress(activeId)` 恢复"进行中的传输"，而它对**终态**快照同样返回 —— 于是一次已经结束的传输被当成进行中的恢复了。
+
+**改法**：getter 只恢复未终结的快照。
+
+```ts
+const snap = lastProgress.get(sessionId)
+if (!snap) return null
+if (snap.phase === 'done' || snap.phase === 'error') return null
+return snap
+```
+
+终态快照**仍留在 Map 里**：看门狗（stall timer、续传 resync、选目录兜底）读的是 `lastProgress` 本身而不是这个 getter，续传与超时判定完全不受影响。
+
+### Added（另存为新设备：默认沿用原连接已保存的凭据）
+
+**问题**：编辑连接里点「另存为新设备并连接」，走的是 `id: undefined` → 主进程 `randomUUID()` 建新记录。新 id 在保险箱里没有条目，原连接的 password / passphrase / proxyPassword 全丢，点完「并连接」立刻又弹一次密码框。
+
+**改法**：`ConnectionInput` 加一个只对新建生效的 `reuseSecretFrom`，渲染层另存时填原连接 id，主进程落库后按「显式输入 > 继承 > 本记录原值」取值：
+
+```ts
+const inherited =
+  isNew && input.reuseSecretFrom && input.reuseSecretFrom !== saved.id
+    ? await getSecret(input.reuseSecretFrom)
+    : undefined
+```
+
+三条刻意的边界：更新同一条连接时 `isNew` 为假、不跨 id 取凭据；源 id 不存在时 `inherited` 是空对象，行为与不带这个字段完全一致；显式传 `''` 是「清空」意图，不会被继承值顶回来。保存成功的 toast 补了半句「已沿用其保存的凭据」。
+
+### Tests
+
+- 新增 `scripts/verify-conn-reuse.cjs`（21 项）：esbuild 打真实 `repository` + `vault`，electron 用 `SW_MACHINE_DIR` + aes-256-gcm 自造 safeStorage。覆盖继承三凭据、显式优先、不带 `reuseSecretFrom`、源 id 不存在、同 id 更新不继承、`''` 清除、代理密码继承、只读源、源被删后另存。
+- `scripts/verify-zmodem-renderer.cjs` 加第 17 段（66 → 72 项）：跑到 done 后断言 getter 返回 `null`、重复读取仍 `null`（重挂载幂等）、实时 watcher 仍收到 done、`bytesDone === total`（过滤没影响收尾）。
+- 实测：`node scripts/verify-conn-reuse.cjs` → 21 通过 / 0 失败；`node scripts/verify-zmodem-renderer.cjs` → 72 通过 / 0 失败。
+
+### Docs
+
+README 双语的当前版本与「最近更新」首条跟上 2.1.9，`release-notes-v2.1.9.md` 补齐。2.1.8 发出时这两处仍停在 2.1.7（`verify-docs-sync` 6/6 红），这次一并补上。
+
+## [2.1.7] - 2026-11-15
+
+### Added（分屏的第二个入口：终端右键）
+
+**问题**：v2.1.5 的分屏入口只有标签栏右键一个。标签栏本身 44px 高、还会横向滚动，鼠标要精准落在某一条标签的几十像素上才点得到；而人想分屏时，视线和鼠标其实都在终端里。用户原话是「在标签栏上感觉不太好用」。
+
+**做法**：终端右键菜单加三项 ——「向右分屏」「向下分屏」「关闭此分屏」。不新增任何状态，两个入口调同一组 `useSplitStore` 动作，走同一条「复用当前 SSH 连接开新 shell + replaceLeaf 成 split 节点」链路。
+
+判据从 `paneTree.ts` import 同一个 `MAX_PANES`，不各写一个 4 —— 上限以后改动只改一处，两个入口不会分叉。
+
+**「关闭此分屏」只在真的分了屏时出现**（`paneTotal > 1`）。单格时 `closePane` 等价于关标签，而终端右键里多一个「关掉整个终端」的入口既危险又多余（标签上本来就有 ×）。这条不是美观问题：菜单项写成常驻，单格用户会看到一个误点就丢整个终端的东西。
+
+菜单顺序：复制 / 粘贴 / 全选 /（发送文件…）/（取消传输）/ **向右分屏 · 向下分屏 ·（关闭此分屏）** / 查找 / 清屏。分屏组用 `separatorBefore` 与前一组隔开，与「查找」前那条分隔线对称。
+
+### Tests
+
+`scripts/verify-split-e2e.cjs` 从 16 项扩到 **22 项**，新增 T0–T4b 六条，判据都选成「修复没落地时会红」的量：
+
+| 断言 | 失效时会红的情形 |
+|---|---|
+| T0 单格时终端菜单有分屏项、且**没有**「关闭此分屏」 | 把「关闭此分屏」写成常驻 |
+| T1 终端菜单「向右分屏」真的多出一格 | 只挂菜单不接 onClick |
+| T2 标签数量仍是 1 | 终端入口另写一套逻辑、绕开 splitStore |
+| T3 分屏后出现「关闭此分屏」 | `paneTotal` 拿会话 id 当 owner 算 |
+| T4 点它真的回到一格 | 误调 `sessionStore.close` |
+| T4b 标签仍在 | 同上 |
+
+打开菜单用 `.xterm` 上派发 `contextmenu`（冒泡到 TerminalView 挂了 `onContextMenu` 的容器 div，与真实右键同一条路径）；读菜单文本只取 `.menu` 一个元素，不用 `body.innerText` —— 后者会把侧栏与状态栏文案一起算进来，断言就退化成「页面上出现过这四个字」。
+
+实测：22 通过 / 0 失败。全量回归 71 通过 / 0 失败 / 0 跳过。
+
+### Changed
+
+- `src/renderer/src/components/terminal/TerminalView.tsx`：新增 `Columns2` / `Rows2` / `XCircle` 三个图标与 `MAX_PANES` / `countLeaves` / `leafIds` 三个导入；`useSplitStore` 由只读 `getState()` 改为订阅 `trees`（菜单项要跟着分屏状态变）。
+
+### Fixed（回归脚本：Z5 读到空串的真因）
+
+`scripts/verify-trzsz-e2e.cjs` 的 Z5/Z5b 在 CI 里时红时绿，两处都是脚本自身的表达式拼错，不是功能坏：
+
+| 位置 | 症状 | 真因 |
+|---|---|---|
+| Z5 等待表达式 | `waitFor` 里 CDP 抛出 `Unexpected token '('`，被 `try/catch` 吞掉，重试 20s 后返回 false | `'(() => ' + TERM_ROWS_VISIBLE + '.some(...)'` 把 IIFE 拼成了 `(() => (...)())()`，多一层调用 |
+| Z5 失败诊断 | 诊断本身报 `SyntaxError: Unexpected token 'return'`，拿不到现场 | `' })' + ' return { ... }'` 缺分号，`})` 后面直接跟 `return` 被当成同一表达式 |
+
+两处都改成先取 IIFE 的结果再做 `.some(...)`、并补上分号。修好后连跑两次 **10 通过 / 0 失败**，全量回归 **71 通过 / 0 失败 / 0 跳过**。
+
+顺带把 `TERMINAL_TEXT` 的取样口径从「文档里第一个 `.xterm-rows`」改成「只取可见终端（`getBoundingClientRect` 宽高 > 10）再拼接」：分屏后第一个终端可能正被 `display:none` 藏着、缓冲区是空的，读到 `""` 和「远端回执没到」在现场上完全一样。
+
+## [2.1.6] - 2026-11-15
+
+### Added（trzsz 文件传输：rz/sz 的现代替代）
+
+**背景**：串口设备、老交换机、只有 ssh 没有 sftp 的机器，传一个固件包的现实做法仍是 `rz`/`sz` —— 需要在对端装 lrzsz，且走的是 8-bit 明文协议，遇到 4-bit 终端或 `tmux` 就会挂。trzsz 是同一套交互（终端里敲 `trz` 发文件、敲 `tsz 文件` 收文件）但走文本协议，带目录、带进度、断线可续。WindTerm / Tabby / Netcatty / electerm 都内置，我们之前只有 ZMODEM。
+
+**过滤器放主进程，不放渲染层。** `TrzszFilter` 官方包（`trzsz@1.1.6`，MIT）运行时用 `require.resolve('fs')` 判定环境：Node 分支必需 `chooseSendFiles` / `chooseSaveDirectory` 两个回调并自带 fs 读写；浏览器分支退到 `window.showDirectoryPicker`，在 Electron 渲染进程里不可靠。放主进程的另外两个好处：选文件/选目录本来就要原生对话框（`dialog.showOpenDialog`），而大文件不必再走 base64 IPC 往返（现有 ZMODEM 每帧 base64 编解码，几十 MB 时 CPU 明显）。
+
+**只在看到握手才建过滤器，一个字节都不提前碰。** `sessionManager.flush()` 先看文本里有没有 `::TRZSZ:TRANSFER:`；没有就走原来的 `onData` 直路，普通终端与渲染层 ZMODEM 的行为完全不变。命中才 `trzszManager.ensure()`，此后本会话文本全部由过滤器产出。这个「惰性挂载」既保证了零改动兼容，也让 e2e 能构造出「挂了/没挂」两种状态去比较耗时。
+
+**握手串照常显示在终端里，只是不进录制。** `processServerOutput` 的语义是先 `writeToTerminal` 再延迟 10ms 探测握手 —— 过滤器不替你吞任何字节，要吞只能在回调里自己过滤。我们没有吞（用户该看到远端回了什么），但录制走 `stripTrzszHandshake()` 剔掉整行：回放时那串 base64 是满屏乱码。
+
+**进度条就是普通终端文本。** trzsz 的进度条是用 `\r` / `ESC[nD` 原地重绘的文本，主进程把它当会话数据下发即可 —— 录制、回滚、搜索全部照常工作，不需要新协议通道。额外只在状态条上显示「图标 + 文件名 + 百分比」，数据从进度条文本里抠（最后一个 `(\d{1,3})%`、`[` 之前那段当文件名），150ms 节流。
+
+**「没装 trzsz」有两条路径都要提示。** 主动上传时 `uploadFiles` 会先发 `Ctrl-C`、等 200ms、再发 `trz`，3 秒内等不到握手就抛 `Upload does not start` —— 我们换成中文提示并丢弃原始英文。但用户**手敲** `trz` 时我们还没创建过滤器（只在看到握手才建），那条路径上没人解析输出，于是 `sessionManager.flush()` 的无过滤器分支里再单独认一次 `command not found`，命中才发一条状态事件。两条路径任一缺失，用户都会觉得「这功能坏了但没告诉我为什么」。
+
+**只对 SSH 会话挂。** 串口没有 `trz` 命令这回事，`ensureTrzsz()` 直接拒（`kind !== 'ssh' || status !== 'connected'` 返回 undefined）。ZMODEM 与 trzsz 不会同时进行：`writeBytes` 在过滤器 active 时直接丢弃。
+
+### Verification
+
+- `scripts/verify-trzsz.cjs` —— 40 项纯逻辑断言，7 组：握手识别 / 录制剔除 / 输出过滤与进度抠取 / 输入直通与上传 / 列宽与取消与管理器。一条首轮是红的，仍然是**断言写错**：原本用 `sudo: rz: command not found` 期望命中，但 `NOT_FOUND_RE` 只列 `trz|tsz`（下载端命令是 `tsz`，不是 `rz`）。
+- `scripts/verify-trzsz-e2e.cjs` —— 10 项真实应用断言：通道齐全 / 手敲 trz 出提示 / 上传到没装的那端出中文报错且**耗时 > 2.5s**（证明真等过握手超时，不是立刻返回）/ 对端下发 `tsz` 握手后终端出现 `lab-saw-act`（取消帧真的出了本机）/ 握手串照常显示 / 用户取消选文件返回成功 / 录制里无握手串 / 无未捕获异常。为了让这套跑得起来，`scripts/lab-sftp-server.cjs` 的伪 shell 增加了 `LAB_SHELL_TRZSZ=1` 模式（`@@TRZSZ:ON@@` 开、回真实格式的握手帧、`#ACT:` 回 ack、`@@PERF:n:tag@@` 吐 n 行），`trzszDialogs.ts` 增加了 `SSHWB_TRZSZ_AUTODECLINE=1`（原生模态对话框会挂住进程，脚本点不到）。
+- `scripts/perf-trzsz.cjs` —— 11 项：未挂载路径 3 万段三次判定 0.15us/段；**挂载后** 2 万行 0.87us/行且透传字节数完全等于输入（一个字节都不吞）；真应用开/关过滤器中位 31ms vs 31ms = **1.00×**；`connections.json` 身份字段前后一致；录制无握手串；`settings.json` 仍合法。判据里刻意加了「过滤器真的挂上了」这一步 —— 不证明挂载成功，两种状态跑的是同一条路径，比值恒为 1，压测就成了摆设。
+
+### 已知取舍
+
+- 不做远端探测（每条会话多一次 `exec` 是浪费），靠 `command not found` / `Upload does not start` 兜底提示。
+- 主动上传会先发 `Ctrl-C` 中断当前命令（trzsz 协议要求），正在跑的命令会被打断 —— 这是协议行为，不是我们的选择。
+- 下载方向没有界面入口：远端 `tsz` 一下就会弹目录选择框，不需要先点菜单。
+
+## [2.1.5] - 2026-11-15
+
+### Added（嵌套分屏：一个标签里放多台设备）
+
+**背景**：调一台交换机重启，同时盯它的串口输出和另一台的 uptime —— 这是日常动作，但 v2.1.4 之前只能开两个标签来回点。WindTerm / Tabby / Netcatty 都有分屏，且都支持嵌套（横切再竖切）。
+
+**数据模型选定为树，而不是「最多两格」。** `PaneNode = { type: 'leaf', sessionId } | { type: 'split', dir: 'row' | 'col', ratio, children: [a, b] }`。行列分割次数不限，但**叶子总数限制 4 个**：再分下去每格宽度不足 300px，80 列都放不下，那不是分屏是折磨。超限时给明确提示「先关掉一个再分」。
+
+**布局计算抽成零依赖的 `src/renderer/src/lib/paneTree.ts`（233 行）**：`layoutPaneTree(node)` 返回百分比矩形与分隔条，`removeLeaf` 在只剩一个孩子时把 split 塌缩成那个孩子，`replaceLeaf` / `setRatio` / `neighbor` 各自单一职责。`layoutPaneTree` **不扣 gap** —— 缝隙由渲染层每格外侧 2px padding 让出；如果在计算里扣，嵌套时缝隙宽度会随层数叠加而翻倍。
+
+**焦点迁移用 `neighbor()` 而不是「按方向找最近」。** 朴素实现取中心距最短，2×2 布局从左上按「右」会跳到右下（斜对角中心距更短）。所以分两档：先只考虑「同侧重叠」的候选（`overlap > 0 && best.overlap <= 0`），同档内再比中心距。`Ctrl+Alt+↑↓←→` 移焦点，且**只有焦点真的动了才吞键** —— 单格`Ctrl+Alt+←` 仍是终端按词移动光标。
+
+**`Ctrl+Tab` 语义不变（切标签），嵌套格不是标签。** 为此新增 `src/renderer/src/lib/paneRegistry.ts`：一个模块级 `Map<sessionId, ownerId>`，让 `TabBar` 过滤与 `sessionStore.cycle` 跳过嵌套格时不必 import `splitStore`（那会形成 store 循环依赖）。标签的 `x` 按钮在有多格时变成「关闭此分屏」，最后一个格关掉时整棵树折叠回单终端、标签保留。
+
+**拖拽期间不 `fit()`，松手才统一重排。** `SplitDivider` 拖动时只更新 CSS 比例，`setDragging(true)` 让 `TerminalView.scheduleFit` 的 rAF 回调直接 return，`pointerup` 时 `refitTick += 1` 触发所有可见格各 `fit()` 一次。不这么做的话拖动过程里每帧都在重算 xterm 的 cols/rows，并往主进程发 resize IPC。
+
+**按连接持久化。** 树存进 `AppSettings.splitLayout: Record<connectionId, PersistedPane>`，`PersistedPane` 用单字母字段（`t/d/r/k/c`）因为同一个形状会按连接重复存。会话 id 每次启动都新，按会话存等于不存。只在 `restoreSessions === true` 时恢复；单格标签不写盘，避免几十条连接各留一个只有叶子的垃圾树。
+
+### Fixed（JsonStore 写-读竞态：设置写成功、立刻读回却是旧值）
+
+**这是分屏落盘时暴露出来的真 bug，不在分屏代码里。** 现象：拖动分隔条后 `splitLayout` 明明写了，紧接着 `settings.get()` 读回 `{}`；重启应用后又正常。
+
+根因在 `src/main/store/jsonStore.ts`：`load()` 在 `await fs.readFile` 期间，如果有 `update()/write()` 落地并 `rename` 了新文件，旧实现会继续把「读盘结果」（ENOENT 时是 `fallback()` 空值）写进 `cache`，并把 `cacheSignature` 刷成**新文件**的指纹 —— 缓存命中条件随即成立，之后每次 `read()` 都返回空值，直到文件 mtime 再次变化。日志链是决定性的：`U#6 in=0` → `U#6 out=17` → `R#6 n=17 fresh=null cached=null` → `repoGet n=0 json={}`，此后每次 `R#6 n=0` 都带着与文件一致的指纹。
+
+修法：加 `writeGen` 代际号。`load()` 进入时记下代际，读到内容后先取文件指纹，**再判断代际是否变过 —— 变过就丢弃这次读盘结果**，返回当前 cache 或 fallback，绝不写 `cacheSignature`。`update()` 与 `write()` 各让代际 +1。这比加锁轻：读盘路径仍是无锁并发的，只有「读盘结果是否还能用」这一个判断。
+
+### Verification
+
+- `scripts/verify-pane-tree.cjs` —— 74 项纯逻辑断言，9 组：比例夹紧 / 矩形计算 / 塌缩 / 替换 / 比例定位 / 叶子计数 / 极端比例 / 焦点迁移 / 上限。两条断言首轮就红，都是**断言写错不是实现错**：`normalizeRatio(Infinity)` 实际返回 0.5（非有限值统一当「没给」）而不是夹到 0.85 上限；2×2 里从左上按「右」落在右半边任一格（c/d 中心距平局，实现取先到者）。
+- `scripts/verify-split-e2e.cjs` —— 16 项真实应用断言：真实 SSH 会话上分屏、可见格计数、标签数不变、主进程 session 数 +1、`Ctrl+Alt+` 吞键、焦点描边换格、拖分隔条比例偏离 0.5 并落盘、关格后回单格且标签仍在、单格时快捷键不吞。两个假绿陷阱记在这里：页面有**三个** `role=separator`（侧边栏 / 分屏 / 命令栏），必须按 `aria-label` 含「分屏」过滤，否则拖的是侧栏；S4b 不能比「分屏前 id」，因为分屏本身就把焦点给了新格，要比「按键前后是不是同一格」。
+- `scripts/verify-jsonstore-race.cjs` —— 7 项竞态断言，**做过变异验证**：把 `load()` 的代际守卫删掉后 R1–R5 全红（读回 `[]` 或 `1`），修复不在时必然红。
+- `scripts/perf-split.cjs` —— 10 项：`layoutPaneTree` 4 格树 20 000 次 10.7ms = **0.54us 每次**；「写 `splitLayout` 再读回」40 轮中位 **2.8ms**、最慢 5.1ms；压测前后 `connections.json` 条数 / id 集合 / sha256 三者完全一致；`settings.json` 仍可解析且其它键未被写坏。
+
+## [2.1.4] - 2026-11-15
+
+### Added（任务完成通知：长任务跑完主动喊人）
+
+**背景**：批量执行 20 台、诊断巡检 31 项、固件升级、TFTP 推固件、SFTP 传一个目录 —— 这些任务动辄几十秒到几分钟，发起之后人一定会切走去做别的。切回来只看到一屏已经滚过去的日志，无法判断「跑完了没有」「几台成功」。WindTerm / Tabby 都有这能力，我们一直没有。
+
+**做法：只认我们自己发起的任务，不猜。** 通知分两类，默认只开第一类：
+
+| 类别 | 触发源 | 文案 | 默认 |
+|---|---|---|---|
+| A 确定事件 | 批量执行 / 诊断巡检 / 固件升级 / 网段扫描 / SFTP 传输 / TFTP 传输 | 「批量执行完成：8/8 台正常返回」 | 开 |
+| B 启发式 | 终端静默 > 1.5s 且窗口失焦 | 「疑似完成：设备名」 | **关** |
+
+B 类默认关的理由：靠「没动静了」猜结束，本质是把「编译停了在等我输入」也判成完成。文案写「疑似完成」而不是「已完成」，就是不承诺它是对的。
+
+**通道选择**：窗口失焦 → 系统通知（Windows 操作中心）+ 标签闪一次；窗口聚焦 → 只发应用内 toast。理由很直接 —— 人就在窗口前面，右下角一条提示够了，再弹系统通知等于同一件事说两遍。点通知 = 激活窗口 + 切到该标签 + 标签闪一次。
+
+**改动**：
+
+- `src/renderer/src/lib/notifyPlan.ts`（新增，162 行，纯决策零 IO）：`planNotify(req, {prefs, focused})` 返回 `{channel, reason}`，五级判定顺序写死在注释里 —— 总开关 → 标题非空 → 启发式开关 → 静音 → 聚焦。顺序不能换：静音必须在聚焦判定之前（静音的设备即使失焦也不该弹），启发式关闭必须在静音之前（那是「这个判定方式本身不要」，与「这台设备不要」是两个维度）。`heuristicHit()` 的 `notifiedAt >= lastOutputAt` 是「一轮输出只提醒一次」的闸门，去掉它同一次静默会被 2 秒巡检重复命中，一次编译能刷出几十条。`normalizeNotifyPrefs()` 自己 sanitize（手写的字符串 `"false"` 是真值，用 `!!v` 会让静音整片失效）。
+- `src/renderer/src/lib/taskNotify.ts`（新增，314 行）：把决策落到三个真实东西上 —— 应用内 toast、系统通知、标签闪烁。系统通知失败（系统不支持 / 用户在系统设置里关掉）时**退回 toast**，且顺序是先发、失败再退（反过来会让系统通知成功的场景也闪一条 toast）。传输类走 1.2 秒静默窗口聚合成一条「传输完成：40 个文件」：SFTP 每次 upload 各自成 task，拿不到「这一批还剩几个」，只能按时间聚；一个 40 文件的目录各弹一条等于刷屏。
+- `src/main/window/notifier.ts`（新增，129 行）：系统通知。三件事都不显然 —— ①`live` 集合按住活着的 `Notification` 实例，Windows 上实例被 GC 后点回调永远不触发（表现是「通知还在，点了没反应」）；②`focusMainWindow()` 必须 `isMinimized() → restore()` + `isVisible() → show()` + `focus()` 三步，最小化状态下只调 `focus()` 是 Electron 的既定坑（任务栏闪一下，窗口不出来）；③5 秒 `title\u0000body` 指纹去重，8 台设备几乎同时结束不该变成 8 条一样的通知。
+- `src/main/ipc/windowUpdate.ts`：新增 `WIN_FOCUS` / `WIN_IS_FOCUSED`（裸 `ipcMain.handle`，返回裸 boolean 而非 `{ok,data}`，与既有的窗口控制三条一致）与 `NOTIFY_SHOW`（走 `handle()` 包装）。`src/main/ipc/handle.ts` 的 `channelTitle` 补了中文标题。
+- `src/shared/types.ts`：`TaskNotifyPrefs{enabled, system, sound, heuristic, mutedConnectionIds}` 与 `TaskNotifyPayload{title, body, sessionId, silent}`；`AppSettings.taskNotify?`。**静音存连接 id 不存会话 id** —— sessionId 每次启动都新，存会话 id 的静音重启即失效。
+- 六个调用点全部换成 `notifyTask()`：`batchStore.ts:112`、`diagStore.ts:185`、`firmwareStore.ts:222/229/236`（成功/取消/异常三分支）、`discoveryStore.ts:114`、`sftpStore.ts:468`（按 taskId 去重后聚合）、`tftpStore.ts:94`（从日志文本"固件传输完成" / "传输结束："判完成）。原来这些地方是直接 `push toast`，换成 `notifyTask` 后聚焦场景文案一字未变。
+- 设置面板新增「通知」分区（`NotifySection.tsx`，99 行）：四个开关 + 已静音连接列表（chip 点击恢复）。「提示音」在「系统通知」关闭时置灰 —— 没有系统通知就没有提示音可言。
+- 标签右键菜单新增「本连接不弹通知 / 恢复本连接通知」（`TabBar.tsx` menuItems），`BellOff`/`BellRing` 图标随状态切换。按**连接**而不是会话记，理由同上。
+- 标签闪烁用既有但从未被使用的 `animate-flash-ok` keyframes（`src/renderer/src/styles/index.css:112`，0.6s 绿色淡出）。闪烁请求走 `flashSession()` 单向信号 + TabBar 消费后置空，不在 store 里存「是否正在闪」这种瞬时状态。
+- 关闭会话时 `forgetNotifySession(id)` 清记账：sessionId 会被复用（重连沿用），残留的 `lastOutputAt` 会让新会话一上线就收到「疑似完成」。
+
+### 新增验证：`scripts/verify-notify.cjs`（47 项，8 组）
+
+A 静音判定（5）· B `planNotify` 主序（5）· C 静音/聚焦优先级（4）· D 启发式（8）· E 静音列表增删（6）· F `normalizeNotifyPrefs`（6）· G 文案裁剪（5）· H 类别表（2）。每条断言按「旧实现必红」选：顺序错 C1 红、聚焦仍发系统通知 B3 红、启发式关掉仍命中 D2 红、`notifiedAt` 不做门 D4 红、`normalize` 用 `!!v` F2 红。已接入 `npm run test:notify`。
+
+### 真实应用验证：`scripts/verify-notify-e2e.cjs`（15 项）
+
+纯逻辑证明不了「系统通知真的弹出来了」「右键静音真的写回 settings.json」。这个脚本自起 `scripts/lab-sftp-server.cjs`（`LAB_SHELL_ECHO=1`）+ 真实 Electron，走 CDP 驱动：N1 投递返回 true / N2 同文案 5 秒内返回 false / N3 换正文返回 true / N4 空标题返回 false / N5 `taskNotify` 落盘回读 / 设置面板出现「通知」分区与四开关 / 开真实 SSH 会话 / 标签右键菜单出现「本连接不弹通知」/ N6 点击后连接 id 进 `mutedConnectionIds` / 静音后文案变「恢复本连接通知」/ N7 再点恢复 / N8 `win.isFocused()` 返回 boolean / 无渲染层未捕获异常。
+
+**踩过的坑**：第一轮 8 通过 / 3 失败 / 1 FATAL，根因不是通知坏了，而是 `window.api.conn.save()` 是主进程直写、渲染层 `connectionStore` 不感知 —— 侧栏根本没有 `[data-conn-id]` 行，双击无从谈起、也就没有标签和右键菜单。修法：保存连接后 `location.reload()` 再跑 UI 流程。
+
+### 压测：`scripts/perf-notify.cjs`（17 项）
+
+| 项 | 实测 |
+|---|---|
+| `planNotify` 纯逻辑 | 200 000 次 / 8.9 ms = **0.044 us/次** |
+| `heuristicHit` 纯逻辑 | 200 000 次 / 2.8 ms = **0.014 us/次** |
+| 系统通知投递 | 25 条，中位 **2.4 ms**，全部返回 true |
+| 热路径（1200 行 × 3 轮） | 启发式开 54 ms / 关 60 ms = **0.91×**（记账只是 `Map.set + Date.now`） |
+| 数据零影响 | 真实 `connections.json` 前后 sha256 一致，压测用临时 `--user-data-dir` |
+
+**判据强化**：静默探针原本只打印不断言，等于摆设。改成按 `document.hasFocus()` 分方向断言 —— 有焦点时断言「**不**出现疑似完成」（删掉巡检里的 `hasFocus` 守卫这条立刻变红：人就在窗口前面，右下角再弹一条「疑似完成」是纯噪音），无焦点时断言「1.5 秒内出现」。
+
+## [2.1.3] - 2026-11-15
+
+### Added（终端输出高亮：按关键词给输出行上色）
+
+**背景**：翻日志找 `error`、盯 `Permission denied`、看烧机时滚过去的 `timeout`，全靠肉眼在一屏二十行的输出里挑。WindTerm / Netcatty 都有这能力，我们一直没有。
+
+**做法：只做行级，不做列级。** 行级 = 整行底色 + 左侧色条 + 右侧滚动条刻度；列级要把 ANSI 序列剥掉后按「显示列」反推每个字符的屏幕坐标，中文双宽、emoji、tab 停位、窄体字符拼接都会让坐标偏移 —— 算错的表现是「染到了相邻的词」，比不染更糟。这一版的选择是把这条边界写死在代码注释里，而不是留个「以后再说」。
+
+**改动**：
+
+- `src/renderer/src/lib/highlight.ts`（新增，纯逻辑零依赖）：`stripAnsi(input, keepNewlines)` 剥除 SGR / OSC / 字符集切换序列；`createLineSplitter()` 把流式 chunk 切成完整行（处理 `\r\n`、`\r` 覆盖、行内无换行的半成品，尾部残行留在 `pending` 等下一次 feed）；`compileRules()` 编译并**按规则挑错**——坏正则进 `errors` 数组而不抛，其它规则照常工作；`matchRule()` 返回第一条命中的规则（先定义先赢）；`assessPattern()` 静态体检嵌套量词 / `.*.*` / 回溯结构，只警告不阻断；`sanitizeColor()` 只收 `#RRGGBB`（xterm 的 decoration 只认这一种，传 `rgba()` 会静默失效）；`sanitizeFlags()` 把 `g` / `y` 剔掉（带 `lastIndex` 状态的正则在下一次 `test()` 会从上次位置继续，表现是「同一个词有时染有时不染」）。
+- `src/renderer/src/lib/highlightRuntime.ts`（新增）：xterm 接入层。终端渲染层所有写入统一走 `writeSessionData(sessionId, term, data)`——未启用或规则为空时直接 `term.write(data)`，零开销直通；有命中时先 `term.write(data)` 再在写入回调里 `term.registerMarker(-back)` + `term.registerDecoration()`。`back` 的算法是 `(endedWithNewline ? 1 : 2) + hit.fromEnd`：带换行时余光标停在下一行行首，不含换行时停在当前行行尾，差一行就染错。
+- `src/renderer/src/components/settings/OutputHighlightSection.tsx`（新增）：规则编辑 + **试匹配框**。试匹配是本功能的验证回路 —— 规则写对写错在设置页里本来完全看不出差别，只能「改完回去等一条报错出现」。这里给一段可编辑的 8 行样本，实时显示命中行数与耗时，超 5ms 标黄（静态体检抓不到的回溯风险，这里能量出来）。
+- `src/shared/types.ts`：`AppSettings.outputHighlight?: OutputHighlightPrefs`。故意**只存用户改过的部分**：`undefined` 表示走渲染层默认规则，避免主进程 `DEFAULT_SETTINGS` 和渲染层各存一份默认值后漂移。
+- 内置两条规则默认开启：`ERROR|FAIL|FATAL|PANIC|EXCEPTION|DENIED|REFUSED` 暗红底、`WARN|DEPRECATED|TIMEOUT` 暗黄底。其余留给用户。
+- 断线时（`status !== 'connected'`）该会话的装饰统一 `dispose()`：断线遮罩是半透明的，底下染色行会透出来，看着像「断了还在报错」。
+- 关闭会话标签时 `forgetSession()` 清掉该会话的缓冲：`sessionId` 会被复用，不清就会把上一条连接的半行残料算进下一条。
+- `SettingsPanel` 新增「输出高亮」分区，**默认展开**——藏进折叠区等于没人知道它存在。
+
+### 新增验证：`scripts/verify-highlight.cjs`（64 项，7 组）
+
+A 剥 ANSI（11）· B 切行器（9）· C 颜色/标志清洗（10）· D 规则编译（10）· E 命中判定（7）· F 回溯体检（6）· G 默认值归一（11）。已接入 `npm run test:highlight`。
+
+### 真实应用验证：`scripts/verify-highlight-e2e.cjs`（17 项）
+
+纯逻辑只能证明「哪一行该染」，证明不了「染到了哪一行」—— decoration 挂在 marker 上，marker 的坐标是相对光标的行偏移，偏移算错一行的表现是「色带整体上移一格」，而函数返回值一切正常。所以脚本自起 lab SSH 服务器（`LAB_SHELL_ECHO=1` 原样回显）与 Electron，走 CDP 量 DOM：开规则 → 装饰存在、落在含命中词的行、整行宽、行内字符带规则底色与文字色；关开关 → 一条装饰都没有但输出照常显示；删掉 `outputHighlight` 键 → 回落到内置默认规则；设置面板分区可见。三轮之间各 `location.reload` 一次，顺带验证「重启后规则还在」的持久化路径。
+
+**测颜色这条踩了判据坑**：第一版量 `d.style.backgroundColor` 拿到空串，据此判「颜色没生效」是**假红**。查 xterm 源码才清楚 —— `BufferDecorationRenderer._createElement` 只写 width/height/top/line-height，`.xterm-decoration` 就是个透明的定位空壳；规则色是在 `DomRendererRowFactory` 里 `forEachDecorationAtCell` 命中后逐个 cell 覆盖 bg/fg 的。改成量行内 cell 的 computed background 后实测 `rgb(74, 29, 29)` / `rgb(255, 180, 180)` 覆盖 44 个 cell。
+
+### 压测：`scripts/perf-highlight.cjs`（12 项）
+
+高亮挂在终端唯一的写入口上，写法稍重一点，表现不是「算错」而是「大输出时终端卡住」——纯逻辑脚本量不出来。两层：①纯逻辑吞吐 5 万行；②端到端 1200 行 × 3 轮，开启/关闭两模式**交替**跑（交替是为了避免机器负载漂移被算成高亮开销），量「哨兵行进入 DOM」的墙钟时间取中位数。判据写了区分度：开启模式必须真的出现装饰，否则测的其实是「关着的高亮」，比值恒等于 1，压测就成了摆设。
+
+实测：纯逻辑 50 049 行 / 102.4 ms = **2.0 µs 每行**；端到端中位 开启 **118 ms** / 关闭 **60 ms** = **1.97×**，装饰 33 个 vs 0 个，两种模式哨兵行都到齐（不丢行）。全程 `--user-data-dir` 临时目录，真实 `%APPDATA%` 一个字节没碰。
+
+**踩过的坑（都写进断言了）**：①`stripAnsi` 最初把 `\n` 也剥了，切行器拿到整段输出粘成一行；②`\r\n` 的 `\r` 先清空缓冲，整行内容丢失（得到 `['','']`）；③`ESC(0` 字符集切换当成 2 字节序列跳，尾部 `0` 和后面的 `B` 残留成可见字符（`lqk` 前面凭空多个 `0`）；④超长行 overflow 时把那一行整个丢掉，界面上凭空少一行 —— 改成无条件产出一行；⑤测试样本选 `cat: /x: No such file or directory` 想命中 `error`，结果 `error` 长在 `directory` 里且 `\b` 词边界不成立，是断言错了不是代码错了。
+
 ## [Unreleased]
+
+### Added（串口刷机配套：内置 TFTP 服务端 + U-Boot 引导条）
+
+**背景**：7628 板子的部署文档要求「PC 开 tftp 工具 → 串口工具连 57600 → 重启板子 2 秒内按 2 → 输 Y → 两次回车 → 填固件名」。串口本身 v2.0.0 已经能用（57600 8N1 / CR / UTF-8 全在支持范围内），但这条流程有四件事必须切到别的工具或靠手速：TFTP 服务端在外面、2 秒窗口靠掐表、`Y` 不带回车这个细节容易错、固件名要手打一遍。
+
+**改动**：
+
+- `src/main/tftp/server.ts`（新增）：内置 TFTP 服务端，只用 `node:dgram` + `node:fs`，**零新依赖**。RFC 1350 只读服务：RRQ → DATA/ACK 循环，512 字节块；接受 `blksize` / `tsize` / `timeout` 三个选项并回 OACK（不回 OACK 的话新 U-Boot 直接判失败）；`blksize` 夹在 8..1468。**每次传输另起一个 UDP socket 绑随机端口** —— RFC 1350 的 TID 规则要求如此，复用 69 端口回包会被 U-Boot 当成陌生来源丢掉，症状是「板子一直重试、服务端看起来啥也没发生」。超时 2 秒重传，5 次放弃并提示「检查网线是否直连、PC 与板子是否同网段」。WRQ 一律回 ERROR 2（只读，不接受写入）；文件名不匹配回 ERROR 1 而不是静默超时。`EADDRINUSE` 翻译成「端口 69 已被占用（可能有别的 TFTP 工具正在运行），关掉它再试」。
+- IPC：`TFTP_START` / `TFTP_STOP` / `TFTP_STATE` + 事件 `EVT_TFTP_LOG`，`handle.ts` 的 `channelTitle` 补两条，`preload` 暴露 `tftp.start` / `tftp.stop` / `tftp.state` / `on.tftpLog`。主进程退出时（`window-all-closed`）显式 `tftpServer.stop()` —— 它持有 69 端口和固件文件句柄，不关会让下次启动直接撞端口。
+- `src/renderer/src/components/terminal/SerialBootBar.tsx`（新增）：串口会话顶部的引导条，只在 `session.kind === 'serial'` 时出现。三步各一键：①点一下按钮，倒计时 6 秒后每 250ms 连发 `2`、共 16 发（也可以点「立即发送」发单个）—— 倒计时的起点是点按钮那一刻，不是上电那一刻，中间隔着人去拨电源，所以按文档写的「2 秒」设会变成还没摸到开关就发完；连发则是为了盖住那 2 秒窗口，发一次等于赌自己刚好卡在里面；②发 `Y`（不带回车）；③回车 / 发固件名（取服务端正在提供的文件名，没有则用文档里的默认名）。下半部分是 TFTP 开关：选固件、启动 / 停止、实时传输进度，以及**本机网口地址** —— 7628 这套引导菜单通常把 tftp 地址写死，所以界面给的是「本机是什么」，对不上就把电脑该网口 IP 改成它要的那个。
+- `src/renderer/src/stores/tftpStore.ts`（新增）：服务端状态 + 最近 200 条日志。
+- `ConnectionEditor`：加「7628 U-Boot 控制台」预设（57600 / 8 / 1 / none / none / utf-8 / cr），点一下套用，套完仍可逐项改。
+
+**为什么不放进固件升级面板**：那个面板全程走 SSH（`sftpManager` 上传 + 远端跑命令），而刷 U-Boot 的时候板子上还没有系统、没有 IP、没有 SSH —— 唯一的通道就是串口。硬塞进去只会让「固件升级」这个入口的语义变得不可预测。
+
+**新增验证**：`scripts/verify-tftp.cjs`（29 项，真起 UDP 服务端 + 自写最小客户端）：未启动状态、空固件拒绝、带 `blksize`/`tsize` 的完整传输（OACK 回显、**数据确实从新端口发出**、SHA256 与源文件一致）、无选项的 512 块老客户端、文件名不符回 ERROR 1、WRQ 回 ERROR 2、`stop()` 后端口可重绑、端口被占用时报可读错误。已接入 `npm run test:features`。
+
+
+## [2.1.2] - 2026-11-13
+
+### Fixed（WebGL 终端字形被画小：找到真根因并修好，DOM 不再是唯一出路）
+
+v2.1.1 把默认后端翻回 DOM 只是绕开，没治病。这次查到病灶在 addon 拼字体串：
+
+```js
+const D = italic ? 'italic' : ''
+ctx.font = `${D} ${bold ? fontWeightBold : fontWeight} ${fontSize * dpr}px ${fontFamily}`
+```
+
+非斜体时 `D` 是空串，**模板里的那个空格还留着** —— 实际喂给 canvas 的是
+`" normal 15px 'JetBrains Mono', ..."`（前导空格）。Chromium 的 canvas font 解析器
+不 trim（CSS 解析器 trim，所以 DOM 后端没事），整串判非法后 setter **静默保留旧值**，
+也就是新建 2D 上下文的初始值 `10px sans-serif`。于是图集按 10px 光栅化，再贴进按
+`fontSize × dpr` 算出来的格子里 —— 字小、笔画细、四周空白多，肉眼就是「字距变宽」。
+
+定量（dpr 与格子都在，只有字形不跟）：
+
+| 实测 | 修复前 | 修复后 |
+|---|---|---|
+| fillText 实际 font（dpr=1） | `10px sans-serif` × 94 | `15px "JetBrains Mono", …` × 94 |
+| fillText 实际 font（dpr=2） | `10px sans-serif` × 94（不随 dpr） | `30px "JetBrains Mono", …` × 94 |
+| `lab-shell ready` 字高 / 字距（dpr=1） | 10 / 8 px | 13 / 8 px |
+| 墨迹宽 / 字距 | 0.56 ~ 0.63 | 0.75 ~ 0.88 |
+
+改法（两处，都不碰 addon 源码）：
+
+- `src/renderer/src/lib/canvasFont.ts`（新增）：`installCanvasFontShim()` 在 `main.tsx` 里
+  **任何渲染之前**包装 `CanvasRenderingContext2D.prototype.font` 的 setter —— 写入前
+  `normalizeCanvasFont()`（折空白 + trim + 清掉 `undefined`/`null`/`NaN` 残渣），写完读回
+  比一次 px 字号，不一致就退化成「字号对、字体族沿用读回值」。幂等（布尔旗标），原型
+  不可写的环境直接跳过。
+- `TerminalView.tsx`：挂 `WebglAddon` 前先跑 `isCanvasFontApplied()` 自检（离屏 canvas
+  按 addon 的拼法试写一次，读回字号必须等于配置值），不成立就不挂 WebGL、回落 DOM 并在
+  控制台说明原因。这样即使将来 addon 换拼法、或字体族名让整串再次非法，用户也只会看到
+  「用回了 DOM」，而不是「字变丑了但不知道为什么」。
+
+`scripts/verify-webgl.cjs` 新增 4 条断言守住这个回归：图集未退回 10px、字号等于
+`fontSize × dpr`、字体族来自配置、预热确有 fillText 调用。做过变异验证 —— 去掉 shim 并
+强制挂 WebGL，这 4 条会红（`fontUniq: ["10px sans-serif"]`），说明断言不是装饰。
+
+## [2.1.1] - 2026-11-13
+
+### Fixed（终端字形回归：默认后端翻回 DOM）
+
+v2.1.0 把终端默认切到 WebGL（`@xterm/addon-webgl`）。升级后反馈是「字变丑、字距像拉宽一倍」。
+逐像素量下来，**格子尺寸两条路径完全一致**（光标块都是 32×96），只有格子里的字形被画小了 ——
+所谓「字距变宽」其实是字形周围空白变多。
+
+| 度量（dpr=1，scale 4 截图列投影） | WebGL | DOM |
+|---|---|---|
+| cell pitch | 32.0 px | 33.0 px |
+| `MWMWMWMW` 墨迹宽度 | 27 / 34 / 27 / 34 … | 31 / 31 / 31 / 31 … |
+| `lab-shell ready` 细笔 | 5 ~ 7 px（笔画断开） | 24 px（饱满） |
+
+排除项：不是字号（图集收到 ` normal 22.5px`，正是 15×1.5）、不是 DPI（dpr=1 与 dpr=2 一样错、
+canvas 像素尺寸也对）、不是字体栈（裸 `Consolas` 与完整字体栈截图字节级同尺寸，44797 B 一致）、
+不是行高（`lineHeight: 1.0` 下同样瘦小）。是 addon 图集栅格化后的字形尺寸回归，应用层只能换后端绕开。
+
+- `shared/types.ts` 新增 `TerminalRenderer = 'dom' | 'webgl' | 'auto'` 与 `ExperimentalFlags.terminalRenderer`，缺省 `'dom'`。
+- `TerminalView.tsx` 渲染后端按该设置决定，`'dom'` 时根本不构造 `WebglAddon`。
+- 设置 → 实验性 新增「终端渲染后端」三段控件（DOM / 自动 / WebGL），想用 WebGL 可随时切回。
+- `mergeSettings` 改为逐键合并 `experimental` —— 老配置只有 `{ tokens: {} }`，整段覆盖会抹掉新字段默认值。
+- `scripts/verify-webgl.cjs` 扩到 3 段：默认无 canvas + 有 DOM 行、webgl 段有 canvas、软件渲染段不白屏。
+
+## [2.1.0] - 2026-11-13
+
+### Changed（客户端质感：轻 / 净 / 顺）
+
+只学壳、不学脑：不引入 AI 任务、不做上下文快照、不改 SSH 客户端的功能边界。
+
+- **设计 token 落地**：间距 5 档（4/8/12/16/24）、圆角 3 档（4/6/10）、动效 3 档（120/180/240ms）+ 单条主缓动、语义尺寸（状态栏 26 / 标题栏 38 / 左轨 248）。行高统一 24px —— 这正是「切面板时列表高度跳」的根因。全部以 CSS 变量 + Tailwind 配置的形式落地（`--duration-*` / `--ease-out-expo` / `--size-*` 与 `.panel-shell`、`.rail-w` 组件类），不碰 `:root/.light/.dark` 颜色层。
+- **重复任意值收敛**：8 处 `bottom-[26px]/top-[38px]` → `.panel-shell`，3 处 `w-[248px]` → `.rail-w`；一次性任意值不动（全收敛等于重写样式）。
+- **面板级灰度**：`experimental.tokens.<panel>` 5 个面板独立开关，设置面板新增「实验性」分区，可一键回到旧视觉；默认全关。
+- **面板切换**：`Suspense fallback` 从 `null` 换成同尺寸骨架。实测大头不是 chunk 下载（十几毫秒）而是面板取数（~300ms），原来那段是纯空白。空闲预加载保留但如实标注为非收益项（变异测试显示有无预加载耗时一致）。
+- **列表**：两个 SFTP 双栏由「截断 300 项」改为真虚拟滚动（`@tanstack/react-virtual`），1 万项目录 DOM 只有 39 行、滚动覆盖全量；会话标签 / 传输列表 / 设备发现加上限 20/200/500 并给可见提示。选中与全选语义仍基于全量。
+- **快捷键**：冲突检测改为作用域感知 —— 终端 Ctrl+F（搜索）与全局 Ctrl+F 可共存。
+- **连接状态**：新增阶段 `tcp / handshake / jump / shell`，状态栏显示在等什么。诚实边界：ssh2 把握手与认证合成一次调用，`auth` 阶段不会发出。
+- **终端渲染**：默认 WebGL（`@xterm/addon-webgl`），上下文丢失或创建失败回落 DOM；GPU 进程崩溃后自愈式落盘 `softwareRender=true`，下次启动走软件路径。
+
+### Fixed
+
+- 门禁 flaky：自起 Electron 的验证脚本用固定 `sleep(9000)`，串跑时随机红；改为轮询就绪后单跑耗时反降（xterm6 27.9s → 22.9s）。
+- `verify-xterm6` 在 WebGL 启用后两条断言假红（WebGL 不创建 `.xterm-rows`、`innerText` 为空），改为断言 `.xterm-screen` 尺寸 + 读 xterm buffer（普通构建下显式 SKIP）。
 
 ## [2.0.0] - 2026-11-12
 

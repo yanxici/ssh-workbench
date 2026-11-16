@@ -1,3 +1,4 @@
+import type * as React from 'react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   AlertTriangle,
@@ -68,7 +69,7 @@ export function CommandCenter({
   onEdit
 }: {
   onEdit: (initial: Command | null, presetGroup?: string) => void
-}): JSX.Element | null {
+}): React.JSX.Element | null {
   const open = useUiStore((s) => s.commandCenterOpen)
   const presetQuery = useUiStore((s) => s.commandCenterQuery)
   const close = useUiStore((s) => s.closeCommandCenter)
@@ -706,9 +707,9 @@ function SortChip({
 }: {
   active: boolean
   label: string
-  icon: JSX.Element
+  icon: React.JSX.Element
   onClick: () => void
-}): JSX.Element {
+}): React.JSX.Element {
   return (
     <button
       className={cn(
@@ -723,7 +724,7 @@ function SortChip({
   )
 }
 
-function Hint({ keys, label }: { keys: string; label: string }): JSX.Element {
+function Hint({ keys, label }: { keys: string; label: string }): React.JSX.Element {
   return (
     <span className="flex items-center gap-1">
       <kbd className="kbd">{keys}</kbd>

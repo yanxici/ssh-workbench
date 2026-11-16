@@ -1,3 +1,4 @@
+import type * as React from 'react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ChevronRight,
@@ -71,7 +72,7 @@ const PREFETCH_DIRS = 6
  */
 const ROW_LIMIT = 300
 
-const WORKSPACE_SPOTS: Array<{ label: string; get: (home: string) => string; icon: JSX.Element }> =
+const WORKSPACE_SPOTS: Array<{ label: string; get: (home: string) => string; icon: React.JSX.Element }> =
   [
     { label: '主目录', get: (h) => h || '/', icon: <Home size={13} /> },
     { label: '根目录', get: () => '/', icon: <HardDrive size={13} /> },
@@ -95,7 +96,7 @@ export function FileExplorer({
   session: SessionUi | null
   onOpenTransfer: () => void
   onBrowseSessions: () => void
-}): JSX.Element {
+}): React.JSX.Element {
   const [tab, setTab] = useState<'workspace' | 'fs'>('workspace')
   const [home, setHome] = useState<string>('')
   const [currentDir, setCurrentDir] = useState<string>('')
@@ -1029,7 +1030,7 @@ function ExplorerTabs({
 }: {
   tab: 'workspace' | 'fs'
   onChange: (t: 'workspace' | 'fs') => void
-}): JSX.Element {
+}): React.JSX.Element {
   const items: Array<{ key: 'workspace' | 'fs'; label: string }> = [
     { key: 'workspace', label: '工作区' },
     { key: 'fs', label: '文件系统' }

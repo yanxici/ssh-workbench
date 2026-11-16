@@ -79,6 +79,21 @@ function attrsOf(st) {
 
 const handles = new Map()
 
+/*
+ * 断线注入的计数器必须是**进程级**的，不能放进每个连接的处理闭包里。
+ * 放进去的话客户端一重连计数器就清零，故障会在新连接上再触发一次 ——
+ * 于是「断一次」变成了「每重连一次就断一次」，续传永远追不上。
+ * 真实的网络抖动是一次性事件，重连之后应当恢复。
+ */
+const dropAfter = Number(process.env.LAB_DROP_AFTER_BYTES || 0)
+const dropTimes = Number(process.env.LAB_DROP_TIMES || 1)
+const dropDir = String(process.env.LAB_DROP_DIR || 'upload')
+let dropIn = 0
+let dropOut = 0
+let dropCount = 0
+let nextIn = dropAfter
+let nextOut = dropAfter
+
 function newHandle(obj) {
   const id = crypto.randomBytes(8).toString('hex')
   handles.set(id, { ...obj, used: false })
@@ -91,6 +106,38 @@ const server = new Server({ hostKeys: [privateKey] }, (client) => {
     if (ctx.method === 'none') return ctx.reject(['password'])
     ctx.reject()
   })
+  /*
+   * 断线注入（仅验收脚本用）。
+   *
+   * 为什么不给 SFTP 的 WRITE 回一个错误码：那样应用侧看到的是「这个分块失败了」，
+   * 走的是单文件失败分支，测不到「链路整条消失」这条最真实的路径。
+   * 直接把 TCP 连接干掉，应用的 pWrite 回调永远不会回来 —— 这正是现场
+   * 「设备网络波动几秒」的样子，也是 withTimeout 能派上用场的唯一场景。
+   *
+   *   LAB_DROP_AFTER_BYTES  累计写入/读取多少字节后断一次（0=关闭，默认 0）
+   *   LAB_DROP_TIMES        断几次（默认 1）
+   *   LAB_DROP_DIR          upload | download | both（默认 upload）
+   */
+  const shouldDrop = (dir, bytes) => {
+    if (dropAfter <= 0 || dropCount >= dropTimes) return false
+    if (dropDir !== 'both' && dropDir !== dir) return false
+    if (dir === 'upload') {
+      dropIn += bytes
+      if (dropIn < nextIn) return false
+      nextIn += dropAfter
+    } else {
+      dropOut += bytes
+      if (dropOut < nextOut) return false
+      nextOut += dropAfter
+    }
+    dropCount += 1
+    console.log(`[lab-sftp] 注入断线 #${dropCount}（${dir}，已累计 ${bytes} 字节）`)
+    try {
+      client.end()
+    } catch {}
+    return true
+  }
+
   client.on('ready', () => {
     client.on('session', (accept) => {
       const session = accept()
@@ -101,7 +148,57 @@ const server = new Server({ hostKeys: [privateKey] }, (client) => {
       session.on('shell', (acceptShell) => {
         const stream = acceptShell()
         stream.write('lab-shell ready\r\n')
+        /*
+         * trzsz 模拟（仅验收脚本用）。
+         *
+         * 目的：让「远端有没有装 trzsz」这两条分支都能在真应用里跑到 ——
+         * 默认回 command not found（走没装的那条），收到 '@@TRZSZ:ON@@'
+         * 之后改成回真实格式的握手串（走传输态的那条）。
+         * 状态按 stream 存，多个会话互不影响。
+         */
+        let trzszMode = false
+        let seq = 0
         stream.on('data', (d) => {
+          const s = d.toString('utf8')
+          /*
+           * 压测用的批量输出发生器：收到 '@@PERF:<行数>:<标签>@@' 就吐 N 行
+           * 带标签的文本。真 shell 里用 `for i in $(seq N)` 也行，但伪 shell
+           * 只回显输入，回显是单行 —— 量不到「大段输出穿过过滤器」的开销。
+           */
+          const perf = /@@PERF:(\d+):([A-Za-z0-9_-]+)@@/.exec(s)
+          if (perf) {
+            const n = Math.min(20000, Number(perf[1]) || 0)
+            let buf = ''
+            for (let i = 0; i < n; i++) buf += 'L' + (i + 1) + ' PERF-TZ-' + perf[2] + '\r\n'
+            stream.write(buf)
+            return
+          }
+          /*
+           * 收到 trzsz 的 Action 帧（'#ACT:' + base64）就回一行 ack：
+           * 验收脚本据此判断「过滤器真的把回执发到远端了」，
+           * 而不是只判断本地状态变了。
+           */
+          if (s.includes('#ACT:')) {
+            stream.write('\r\nlab-saw-act\r\n')
+            return
+          }
+          if (process.env.LAB_SHELL_TRZSZ === '1') {
+            if (s.includes('@@TRZSZ:ON@@')) {
+              trzszMode = true
+              return
+            }
+            if (s.includes('trz') || s.includes('tsz')) {
+              if (trzszMode) {
+                const action = s.includes('tsz') ? 'S' : 'R'
+                seq++
+                stream.write('\r\n::TRZSZ:TRANSFER:' + action + ':1.1.6:' + (1000 + seq) + '\r\n')
+              } else {
+                const cmd = s.includes('tsz') ? 'tsz' : 'trz'
+                stream.write('\r\nbash: ' + cmd + ': command not found\r\n')
+              }
+              return
+            }
+          }
           if (process.env.LAB_SHELL_ECHO === '1') stream.write(d)
         })
         stream.on('error', () => {})
@@ -153,15 +250,22 @@ const server = new Server({ hostKeys: [privateKey] }, (client) => {
         sftp.on('OPEN', (reqid, filename, flags, attrs) => {
           try {
             const full = local(filename)
-            const parts = []
-            if (flags & OPEN_MODE.READ) parts.push(fs.constants.O_RDONLY)
-            if (flags & OPEN_MODE.WRITE) parts.push(fs.constants.O_WRONLY)
-            if (flags & OPEN_MODE.APPEND) parts.push(fs.constants.O_APPEND)
-            if (flags & OPEN_MODE.CREAT) parts.push(fs.constants.O_CREAT)
-            if (flags & OPEN_MODE.TRUNC) parts.push(fs.constants.O_TRUNC)
-            if (flags & OPEN_MODE.EXCL) parts.push(fs.constants.O_EXCL)
+            /*
+             * READ|WRITE 同时置位（SFTP 的 'r+'，续传用的就是这个）必须是 O_RDWR。
+             * 早先这里分别 push O_RDONLY 和 O_WRONLY 再按位或，O_RDONLY 是 0，
+             * 结果得到纯 O_WRONLY —— 续传前的尾部指纹比对会 EBADF 而失败，
+             * 在真服务器上根本不会出现。
+             */
+            const wantRead = !!(flags & OPEN_MODE.READ)
+            const wantWrite = !!(flags & OPEN_MODE.WRITE)
+            const base = wantRead && wantWrite ? fs.constants.O_RDWR : wantWrite ? fs.constants.O_WRONLY : fs.constants.O_RDONLY
+            let parts = base
+            if (flags & OPEN_MODE.APPEND) parts |= fs.constants.O_APPEND
+            if (flags & OPEN_MODE.CREAT) parts |= fs.constants.O_CREAT
+            if (flags & OPEN_MODE.TRUNC) parts |= fs.constants.O_TRUNC
+            if (flags & OPEN_MODE.EXCL) parts |= fs.constants.O_EXCL
             const mode = attrs && attrs.mode ? attrs.mode & 0o777 : 0o644
-            const fd = fs.openSync(full, parts.reduce((a, b) => a | b, 0) || fs.constants.O_RDONLY, mode)
+            const fd = fs.openSync(full, parts, mode)
             sftp.handle(reqid, newHandle({ fd, path: full, writable: !!(flags & OPEN_MODE.WRITE) }))
           } catch (e) {
             replyErr(sftp, reqid, e)
@@ -169,6 +273,7 @@ const server = new Server({ hostKeys: [privateKey] }, (client) => {
         })
 
         sftp.on('READ', (reqid, handle, offset, length) => {
+          if (shouldDrop('download', length)) return
           const h = handles.get(handle.toString())
           if (!h || h.fd === undefined) return sftp.status(reqid, STATUS_CODE.FAILURE)
           const buf = Buffer.allocUnsafe(length)
@@ -182,6 +287,7 @@ const server = new Server({ hostKeys: [privateKey] }, (client) => {
         })
 
         sftp.on('WRITE', (reqid, handle, offset, data) => {
+          if (shouldDrop('upload', data.length)) return
           const h = handles.get(handle.toString())
           if (!h || h.fd === undefined) return sftp.status(reqid, STATUS_CODE.FAILURE)
           try {

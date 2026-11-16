@@ -10,6 +10,7 @@ import type {
 } from '@shared/types'
 import { call } from '@/lib/ipc'
 import { uid } from '@/lib/utils'
+import { notifyTask } from '@/lib/taskNotify'
 import { useSessionStore } from './sessionStore'
 import { useToastStore } from './toastStore'
 
@@ -180,10 +181,13 @@ export const useDiagStore = create<DiagState>()((set, get) => ({
     set({ running: false, runId: null, progress: null })
     if (report) {
       set({ lastReport: report })
-      useToastStore.getState().push({
-        kind: 'success',
+      // 巡检 31 项串行跑，十几秒起步；同样走通知（失焦时升级为系统通知）
+      void notifyTask({
+        kind: 'diag',
         title: `诊断完成：${report.okCount}/${report.sectionCount} 项正常`,
-        detail: '报告已自动保存，可导出 Markdown / HTML'
+        detail: '报告已自动保存，可导出 Markdown / HTML',
+        connectionId: session.connectionId,
+        sessionId: session.id
       })
       void get().loadReports()
     }

@@ -1,3 +1,4 @@
+import type * as React from 'react'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import {
   ArrowUpCircle,
@@ -33,7 +34,7 @@ import { cn } from '@/lib/utils'
 
 /** chip 上的文案与图标 */
 function chipContent(status: UpdateStatus): {
-  icon: JSX.Element
+  icon: React.JSX.Element
   label: string
   spin?: boolean
 } {
@@ -54,7 +55,7 @@ function chipContent(status: UpdateStatus): {
   }
 }
 
-export function UpdateBadge(): JSX.Element | null {
+export function UpdateBadge(): React.JSX.Element | null {
   const status = useUpdateStore((s) => s.status)
   const panelOpen = useUpdateStore((s) => s.panelOpen)
   const setPanelOpen = useUpdateStore((s) => s.setPanelOpen)

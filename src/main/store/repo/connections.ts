@@ -60,6 +60,8 @@ export async function getConnection(id: string): Promise<Connection | undefined>
 export async function saveConnection(input: ConnectionInput): Promise<Connection> {
   const now = Date.now()
   let saved!: Connection
+  /** 本次调用是否新建了记录（决定 reuseSecretFrom 要不要生效） */
+  let isNew = false
 
   await connStore.update((list) => {
     const kind: ConnKind = input.kind === 'serial' ? 'serial' : 'ssh'
@@ -98,21 +100,49 @@ export async function saveConnection(input: ConnectionInput): Promise<Connection
       }
     }
 
+    isNew = true
     saved = { id: randomUUID(), ...base, createdAt: now, updatedAt: now }
     return [...list, saved]
   })
 
-  if (input.password !== undefined || input.passphrase !== undefined || input.proxy !== undefined) {
+  /*
+   * 另存为新设备时的凭据继承。
+   *
+   * 只在「本次真的新建了记录」时生效：更新同一条连接时，undefined 本来就表示
+   * 「保持原值」，不需要也不该跨 id 取凭据。源 id 取不到（已删除 / 换机器后
+   * 解不开）时 inherited 为空对象，行为与不带这个字段完全一致。
+   */
+  const inherited =
+    isNew && input.reuseSecretFrom && input.reuseSecretFrom !== saved.id
+      ? await getSecret(input.reuseSecretFrom)
+      : undefined
+  const inheritedAny = Boolean(
+    inherited && (inherited.password || inherited.passphrase || inherited.proxyPassword)
+  )
+
+  if (
+    input.password !== undefined ||
+    input.passphrase !== undefined ||
+    input.proxy !== undefined ||
+    inheritedAny
+  ) {
     const current = await getSecret(saved.id)
     await setSecret(saved.id, {
-      password: input.password === undefined ? current.password : input.password,
-      passphrase: input.passphrase === undefined ? current.passphrase : input.passphrase,
+      // 用户显式输入的值优先；留空（undefined）时先用原连接继承来的，再退回本记录原值
+      password:
+        input.password === undefined
+          ? (inherited?.password ?? current.password)
+          : input.password,
+      passphrase:
+        input.passphrase === undefined
+          ? (inherited?.passphrase ?? current.passphrase)
+          : input.passphrase,
       // 代理密码语义：proxy 缺失 = 取消代理（清空）；password undefined = 保持；'' = 清除；其他 = 覆盖
       proxyPassword:
         input.proxy === undefined
           ? undefined
           : input.proxy.password === undefined
-            ? current.proxyPassword
+            ? (inherited?.proxyPassword ?? current.proxyPassword)
             : input.proxy.password === ''
               ? undefined
               : input.proxy.password

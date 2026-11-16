@@ -1,3 +1,4 @@
+import type * as React from 'react'
 /**
  * 命中字符高亮：把 fuzzy 匹配出的下标包成 <mark>。
  * 命令中心与侧栏面板共用，避免两处各写一份走样。
@@ -8,10 +9,10 @@ export function Highlight({
 }: {
   text: string
   indices: number[]
-}): JSX.Element {
+}): React.JSX.Element {
   if (indices.length === 0) return <>{text}</>
   const set = new Set(indices)
-  const out: JSX.Element[] = []
+  const out: React.JSX.Element[] = []
   let buf = ''
   let bufHit = false
   const flush = (): void => {

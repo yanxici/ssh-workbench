@@ -1,6 +1,6 @@
 {
   "name": "ssh-workbench",
-  "version": "2.0.0",
+  "version": "2.1.9",
   "private": true,
   "description": "轻量级 SSH 客户端 + 嵌入式技术支持工作台",
   "author": "ssh-workbench",
@@ -31,7 +31,7 @@
     "test:ipc": "electron scripts/verify-ipc-registration.cjs",
     "test:repository": "node scripts/verify-repository-split.cjs",
     "test:docs": "node scripts/verify-docs-sync.cjs",
-    "test:features": "node scripts/verify-hostkey.cjs && node scripts/verify-upload-folder.cjs && node scripts/verify-upload-session.cjs",
+    "test:features": "node scripts/verify-hostkey.cjs && node scripts/verify-upload-folder.cjs && node scripts/verify-upload-session.cjs && node scripts/verify-tftp.cjs",
     "test:stress": "node scripts/stress-test.js && node scripts/stress-cwd.cjs",
     "test:stress:e2e": "electron scripts/stress-e2e.cjs",
     "icon": "node scripts/make-icon.cjs",
@@ -50,13 +50,30 @@
     "test:ui:stress": "node scripts/e2e-ui-sftp.cjs --stress",
     "test:verify": "node scripts/run-all-verify.cjs",
     "test:verify:list": "node scripts/run-all-verify.cjs --list",
-    "verify:prepackage": "npm run typecheck && npm run test:features && npm run test:uploadfolder && npm run test:verify && electron-vite build && node scripts/e2e-ui-sftp.cjs"
+    "verify:prepackage": "npm run typecheck && npm run test:features && npm run test:uploadfolder && npm run test:verify && electron-vite build && node scripts/e2e-ui-sftp.cjs",
+    "test:highlight": "node scripts/verify-highlight.cjs",
+    "test:highlight:e2e": "node scripts/verify-highlight-e2e.cjs",
+    "perf:highlight": "node scripts/perf-highlight.cjs",
+    "test:notify": "node scripts/verify-notify.cjs",
+    "test:notify:e2e": "node scripts/verify-notify-e2e.cjs",
+    "perf:notify": "node scripts/perf-notify.cjs",
+    "test:pane-tree": "node scripts/verify-pane-tree.cjs",
+    "test:jsonstore-race": "node scripts/verify-jsonstore-race.cjs",
+    "test:split:e2e": "node scripts/verify-split-e2e.cjs",
+    "test:trzsz": "node scripts/verify-trzsz.cjs",
+    "test:trzsz:e2e": "node scripts/verify-trzsz-e2e.cjs",
+    "perf:split": "node scripts/perf-split.cjs",
+    "perf:trzsz": "node scripts/perf-trzsz.cjs",
+    "test:vlist": "node scripts/test-vlist.cjs"
   },
   "dependencies": {
+    "@tanstack/react-virtual": "^3.14.26",
+    "@xterm/addon-webgl": "^0.18.0",
     "electron-updater": "^6.8.11",
     "iconv-lite": "^0.7.3",
     "serialport": "^13.0.0",
     "ssh2": "^1.17.0",
+    "trzsz": "^1.1.6",
     "zmodem.js": "0.1.10"
   },
   "devDependencies": {

@@ -1,3 +1,4 @@
+import type * as React from 'react'
 import { useDeferredValue, useMemo, useRef, useState } from 'react'
 import {
   ArrowDownUp,
@@ -25,6 +26,7 @@ import { useSettingsStore } from '@/stores/settingsStore'
 import { useToastStore } from '@/stores/toastStore'
 import { cn, formatRelativeTime } from '@/lib/utils'
 import { call } from '@/lib/ipc'
+import { useTokenFlag } from '@/lib/useTokenFlag'
 import { ConnTransferDialog } from './ConnTransferDialog'
 import {
   ConfirmDialog,
@@ -72,7 +74,7 @@ function BatchTagsEditor({
   connections: Connection[]
   onClose: () => void
   onConfirm: () => void
-}): JSX.Element {
+}): React.JSX.Element {
   const updateTags = useConnectionStore((s) => s.updateTags)
   const selectedConns = connections.filter((c) => selectedIds.has(c.id))
   const existingTags = Array.from(new Set(selectedConns.flatMap((c) => c.tags)))
@@ -167,7 +169,9 @@ export function ConnectionSidebar({
   onEdit
 }: {
   onEdit: (initial: Connection | null, preset?: Partial<ConnectionInput>) => void
-}): JSX.Element {
+}): React.JSX.Element {
+  /* 设计 token 灰度（阶段 1）：行高/动效收到新口径 */
+  const tokensOn = useTokenFlag('connections')
   const connections = useConnectionStore((s) => s.connections)
   const keyword = useConnectionStore((s) => s.keyword)
   const setKeyword = useConnectionStore((s) => s.setKeyword)
@@ -633,7 +637,9 @@ export function ConnectionSidebar({
                       tabIndex={0}
                       role="button"
                       className={cn(
-                        'conn-row-cv group relative cursor-default rounded-md py-1.5 pl-2 pr-1 transition-colors duration-150',
+                        tokensOn
+                          ? 'conn-row-token group relative cursor-default rounded-md py-1 pl-2 pr-1'
+                          : 'conn-row-cv group relative cursor-default rounded-md py-1.5 pl-2 pr-1 transition-colors duration-150',
                         'focus-visible:bg-hover focus-visible:outline-none',
                         /*
                          * 选中态刻意做得很轻：只留一层浅描边 + 左侧细色条。

@@ -1,3 +1,4 @@
+import type * as React from 'react'
 import {
   Archive,
   BookUser,
@@ -49,7 +50,7 @@ const MAIN_ITEMS: Array<{ view: ActivityView; label: string; icon: typeof Folder
   { view: 'tunnels', label: '端口隧道', icon: Cable }
 ]
 
-export function ActivityBar(): JSX.Element {
+export function ActivityBar(): React.JSX.Element {
   const activityView = useLayoutStore((s) => s.activityView)
   const sidebarVisible = useLayoutStore((s) => s.sidebarVisible)
   const commandRailVisible = useLayoutStore((s) => s.commandRailVisible)
@@ -131,8 +132,8 @@ export function ActivityBar(): JSX.Element {
 }
 
 /** 工具入口：悬浮出列表，避免在 48px 宽的竖条里塞二级菜单 */
-function ToolsButton({ active }: { active: boolean }): JSX.Element {
-  const items: Array<{ label: string; icon: JSX.Element; onClick: () => void }> = [
+function ToolsButton({ active }: { active: boolean }): React.JSX.Element {
+  const items: Array<{ label: string; icon: React.JSX.Element; onClick: () => void }> = [
     {
       label: '一键诊断巡检',
       icon: <Wrench size={14} />,

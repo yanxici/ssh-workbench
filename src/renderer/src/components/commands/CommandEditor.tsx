@@ -1,3 +1,4 @@
+import type * as React from 'react'
 import { useEffect, useMemo, useState } from 'react'
 import { AlertTriangle, Braces, Loader2 } from 'lucide-react'
 import type { Command, CommandInput, CommandVariable, ConnKind } from '@shared/types'
@@ -26,7 +27,7 @@ export function CommandEditor({
   /** 新建时预填分组（从分组头的 + 进入） */
   presetGroup?: string
   onClose: () => void
-}): JSX.Element {
+}): React.JSX.Element {
   const save = useCommandStore((s) => s.save)
   const commands = useCommandStore((s) => s.commands)
 

@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import type { AppSettings, ThemeMode } from '@shared/types'
 import { call } from '@/lib/ipc'
 import { getThemeVariant, type ThemeVars } from '@/theme/colorThemes'
+import { applyHighlightPrefs } from '@/lib/highlightRuntime'
 
 /** 与主进程 DEFAULT_SETTINGS 对齐的兜底值（加载完成前使用） */
 const FALLBACK: AppSettings = {
@@ -19,7 +20,9 @@ const FALLBACK: AppSettings = {
   latencyProbe: true,
   autoLog: true,
   dangerPatterns: ['rm -rf', 'mkfs', 'dd if=', 'shutdown', 'reboot', 'poweroff'],
-  strictHostKey: true
+  strictHostKey: true,
+  /* 与主进程 DEFAULT_SETTINGS 对齐：缺省全部关闭（旧视觉），终端用 DOM 渲染器 */
+  experimental: { tokens: {}, terminalRenderer: 'dom' }
 }
 
 /** 按主题模式解析当前是否为暗色 */
@@ -74,6 +77,12 @@ export const useSettingsStore = create<SettingsState>()((set) => ({
     const settings = s ?? FALLBACK
     set({ settings, loaded: true })
     applyTheme(settings.theme, settings.colorTheme)
+    /*
+     * 高亮规则在这里落地，而不是等到终端创建时再读：
+     * 设置是全局的，规则变化必须对**已存在的**终端也立刻生效 ——
+     * 把规则挂在 store 的加载/更新两处，是唯一能覆盖「先开终端、后改规则」的顺序。
+     */
+    applyHighlightPrefs(settings.outputHighlight)
 
     // 「跟随系统」时响应系统主题变化（只绑定一次）
     if (!mediaBound) {
@@ -86,10 +95,12 @@ export const useSettingsStore = create<SettingsState>()((set) => ({
   },
 
   update: async (patch) => {
-    const next = await call(window.api.settings.set(patch))
+    const raw = await window.api.settings.set(patch)
+    const next = raw.ok ? raw.data : null
     if (next) {
       set({ settings: next })
       applyTheme(next.theme, next.colorTheme)
+      applyHighlightPrefs(next.outputHighlight)
     }
   }
 }))

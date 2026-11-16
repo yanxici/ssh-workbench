@@ -6,6 +6,7 @@ import { listConnections, listHistory, listProfiles } from './repository'
 import { backupStore } from './backups'
 import { readReport } from './reports'
 import { listSessionLogs } from './sessionLogs'
+import { dialogDefaultPath, rememberDialogPick } from '../util/dialogDirs'
 
 /**
  * 诊断报告一键打包 —— 把「报告 + 会话日志 + 命令历史 + 配置备份 + 设备档案」
@@ -181,10 +182,11 @@ export async function exportBundle(
   const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')
   const res = await dialog.showSaveDialog(win as BrowserWindow, {
     title: '导出诊断打包（zip）',
-    defaultPath: `${report.connectionName}-诊断打包-${stamp}.zip`,
+    defaultPath: dialogDefaultPath('backup', `${report.connectionName}-诊断打包-${stamp}.zip`),
     filters: [{ name: 'ZIP 压缩包', extensions: ['zip'] }]
   })
   if (res.canceled || !res.filePath) return { canceled: true }
+  rememberDialogPick('backup', res.filePath, false)
 
   await fs.writeFile(res.filePath, zip)
   return { canceled: false, path: res.filePath, size: zip.length, entries: entries.length }

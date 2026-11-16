@@ -1,3 +1,4 @@
+import type * as React from 'react'
 import { useState, type ReactNode } from 'react'
 import { ChevronDown, ChevronRight } from 'lucide-react'
 import { cn } from '@/lib/utils'
@@ -44,7 +45,7 @@ export function Section({
   hint?: string
   defaultOpen?: boolean
   children: ReactNode
-}): JSX.Element {
+}): React.JSX.Element {
   const [open, setOpen] = useState(() => readOpenSections()[id] ?? defaultOpen)
 
   const toggle = (): void => {
@@ -82,7 +83,7 @@ export function Row({
   label: string
   hint?: string
   children: ReactNode
-}): JSX.Element {
+}): React.JSX.Element {
   return (
     <div className="flex items-start justify-between gap-3">
       <div className="min-w-0 flex-1">
@@ -104,7 +105,7 @@ export function Segmented<T extends string>({
   value: T
   options: Array<{ value: T; label: string; icon?: ReactNode }>
   onChange: (next: T) => void
-}): JSX.Element {
+}): React.JSX.Element {
   return (
     <div className="flex flex-wrap justify-end gap-1">
       {options.map((opt) => (

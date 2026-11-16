@@ -1,5 +1,41 @@
+import type * as React from 'react'
 import { createElement } from 'react'
-import * as Lucide from 'lucide-react'
+import {
+  Terminal,
+  SquareTerminal,
+  Info,
+  Cpu,
+  MemoryStick,
+  HardDrive,
+  Network,
+  Wifi,
+  Globe,
+  Router,
+  Plug,
+  Cable,
+  Activity,
+  Gauge,
+  ListTree,
+  FileText,
+  Search,
+  Bug,
+  Thermometer,
+  Microchip,
+  Zap,
+  Rocket,
+  RefreshCw,
+  Power,
+  Trash2,
+  ServerCog,
+  Layers,
+  Clock,
+  Timer,
+  Shield,
+  Wrench,
+  Settings2,
+  Play,
+  Bookmark
+} from 'lucide-react'
 import type { LucideProps } from 'lucide-react'
 
 /**
@@ -46,7 +82,42 @@ export const COMMAND_ICONS = [
 export type CommandIconName = (typeof COMMAND_ICONS)[number]
 
 /** lucide 图标名 -> 组件 */
-const REGISTRY = Lucide as unknown as Record<string, React.ComponentType<LucideProps> | undefined>
+const REGISTRY: Record<string, React.ComponentType<LucideProps> | undefined> = {
+  Terminal,
+  SquareTerminal,
+  Info,
+  Cpu,
+  MemoryStick,
+  HardDrive,
+  Network,
+  Wifi,
+  Globe,
+  Router,
+  Plug,
+  Cable,
+  Activity,
+  Gauge,
+  ListTree,
+  FileText,
+  Search,
+  Bug,
+  Thermometer,
+  Microchip,
+  Zap,
+  Rocket,
+  RefreshCw,
+  Power,
+  Trash2,
+  ServerCog,
+  Layers,
+  Clock,
+  Timer,
+  Shield,
+  Wrench,
+  Settings2,
+  Play,
+  Bookmark
+}
 
 export function DynamicIcon({
   name,
@@ -58,8 +129,8 @@ export function DynamicIcon({
   size?: number
   className?: string
   strokeWidth?: number
-}): JSX.Element {
-  const Cmp = (name ? REGISTRY[name] : undefined) ?? Lucide.Terminal
+}): React.JSX.Element {
+  const Cmp = (name ? REGISTRY[name] : undefined) ?? Terminal
   return createElement(Cmp, { size, className, strokeWidth: strokeWidth ?? 1.8 })
 }
 

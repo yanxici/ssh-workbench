@@ -1,3 +1,4 @@
+import type * as React from 'react'
 import { useEffect, useRef, useState, type DragEvent } from 'react'
 import { installErrorReporter } from '@/lib/errorReporter'
 import { lazy, Suspense } from 'react'
@@ -6,6 +7,13 @@ import { useSettingsStore } from '@/stores/settingsStore'
 import { useConnectionStore } from '@/stores/connectionStore'
 import { useCommandStore } from '@/stores/commandStore'
 import { feedZmodem, isZmodemAttached } from '@/lib/zmodem'
+import { clearSession as clearHighlight, writeSessionData } from '@/lib/highlightRuntime'
+import {
+  flashSession,
+  noteSessionOutput,
+  startHeuristicSweep,
+  stopHeuristicSweep
+} from '@/lib/taskNotify'
 import { terminalRegistry, useSessionStore } from '@/stores/sessionStore'
 import { useLayoutStore } from '@/stores/layoutStore'
 import { runCommand } from '@/stores/executionStore'
@@ -32,12 +40,16 @@ import { useFirmwareStore } from '@/stores/firmwareStore'
 import { useDiscoveryStore } from '@/stores/discoveryStore'
 import { useBackupStore } from '@/stores/backupStore'
 import { useUpdateStore } from '@/stores/updateStore'
+import { useTftpStore } from '@/stores/tftpStore'
 import { useUiStore } from '@/stores/uiStore'
 import { matchShortcut, matchShortcutIgnoringShift, resolveShortcuts } from '@/lib/shortcuts'
 import { isCommandDrag, readDraggedCommandId, stripDragPayload } from '@/lib/commandDrag'
 import { SettingsPanel } from '@/components/settings/SettingsPanel'
 import { DangerConfirmDialog, VariablePromptDialog } from '@/components/execution/ExecutionDialogs'
 import { ToastHost } from '@/components/ui'
+import { useSplitStore } from '@/stores/splitStore'
+import { useTrzszStore } from '@/stores/trzszStore'
+import { layoutPaneTree, leafIds, neighbor } from '@/lib/paneTree'
 
 /**
  * 重量级功能面板改为按需加载。
@@ -47,6 +59,16 @@ import { ToastHost } from '@/components/ui'
  * 注意：挂载条件必须与面板自身的守卫一致，否则会破坏它们首次打开时的
  * 数据加载副作用（如 diag 的 loadSections）。
  */
+/**
+ * 面板 chunk 的空闲预加载与骨架兜底（阶段 2）。
+ *
+ * lazy() 本身不变 —— 它负责「按需拆包」；本阶段补的是「切换时不该白屏」：
+ *   - 启动后空闲时把其余面板的 chunk 逐步拉下来（prefetchPanelsIdle）；
+ *   - 真没加载完时才用 PanelSkeleton 兜底，骨架尺寸与真实面板一致。
+ */
+import { PanelSkeleton } from './components/panels/PanelSkeleton'
+import { panelIdFor, prefetchPanelsIdle } from './lib/panelPrefetch'
+
 const FileManagerPanel = lazy(() =>
   import('@/components/files/FileManagerPanel').then((m) => ({ default: m.FileManagerPanel }))
 )
@@ -73,6 +95,29 @@ const BackupPanel = lazy(() =>
 )
 
 /**
+ * 把焦点移到当前分屏格的相邻格。
+ *
+ * 完全没有分屏时返回 false —— 调用方据此决定**不吃掉**这次按键：
+ * Ctrl+Alt+←/→ 在没有分屏的终端里本来就是「按词移动光标」的常见绑定，
+ * 单格时拦下来会莫名其妙没反应。
+ * 相邻格的计算放在 paneTree 里按矩形算，不读 DOM rect ——
+ * 隐藏标签 display:none 时量不到尺寸，读 DOM 会立刻退化。
+ */
+function focusSiblingPane(dir: 'left' | 'right' | 'up' | 'down'): boolean {
+  const { activeId, setActive } = useSessionStore.getState()
+  if (!activeId) return false
+  const { trees } = useSplitStore.getState()
+  for (const node of Object.values(trees)) {
+    if (!leafIds(node).includes(activeId)) continue
+    const target = neighbor(layoutPaneTree(node).rects, activeId, dir)
+    if (!target) return false
+    setActive(target)
+    return true
+  }
+  return false
+}
+
+/**
  * 应用外壳。
  *
  * 新版结构（严格按视觉规范落地）：
@@ -85,7 +130,7 @@ const BackupPanel = lazy(() =>
  * 终端宽了但「边看主机名边点命令」要来回切视图。现在左侧只留一个可切换的
  * 导航栏，命令栏常驻右侧 —— 两者本来就是并行信息。
  */
-export function App(): JSX.Element {
+export function App(): React.JSX.Element {
   // 全局错误上报只需装一次；放在最外层组件的挂载期
   useEffect(() => {
     installErrorReporter()
@@ -114,6 +159,46 @@ export function App(): JSX.Element {
   const firmwareOpen = useFirmwareStore((s) => s.panelOpen)
   const discoveryOpen = useDiscoveryStore((s) => s.panelOpen)
   const backupOpen = useBackupStore((s) => s.panelOpen)
+  /*
+   * 骨架标题：从「当前打开的面板」反推，让兜底时不出现「加载中…」这种无信息文案。
+   * 用 panelIdFor 而不是自己判断顺序，保证与下面的挂载顺序是同一份真相。
+   */
+  const openMap = {
+    sftp: sftpOpen,
+    diag: diagOpen,
+    batch: batchOpen,
+    profile: profileOpen,
+    metrics: metricsOpen,
+    firmware: firmwareOpen,
+    discovery: discoveryOpen,
+    backup: backupOpen
+  }
+  const currentPanel = panelIdFor(openMap)
+  const PANEL_TITLES: Record<string, string> = {
+    sftp: '文件',
+    diag: '一键诊断巡检',
+    batch: '批量执行',
+    profile: '客户 / 设备档案',
+    metrics: '资源仪表盘',
+    firmware: '固件升级助手',
+    discovery: '设备发现',
+    backup: '配置备份对比'
+  }
+  const panelSkeletonTitle = currentPanel ? PANEL_TITLES[currentPanel] : undefined
+
+  /*
+   * 空闲预加载：启动后把尚未加载的面板 chunk 逐步拉下来，并排除当前面板
+   * （它正在加载，不该再排一次队）。切换面板时重跑一次，把「刚用的这个」排除掉。
+   *
+   * 依赖 currentPanel：用户切面板说明带宽/CPU 该优先给这个新面板，
+   * 预加载队列要重新排。cancel 在清理里调用，避免多条队列并行。
+   */
+  useEffect(() => {
+    const handle = prefetchPanelsIdle(currentPanel)
+    return () => handle.cancel()
+  }, [currentPanel])
+
+
 
   const connEditorOpen = useUiStore((s) => s.connEditorOpen)
   const editingConn = useUiStore((s) => s.editingConn)
@@ -186,6 +271,29 @@ export function App(): JSX.Element {
     }, 300)
   }, [settings])
 
+  /* ---------- 分屏树：会话连上后按连接恢复，会话消失后摘格 ---------- */
+  useEffect(() => {
+    /*
+     * 两件事合在一个 effect 里，因为它们看的是同一份数据（会话列表）：
+     *
+     *   reconcile   会话被关掉（断线后手动关、批量执行后清理）时，
+     *               树里留下的空叶子要摘掉；否则那一格永远是一块黑。
+     *               它自己判「有没有变化」，没变化直接 return，不会触发重渲染。
+     *
+     *   restoreFor  会话进入 connected 才有必要补开 shell；
+     *               restoreSessions 关掉时不恢复 —— 用户的意思就是「别记账」。
+     */
+    useSplitStore.getState().reconcile()
+    if (!settings?.restoreSessions) return
+    const layout = settings.splitLayout
+    if (!layout || Object.keys(layout).length === 0) return
+    for (const s of sessions) {
+      if (s.status !== 'connected') continue
+      if (!layout[s.connectionId]) continue
+      useSplitStore.getState().restoreFor(s.id)
+    }
+  }, [sessions, settings?.restoreSessions, settings?.splitLayout])
+
   /* ---------- 退出时保存打开的会话列表 ---------- */
   useEffect(() => {
     if (!settings.restoreSessions) return
@@ -210,9 +318,27 @@ export function App(): JSX.Element {
     return () => window.removeEventListener('beforeunload', handleBeforeUnload)
   }, [sessions, settings.restoreSessions])
 
+  /*
+   * 启发式通知的巡检定时器。
+   *
+   * 挂在 mounted 上而不是跟设置走：定时器内部每轮自己读一次偏好，
+   * 关掉启发式时那个 tick 直接 return —— 比"开关变化时启停定时器"少一条
+   * 容易漏写的同步路径（比如用户从设置面板里关掉，这里没收到通知）。
+   */
+  useEffect(() => {
+    startHeuristicSweep()
+    return () => stopHeuristicSweep()
+  }, [])
+
   /* ---------- 主进程事件 -> 终端写入 / 会话状态 ---------- */
   useEffect(() => {
     const offData = window.api.on.sessionData(({ sessionId, data, raw }) => {
+      /*
+       * 先记账再写终端：启发式"终端静默即疑似结束"靠这个时间戳判定。
+       * 放在最前面是因为 ZMODEM 分支会 return —— 传输期间的字节同样说明
+       * "设备还活着、还在干活"，不该被当成静默。
+       */
+      noteSessionOutput(sessionId)
       // ZMODEM 的 Sentry 挂在每个会话上（见 ensureZmodem），
       // 它的 to_terminal 负责把「非协议字节」写进终端；
       // 因此这里只把原始字节交给 Sentry，不再直接写终端，避免重复输出。
@@ -220,10 +346,23 @@ export function App(): JSX.Element {
         feedZmodem(sessionId, raw, data)
         return
       }
-      terminalRegistry.get(sessionId)?.term.write(data)
+      /*
+       * 走 writeSessionData 而不是直接 term.write：
+       * 它内部先跑高亮规则（剥 ANSI、切行、匹配），命中行再挂 xterm 装饰，
+       * 最后统一写终端。写与染色共用同一次 write 的回调，marker 偏移才不会错行。
+       */
+      writeSessionData(sessionId, terminalRegistry.get(sessionId)?.term, data)
     })
-    const offStatus = window.api.on.sessionStatus(({ sessionId, status, error }) => {
-      useSessionStore.getState().updateStatus(sessionId, status, error)
+    const offStatus = window.api.on.sessionStatus(({ sessionId, status, error, phase }) => {
+      useSessionStore.getState().updateStatus(sessionId, status, error, phase)
+      /*
+       * 断开时清掉该会话的染色。
+       *
+       * 断线遮罩是半透明的（bg-app/88），底下的染色行会透出来 ——
+       * 用户看到的是「已经断了，还在报错」，实际上那些红行是断之前的历史输出。
+       * 重连成功后的新行会照常重新染色。
+       */
+      if (status === 'disconnected' || status === 'error') clearHighlight(sessionId)
     })
     const offLatency = window.api.on.sessionLatency(({ sessionId, ms }) => {
       useSessionStore.getState().updateLatency(sessionId, ms)
@@ -250,6 +389,10 @@ export function App(): JSX.Element {
     const offDiscover = window.api.on.discoverProgress((e) => {
       useDiscoveryStore.getState().applyProgress(e)
     })
+    // 内置 TFTP 服务端日志：串口刷机引导条靠它显示 RRQ / 重传 / 完成
+    const offTftpLog = window.api.on.tftpLog((e) => {
+      useTftpStore.getState().applyLog(e)
+    })
     // SFTP 上传/下载进度：这是进度条的数据入口，缺失时任务永远停在 pending
     const offTransfer = window.api.on.transferProgress((e) => {
       useSftpStore.getState().applyProgress(e)
@@ -257,6 +400,39 @@ export function App(): JSX.Element {
     // 应用更新状态：主进程每次推全量快照，这里直接覆盖
     const offUpdate = window.api.on.updateStatus((e) => {
       useUpdateStore.getState().applyEvent(e)
+    })
+    /*
+     * 用户点了系统通知：主进程已经把窗口提到前台，这里只做两件事 ——
+     * 切到那个会话，并在标签上闪一下。
+     *
+     * 闪一下不是装饰：窗口被提到前台时用户的眼睛还在操作中心那一侧，
+     * 切标签只是"内容变了"，闪一下才是"就是这一台"。
+     */
+    const offNotifyClick = window.api.on.notifyClick(({ sessionId }) => {
+      useSessionStore.getState().setActive(sessionId)
+      flashSession(sessionId)
+    })
+    /*
+     * trzsz 传输状态：只喂状态条。
+     *
+     * 进度条本身不在这里 —— 它是普通终端文本，主进程已经把 writeToTerminal 的内容
+     * 混进会话数据下发了（回滚、搜索、录制都能看到它）。这条通道只送「有没有在传、
+     * 传哪个文件、多少」，避免渲染层再去解析那串带 \r 重绘的文本。
+     */
+    const offTrzszState = window.api.on.trzszState(({ sessionId, ...state }) => {
+      useTrzszStore.getState().apply(sessionId, state)
+      /*
+       * 远端没装 trz/tsz：只在真的尝试过之后才提示（notice 由主进程判定，
+       * 依据是 shell 报 command not found 或 uploadFiles 三秒没起来）。
+       * 不主动探测是有意的 —— 每连一台机器多半秒，换一条几乎用不到的提示，不划算。
+       */
+      if (state.notice === 'no-remote-trz') {
+        useToastStore.getState().push({
+          kind: 'warning',
+          title: '远端没有 trz / tsz',
+          detail: '这台机器的 trzsz 没装或不在 PATH 上：apt install trzsz（Debian/Ubuntu）或 brew install trzsz'
+        })
+      }
     })
     return () => {
       offData()
@@ -269,8 +445,11 @@ export function App(): JSX.Element {
       offMetrics()
       offFwLog()
       offDiscover()
+      offTftpLog()
       offTransfer()
       offUpdate()
+      offNotifyClick()
+      offTrzszState()
     }
   }, [])
 
@@ -300,6 +479,14 @@ export function App(): JSX.Element {
         consume()
         // Ctrl+Alt+B：折叠/展开右侧命令栏（与侧边栏分开，各管一块）
         useLayoutStore.getState().toggleCommandRail()
+      } else if (matchShortcut(e, map.paneLeft) && focusSiblingPane('left')) {
+        consume()
+      } else if (matchShortcut(e, map.paneRight) && focusSiblingPane('right')) {
+        consume()
+      } else if (matchShortcut(e, map.paneUp) && focusSiblingPane('up')) {
+        consume()
+      } else if (matchShortcut(e, map.paneDown) && focusSiblingPane('down')) {
+        consume()
       } else if (matchShortcut(e, map.nextTab)) {
         consume()
         useSessionStore.getState().cycle(e.shiftKey ? -1 : 1)
@@ -318,8 +505,13 @@ export function App(): JSX.Element {
         if (current) openTerminal(current)
       } else if (matchShortcut(e, map.closeTab)) {
         consume()
-        const { activeId: current, close } = useSessionStore.getState()
-        if (current) close(current)
+        /*
+         * 走 splitStore.closePane：有分屏时只关焦点那一格（树收缩），
+         * 没分屏时它内部直接 close(id)。用户按 Ctrl+Shift+W 想看的是
+         * 「关掉我正在看的这个」，而不是「连带另三格一起关」。
+         */
+        const { activeId: current } = useSessionStore.getState()
+        if (current) useSplitStore.getState().closePane(current)
       }
     }
     window.addEventListener('keydown', onKey, { capture: true })
@@ -434,8 +626,17 @@ export function App(): JSX.Element {
         presetGroup={cmdPresetGroup}
         onClose={() => setCmdEditorOpen(false)}
       />
-      {/* 按需加载的功能面板：只有对应开关打开时才挂载并拉取 chunk */}
-      <Suspense fallback={null}>
+      {/*
+        * 按需加载的功能面板：只有对应开关打开时才挂载并拉取 chunk。
+        *
+        * fallback 从 null 换成了 PanelSkeleton：null 会让「首次切换」直接白屏，
+        * 而白屏正是本阶段要消灭的现象。骨架只在预加载没赶上时才出现。
+        */}
+      <div
+        data-panel-current={currentPanel ?? ''}
+        className="contents"
+      >
+      <Suspense fallback={<PanelSkeleton title={panelSkeletonTitle} />}>
         {sftpOpen && <FileManagerPanel />}
         {diagOpen && <DiagnosticsPanel />}
         {batchOpen && <BatchPanel />}
@@ -445,6 +646,7 @@ export function App(): JSX.Element {
         {discoveryOpen && <DiscoveryPanel />}
         {backupOpen && <BackupPanel />}
       </Suspense>
+      </div>
       {editing && (
         <RemoteEditorDialog
           path={editing.path}
@@ -479,6 +681,9 @@ if (__ZM_TEST__ && typeof window !== 'undefined') {
       ui: useUiStore,
       layout: useLayoutStore
     },
+    /* 终端实例注册表：让验证脚本能读到 xterm 的 buffer 文本。
+       仅在 ZM_TEST 构建里挂载，生产构建没有这个全局。 */
+    terminals: terminalRegistry,
     setters: {
       sftpSet: (v: boolean) => useSftpStore.setState({ open: v }),
       diagSet: (v: boolean) => useDiagStore.setState({ panelOpen: v }),

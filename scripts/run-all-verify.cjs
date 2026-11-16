@@ -24,11 +24,23 @@ const SCRIPTS = path.join(ROOT, 'scripts')
 /** 已知在改动前就失败的脚本（见 AGENTS.md 2.5），默认不纳入门禁 */
 const KNOWN_FAIL = new Set(['verify-cdsync.cjs', 'verify-theme.cjs', 'verify-zmodem.cjs'])
 
-/** 必须在 Electron 里跑的脚本（用到 app / BrowserWindow / ipcMain） */
+/**
+ * 必须在 Electron 里跑的脚本（用到 app / BrowserWindow / ipcMain）。
+ *
+ * 只用 CDP 驱动、自己 spawn 应用的那些 e2e（xterm6 / theme-tw4 / design-tokens /
+ * experimental-flags / panel-switch / conn-phase / webgl / highlight-e2e /
+ * notify-e2e / split-e2e / trzsz-e2e）**不在此列**：它们不需要 electron 模块，
+ * 只用全局 fetch + WebSocket 连 CDP，而本仓是 Electron 33（内置 Node 20），
+ * 没有全局 WebSocket（Node 21+ 才有）——用 Electron 跑会直接
+ * `ReferenceError: WebSocket is not defined`。交给裸 node（Node 24）跑。 */
 const NEEDS_ELECTRON = new Set([
   'verify-ipc-registration.cjs',
   'verify-zmodem-e2e.cjs',
   'verify-zmodem-renderer.cjs',
+  // clipboard 模块只在 Electron 里存在，脚本内部会自己重开一次
+  'verify-clipboard.cjs',
+  // 快捷键冲突的作用域感知（阶段 4）
+  'verify-shortcut-scope.cjs',
   // 本地专用（.gitignore 忽略，只在有公司设备环境时存在），但运行器是按目录扫
   // 脚本的 —— 机器上有这个文件就会被收录。它 require('electron') 取 app.whenReady，
   // 用裸 node 跑会直接 `Cannot read properties of undefined (reading 'whenReady')`。

@@ -1,3 +1,4 @@
+import type * as React from 'react'
 import { useEffect, useRef, useState } from 'react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
@@ -29,7 +30,7 @@ export function LogPlayerDialog({
 }: {
   log: SessionLogFile
   onClose: () => void
-}): JSX.Element {
+}): React.JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<Terminal | null>(null)
   const eventsRef = useRef<CastEvent[]>([])

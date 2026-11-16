@@ -1,3 +1,4 @@
+import type * as React from 'react'
 import { useEffect, useState } from 'react'
 import { FolderOpen } from 'lucide-react'
 import { useSettingsStore } from '@/stores/settingsStore'
@@ -8,7 +9,10 @@ import { BehaviorSection } from './BehaviorSection'
 import { DangerSection } from './DangerSection'
 import { ErrorLogSection } from './ErrorLogSection'
 import { KnownHostsSection } from './KnownHostsSection'
+import { ExperimentalSection } from './ExperimentalSection'
 import { LayoutSection } from './LayoutSection'
+import { NotifySection } from './NotifySection'
+import { OutputHighlightSection } from './OutputHighlightSection'
 import { Section } from './sectionUi'
 import { ShortcutSection } from './ShortcutSection'
 import { TerminalSection } from './TerminalSection'
@@ -31,7 +35,7 @@ export function SettingsPanel({
 }: {
   open: boolean
   onClose: () => void
-}): JSX.Element {
+}): React.JSX.Element {
   const settings = useSettingsStore((s) => s.settings)
   const [paths, setPaths] = useState<{ dataDir: string; userData: string } | null>(null)
 
@@ -60,6 +64,27 @@ export function SettingsPanel({
         <TerminalSection />
       </Section>
 
+      {/*
+        * 输出高亮单独开一区，而且默认展开：这是「改一条规则马上就能看到效果」的功能，
+        * 藏进折叠区之后，用户根本不知道它存在 —— 而它恰恰是最容易被感知的能力。
+        */}
+      <Section id="highlight" title="输出高亮" hint="按关键词给终端输出染色（行级）" defaultOpen>
+        <OutputHighlightSection />
+      </Section>
+
+      {/*
+        * 通知也默认展开。默认值里 system=true、heuristic=false 是一套"宁可少弹、
+        * 但长任务必须告诉我"的组合，用户得先看见这四个开关才知道自己可以调。
+        */}
+      <Section
+        id="notify"
+        title="通知"
+        hint="任务完成提示 / 系统通知 / 提示音 / 疑似完成"
+        defaultOpen
+      >
+        <NotifySection />
+      </Section>
+
       <Section
         id="behavior"
         title="行为"
@@ -74,6 +99,14 @@ export function SettingsPanel({
         hint="拖动侧栏右侧的分隔条即可调整；双击分隔条恢复默认"
       >
         <LayoutSection />
+      </Section>
+
+      <Section
+        id="experimental"
+        title="实验性（设计 token 灰度）"
+        hint="逐个面板启用新的间距 / 行高 / 动效规范，可随时全部关闭回到旧视觉"
+      >
+        <ExperimentalSection />
       </Section>
 
       <Section id="shortcuts" title="快捷键" hint="点击键位进入录制">

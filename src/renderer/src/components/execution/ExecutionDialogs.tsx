@@ -1,3 +1,4 @@
+import type * as React from 'react'
 import { AlertTriangle, Braces, Send } from 'lucide-react'
 import { activeSession } from '@/stores/sessionStore'
 import { renderTemplate, useExecutionStore } from '@/stores/executionStore'
@@ -10,7 +11,7 @@ import { isImeComposing } from '@/lib/ime'
  * 2. DangerConfirmDialog —— 危险命令二次确认
  */
 
-export function VariablePromptDialog(): JSX.Element | null {
+export function VariablePromptDialog(): React.JSX.Element | null {
   const pending = useExecutionStore((s) => s.pending)
   const values = useExecutionStore((s) => s.pendingValues)
   const setValue = useExecutionStore((s) => s.setPendingValue)
@@ -93,7 +94,7 @@ export function VariablePromptDialog(): JSX.Element | null {
   )
 }
 
-export function DangerConfirmDialog(): JSX.Element | null {
+export function DangerConfirmDialog(): React.JSX.Element | null {
   const danger = useExecutionStore((s) => s.danger)
   const confirm = useExecutionStore((s) => s.confirmDanger)
   const cancel = useExecutionStore((s) => s.cancelDanger)

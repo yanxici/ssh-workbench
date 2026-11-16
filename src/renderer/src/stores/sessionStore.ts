@@ -1,13 +1,17 @@
 import { useMemo } from 'react'
 import { create } from 'zustand'
-import type { ConnKind, ConnStatus, Connection, ReconnectEvent } from '@shared/types'
+import type { ConnKind, ConnPhase, ConnStatus, Connection, ReconnectEvent } from '@shared/types'
 import { connectionTarget } from '@shared/serialDisplay'
 import type { Terminal } from '@xterm/xterm'
 import type { FitAddon } from '@xterm/addon-fit'
 import type { SearchAddon } from '@xterm/addon-search'
 import { uid } from '@/lib/utils'
+import { isNestedPane } from '@/lib/paneRegistry'
 import { useToastStore } from './toastStore'
 import { forgetCwd } from './cwdStore'
+import { forgetSession as forgetHighlight } from '@/lib/highlightRuntime'
+import { forgetNotifySession } from '@/lib/taskNotify'
+import { useTrzszStore } from './trzszStore'
 
 /**
  * 终端实例注册表：TerminalView 挂载时注册，卸载时注销。
@@ -41,6 +45,8 @@ export interface SessionUi {
   target: string
   title: string
   status: ConnStatus
+  /** 连接阶段（仅 connecting 时有值），用于状态栏分阶段提示 */
+  phase?: ConnPhase
   error?: string
   latencyMs?: number
   cols: number
@@ -93,7 +99,7 @@ interface SessionState {
   closeOthers: (id: string) => void
   setActive: (id: string) => void
   setTitle: (id: string, title: string) => void
-  updateStatus: (id: string, status: ConnStatus, error?: string) => void
+  updateStatus: (id: string, status: ConnStatus, error?: string, phase?: ConnPhase) => void
   updateLatency: (id: string, ms: number) => void
   setSize: (id: string, cols: number, rows: number) => void
   reorder: (from: number, to: number) => void
@@ -255,6 +261,14 @@ export const useSessionStore = create<SessionState>()((set, get) => ({
     // 会话用完即弃：cwd / 输入追踪器 / home 缓存都跟着走，否则 id 复用
     // （重连沿用同一个 id）时会带着上一台机器的目录跳过去。
     forgetCwd(id)
+    // 高亮同理：半行缓冲 + 已挂的装饰都必须跟着会话一起消失，否则 id 复用
+    // 会把上一台机器的半行拼到新会话的第一行前面，染色位置全错。
+    forgetHighlight(id)
+    // 关会话同时清 trzsz 状态：id 会被重连复用，留着会让新会话一上线就显示"传输中"
+    useTrzszStore.getState().clear(id)
+    // 静默记账同理：id 若被复用（重连沿用），残留的 lastOutputAt 会让新会话
+    // 一上线就被判成"静默很久"，凭空收到一条疑似完成通知。
+    forgetNotifySession(id)
   },
 
   closeOthers: (id) => {
@@ -273,9 +287,12 @@ export const useSessionStore = create<SessionState>()((set, get) => ({
       sessions: s.sessions.map((x) => (x.id === id ? { ...x, title } : x))
     })),
 
-  updateStatus: (id, status, error) =>
+  updateStatus: (id, status, error, phase) =>
     set((s) => ({
-      sessions: s.sessions.map((x) => (x.id === id ? { ...x, status, error } : x))
+      sessions: s.sessions.map((x) =>
+        // 只有 connecting 阶段保留 phase：连上之后它就不再有意义，留着会让状态栏显示残留文案
+        (x.id === id ? { ...x, status, error, phase: status === 'connecting' ? phase : undefined } : x)
+      )
     })),
 
   /**
@@ -322,9 +339,19 @@ export const useSessionStore = create<SessionState>()((set, get) => ({
 
   cycle: (delta) => {
     const { sessions, activeId } = get()
-    if (sessions.length < 2) return
-    const idx = sessions.findIndex((s) => s.id === activeId)
-    const next = sessions[(idx + delta + sessions.length) % sessions.length]
+    /*
+     * 跳过嵌套分屏格。
+     *
+     * Ctrl+Tab 是「切标签」，而同一屏里的格子不是标签 —— 把它们也算进来，
+     * 用户在一个分屏标签里按 Ctrl+Tab 会看到焦点在两格之间来回横跳、
+     * 标签条毫无变化，像卡住了。真正的「标签」= 不属于任何树（或是树主人）。
+     * 分屏内部的焦点移动由 Ctrl+Alt+方向键负责。
+     */
+    const tabs = sessions.filter((s) => !isNestedPane(s.id))
+    if (tabs.length < 2) return
+    const idx = tabs.findIndex((s) => s.id === activeId)
+    const base = idx >= 0 ? idx : 0
+    const next = tabs[(base + delta + tabs.length) % tabs.length]
     if (next) set({ activeId: next.id })
   }
 }))

@@ -1,3 +1,4 @@
+import type * as React from 'react'
 import { useEffect, useMemo, useState } from 'react'
 import { AlertTriangle, FileDown, FileUp, Loader2 } from 'lucide-react'
 import type { ConnImportMode, ConnImportPreview } from '@shared/types'
@@ -19,7 +20,7 @@ export function ConnTransferDialog({
 }: {
   mode: 'export' | 'import' | null
   onClose: () => void
-}): JSX.Element | null {
+}): React.JSX.Element | null {
   if (mode === 'export') return <ExportDialog onClose={onClose} />
   if (mode === 'import') return <ImportDialog onClose={onClose} />
   return null
@@ -29,7 +30,7 @@ export function ConnTransferDialog({
  *  导出
  * ------------------------------------------------------------------ */
 
-function ExportDialog({ onClose }: { onClose: () => void }): JSX.Element {
+function ExportDialog({ onClose }: { onClose: () => void }): React.JSX.Element {
   const connections = useConnectionStore((s) => s.connections)
   // 空分组也要能选：用户可能刚建好分组就想把别的组导进去
   const savedGroups = useSettingsStore((s) => s.settings.connectionGroups)
@@ -197,7 +198,7 @@ function ExportDialog({ onClose }: { onClose: () => void }): JSX.Element {
  *  导入
  * ------------------------------------------------------------------ */
 
-function ImportDialog({ onClose }: { onClose: () => void }): JSX.Element | null {
+function ImportDialog({ onClose }: { onClose: () => void }): React.JSX.Element | null {
   const load = useConnectionStore((s) => s.load)
   const [file, setFile] = useState<{ path: string; encrypted: boolean } | null>(null)
   const [pass, setPass] = useState('')
@@ -393,7 +394,7 @@ function ImportDialog({ onClose }: { onClose: () => void }): JSX.Element | null 
   )
 }
 
-function Stat({ label, value }: { label: string; value: number }): JSX.Element {
+function Stat({ label, value }: { label: string; value: number }): React.JSX.Element {
   return (
     <div className="rounded-md border border-edge-soft bg-app py-2">
       <div className="text-base font-semibold text-ink">{value}</div>

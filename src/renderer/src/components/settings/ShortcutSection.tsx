@@ -1,7 +1,8 @@
+import type * as React from 'react'
 import { useState } from 'react'
 import { AlertTriangle, Keyboard, RotateCcw } from 'lucide-react'
 import type { ShortcutAction } from '@shared/types'
-import { SHORTCUT_ACTIONS, resolveShortcuts } from '@/lib/shortcuts'
+import { SHORTCUT_ACTIONS, SHORTCUT_SCOPE, resolveShortcuts } from '@/lib/shortcuts'
 import { detectShortcutConflicts, checkSingleConflict } from '@/lib/shortcutConflict'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { cn } from '@/lib/utils'
@@ -13,7 +14,7 @@ import { Modal } from '@/components/ui'
  * 冲突处理是这里的重点：录入一个已被占用的组合键时不能直接覆盖，
  * 先弹窗告诉用户「被谁占了」，由他决定取消还是强制保存。
  */
-export function ShortcutSection(): JSX.Element {
+export function ShortcutSection(): React.JSX.Element {
   const settings = useSettingsStore((s) => s.settings)
   const update = useSettingsStore((s) => s.update)
   const current = resolveShortcuts(settings.shortcuts)
@@ -52,7 +53,13 @@ export function ShortcutSection(): JSX.Element {
   const commit = (action: ShortcutAction, combo: string | undefined): void => {
     // 检查冲突
     if (combo) {
-      const conflict = checkSingleConflict(combo, action, settings.shortcuts)
+      // 按被编辑动作自身的 scope 判冲突：终端键与全局键可以同名共存
+      const conflict = checkSingleConflict(
+        combo,
+        action,
+        settings.shortcuts,
+        SHORTCUT_SCOPE[action]
+      )
       if (conflict) {
         setPendingCombo(combo)
         setConflictWarning({ action, conflict: conflict.label })

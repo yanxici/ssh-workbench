@@ -1,3 +1,4 @@
+import type * as React from 'react'
 import { useEffect, useState } from 'react'
 import {
   Cable,
@@ -29,7 +30,7 @@ import { TunnelEditor } from './TunnelEditor'
  * 管理 -L / -R / -D 三类隧道的配置与运行状态。
  * 启动时自动挑选合适的在线会话（优先关联连接，其次当前活动会话）。
  */
-export function TunnelPanel(): JSX.Element {
+export function TunnelPanel(): React.JSX.Element {
   const tunnels = useTunnelStore((s) => s.tunnels)
   const runtimes = useTunnelStore((s) => s.runtimes)
   const loaded = useTunnelStore((s) => s.loaded)
@@ -288,7 +289,7 @@ export function TunnelPanel(): JSX.Element {
 
 /* ------------------------------------------------------------------ */
 
-function StatusDot({ runtime }: { runtime?: TunnelRuntimeInfo }): JSX.Element {
+function StatusDot({ runtime }: { runtime?: TunnelRuntimeInfo }): React.JSX.Element {
   const status = runtime?.status ?? 'stopped'
   return (
     <span

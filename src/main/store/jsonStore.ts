@@ -18,6 +18,19 @@ export class JsonStore<T> {
   private cache: T | null = null
   /** 缓存对应的文件指纹（mtime:size），用于检测外部改动 */
   private cacheSignature: string | null = null
+  /**
+   * 写世代计数器。
+   *
+   * 用来识别「读盘期间有写入落地」这个竞态：load() 里 await fs.readFile 之后、
+   * 赋值 cache 之前，只要中间发生过 update()/write()，磁盘上那份内容就已经
+   * 比内存里的 cache 旧了。旧实现会照旧把磁盘内容写进 cache —— 更糟的是当
+   * readFile 以 ENOENT 失败时（文件在「读」和「写」之间才被创建），catch 分支
+   * 会把 cache 置成 fallback()（空对象）而 cacheSignature 刷成**新文件**的指纹，
+   * 于是「缓存命中」条件成立，之后每次 read() 都返回空对象，直到文件 mtime 再变。
+   * 实测表现：渲染层把 splitLayout 写进 settings.json 成功、紧接着 IPC 读回来是 {}，
+   * 重启后又能读到（新进程 cache 为 null，走真实 load）。
+   */
+  private writeGen = 0
   private writeChain: Promise<void> = Promise.resolve()
   /** 读-改串行锁：并发 update 时后者基于前者结果修改，避免互相覆盖 */
   private mutateChain: Promise<void> = Promise.resolve()
@@ -69,9 +82,14 @@ export class JsonStore<T> {
 
   /** 从磁盘重新加载并刷新指纹（唯一真正读盘的入口） */
   private async load(): Promise<T> {
+    // 读盘前的写世代：读完发现世代变了，说明这期间有 update/write 落地，
+    // 手上这份磁盘内容（或 ENOENT 推出的兜底值）已经过期，绝不能覆盖 cache
+    const gen = this.writeGen
     try {
       const raw = await fs.readFile(this.file, 'utf-8')
-      this.cacheSignature = await this.statSignature()
+      const sig = await this.statSignature()
+      if (gen !== this.writeGen) return this.cache ?? this.fallback()
+      this.cacheSignature = sig
       this.cache = JSON.parse(raw) as T
     } catch (err) {
       const code = (err as NodeJS.ErrnoException).code
@@ -79,7 +97,9 @@ export class JsonStore<T> {
         // 文件损坏：保留现场，降级为默认值，避免阻塞启动
         await fs.rename(this.file, `${this.file}.corrupt-${Date.now()}`).catch(() => {})
       }
-      this.cacheSignature = await this.statSignature()
+      const sig = await this.statSignature()
+      if (gen !== this.writeGen) return this.cache ?? this.fallback()
+      this.cacheSignature = sig
       this.cache = this.fallback()
     }
     return this.cache
@@ -110,6 +130,7 @@ export class JsonStore<T> {
     const step = this.mutateChain.then(async () => {
       const current = await this.readForMutate()
       const next = fn(current)
+      this.writeGen += 1
       this.cache = next
       written = this.persist(next)
       return next
@@ -125,6 +146,7 @@ export class JsonStore<T> {
 
   /** 无条件覆盖写入 */
   async write(value: T): Promise<void> {
+    this.writeGen += 1
     this.cache = value
     await this.persist(value)
   }

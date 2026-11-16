@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
+import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from 'electron'
 import { IPC } from '@shared/ipc'
 import type {
   AppSettings,
@@ -50,9 +50,13 @@ import type {
   SessionLogFile,
   SessionStatusEvent,
   SshExecResult,
+  TaskNotifyPayload,
   TestConnectionInput,
   TestConnectionResult,
+  TftpLogEvent,
+  TftpServerState,
   TransferProgressEvent,
+  TrzszTransferState,
   TunnelConfig,
   TunnelInput,
   TunnelRuntimeInfo,
@@ -197,6 +201,19 @@ export const api = {
     list: (): Promise<IpcResult<SerialPortInfo[]>> => invoke(IPC.SERIAL_LIST),
     /** 用户点「刷新」：返回最新列表，并同步主进程热插拔监听的指纹 */
     refresh: (): Promise<IpcResult<SerialPortInfo[]>> => invoke(IPC.SERIAL_REFRESH)
+  },
+
+  /**
+   * 内置 TFTP 服务端：U-Boot 刷机时给板子供固件。
+   *
+   * 传的是一个本地文件绝对路径 —— 界面那边用固件升级助手的选文件对话框拿到，
+   * 这里不再做目录浏览。
+   */
+  tftp: {
+    start: (filePath: string, port?: number): Promise<IpcResult<TftpServerState>> =>
+      invoke(IPC.TFTP_START, filePath, port),
+    stop: (): Promise<IpcResult<TftpServerState>> => invoke(IPC.TFTP_STOP),
+    state: (): Promise<IpcResult<TftpServerState>> => invoke(IPC.TFTP_STATE)
   },
 
   command: {
@@ -360,6 +377,16 @@ export const api = {
     write: (text: string): Promise<IpcResult<void>> => invoke(IPC.CLIP_WRITE, text)
   },
 
+  /**
+   * 取拖进窗口的 File 的真实路径。
+   *
+   * Electron 32 起 File.path 已被移除，官方给的替代就是 webUtils.getPathForFile，
+   * 而且它必须在渲染进程侧调用（拿到的是渲染进程那个 File 对象）。
+   * 文件名和内容都不出主进程：trzsz 上传走路径，主进程自己 readFile。
+   */
+  filePathOf: (file: unknown): string =>
+    webUtils.getPathForFile(file as Parameters<typeof webUtils.getPathForFile>[0]),
+
   zmodem: {
     pickFiles: (): Promise<
       IpcResult<{ canceled: boolean; files: Array<{ name: string; size: number; data: string }> }>
@@ -380,6 +407,18 @@ export const api = {
       invoke(IPC.ZM_SAVE_FINISH, saveId),
     sendBytes: (sessionId: string, base64: string): Promise<IpcResult<void>> =>
       invoke(IPC.ZM_SEND_BYTES, sessionId, base64)
+  },
+
+  trzsz: {
+    /**
+     * 主动上传。
+     *
+     * paths 省略 = 由主进程弹原生文件对话框；传了就是拖进来的真实路径
+     * （渲染层用 webUtils.getPathForFile(file) 取，Electron 32+ 起 File.path 已移除）。
+     */
+    upload: (sessionId: string, paths?: string[]): Promise<IpcResult<void>> =>
+      invoke(IPC.TRZSZ_UPLOAD, sessionId, paths),
+    cancel: (sessionId: string): Promise<IpcResult<void>> => invoke(IPC.TRZSZ_CANCEL, sessionId)
   },
 
   diag: {
@@ -506,7 +545,29 @@ export const api = {
   win: {
     minimize: (): Promise<void> => ipcRenderer.invoke(IPC.WIN_MINIMIZE) as Promise<void>,
     toggleMax: (): Promise<void> => ipcRenderer.invoke(IPC.WIN_TOGGLE_MAX) as Promise<void>,
-    close: (): Promise<void> => ipcRenderer.invoke(IPC.WIN_CLOSE) as Promise<void>
+    close: (): Promise<void> => ipcRenderer.invoke(IPC.WIN_CLOSE) as Promise<void>,
+    /** 提到前台并聚焦（点系统通知时主进程也会自己调，这里是手动入口） */
+    focus: (): Promise<void> => ipcRenderer.invoke(IPC.WIN_FOCUS) as Promise<void>,
+    /**
+     * 窗口当前是否聚焦。
+     *
+     * 为什么问主进程而不是渲染层的 document.hasFocus()：
+     * 渲染层在窗口被遮挡、但 webContents 仍持有焦点的场景下 hasFocus() 会返回
+     * false（Chromium 按"页面可见性"算），而我们要判断的是"用户是不是在看别的
+     * 应用"—— 那是窗口级语义，只有主进程的 BrowserWindow.isFocused() 说得准。
+     */
+    isFocused: (): Promise<boolean> => ipcRenderer.invoke(IPC.WIN_IS_FOCUSED) as Promise<boolean>
+  },
+
+  /**
+   * 系统级任务完成通知（Windows 操作中心）。
+   *
+   * 走 invoke 而不是裸 send：调用方要知道这次到底弹没弹（被去重、被系统关掉
+   * 都不算弹了），好在必要时退回应用内 toast。
+   */
+  notify: {
+    show: (payload: TaskNotifyPayload): Promise<IpcResult<boolean>> =>
+      invoke(IPC.NOTIFY_SHOW, payload)
   },
 
   /**
@@ -554,8 +615,21 @@ export const api = {
     /** 串口端口插拔：只有指纹真的变了才推 */
     serialPorts: (cb: (e: SerialPortInfo[]) => void): (() => void) =>
       subscribe(IPC.EVT_SERIAL_PORTS, cb),
+    /** 内置 TFTP 服务端日志：U-Boot 发起 RRQ、重传、完成、失败 */
+    tftpLog: (cb: (e: TftpLogEvent) => void): (() => void) => subscribe(IPC.EVT_TFTP_LOG, cb),
     updateStatus: (cb: (e: UpdateStatus) => void): (() => void) =>
-      subscribe(IPC.EVT_UPDATE_STATUS, cb)
+      subscribe(IPC.EVT_UPDATE_STATUS, cb),
+    /** 用户点了系统通知（主进程已把窗口提到前台，这里只负责切标签 + 闪一下） */
+    notifyClick: (cb: (e: { sessionId: string }) => void): (() => void) =>
+      subscribe(IPC.EVT_NOTIFY_CLICK, cb),
+    /**
+     * trzsz 传输状态（状态条用）。
+     *
+     * 注意载荷是「sessionId 打平进来的」：主进程 send 的是 { sessionId, ...state }，
+     * 所以这里用交叉类型声明，而不是再包一层。
+     */
+    trzszState: (cb: (e: { sessionId: string } & TrzszTransferState) => void): (() => void) =>
+      subscribe(IPC.EVT_TRZSZ_STATE, cb)
   }
 }
 

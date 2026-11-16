@@ -35,6 +35,17 @@
   --shadow-pop: 0 8px 24px -8px rgb(15 23 42 / 0.16), 0 2px 6px -2px rgb(15 23 42 / 0.1);
   --shadow-pop-lg: 0 16px 48px -12px rgb(15 23 42 / 0.2), 0 4px 10px -4px rgb(15 23 42 / 0.12);
 
+  /* 设计 token（阶段 1）：动效时长 / 主缓动 / 语义尺寸。
+     面板外壳（panel-shell）、左轨（rail-w）与行 token 都消费这几个变量，
+     散落的 top-[38px] / bottom-[26px] / w-[248px] 收敛到这里，改一处即全局生效。 */
+  --duration-fast: 120ms;
+  --duration-base: 180ms;
+  --duration-slow: 240ms;
+  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+  --size-rail: 248px;
+  --size-statusbar: 26px;
+  --size-titlebar: 38px;
+
   color-scheme: light;
 }
 
@@ -449,6 +460,56 @@
   .scroll-thin::-webkit-scrollbar-thumb:hover {
     background: rgb(var(--c-ink-3));
     background-clip: content-box;
+  }
+
+  /* ==================================================================
+   *  设计 token 行类（实验面板：硬上限 + 虚拟滚动）
+   *
+   *  row-token / file-row-token / conn-row-token 与旧的 .row 并存：
+   *  旧路径继续用 .row（改 .row 会让旧视觉一起变），新路径按实验 flag
+   *  选类名，两套独立、可单独回滚。
+   *
+   *  行高口径：字 12px + 行高 16px + 上下各 4px = 24px 内容高，
+   *  加边框/留白后约 28px 固定行 —— 虚拟化需要固定行高，这里一并定下来。
+   * ================================================================== */
+
+  .panel-shell {
+    /* bottom-[26px] top-[38px] 原散落在 8 个面板根节点：状态栏高 / 标题栏高 */
+    bottom: var(--size-statusbar);
+    top: var(--size-titlebar);
+  }
+
+  .rail-w {
+    /* 原 w-[248px] 散落在 3 个面板的左轨 */
+    width: var(--size-rail);
+  }
+
+  .row-token {
+    /* text-xs 必须显式写：不写会继承 body 的 15px/22px，实测行高 32px 而不是 24px */
+    @apply relative flex w-full cursor-default items-center gap-2 rounded-md px-2 py-1 text-left text-xs;
+    transition:
+      background-color var(--duration-fast) var(--ease-out-expo),
+      color var(--duration-fast) var(--ease-out-expo);
+  }
+
+  .file-row-token {
+    @apply flex cursor-default items-center gap-2 rounded px-2 py-1 text-xs;
+  }
+
+  .file-row-token-inner {
+    /*
+     * 虚拟列表里的一行：外层是绝对定位的定位盒（高度由虚拟化给定），
+     * 内层负责实际排版 —— 高度已由外层写死，内层只需填满并垂直居中。
+     */
+    transition: background-color var(--duration-fast) var(--ease-out-expo);
+  }
+
+  .conn-row-token {
+    /* 连接行：与 row-token 同一行高口径（py-1 → 28px）。
+       旧版是 py-1.5（+6px），是「切面板时列表高度跳」的来源之一。 */
+    transition:
+      background-color var(--duration-fast) var(--ease-out-expo),
+      color var(--duration-fast) var(--ease-out-expo);
   }
 }
 

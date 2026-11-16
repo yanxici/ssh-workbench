@@ -1,3 +1,4 @@
+import type * as React from 'react'
 import { useState } from 'react'
 import { AlertTriangle, CheckCircle2, Download, ExternalLink, RefreshCw, RotateCw } from 'lucide-react'
 import type { UpdatePrefs, UpdateStatus } from '@shared/types'
@@ -14,7 +15,7 @@ import { isImeComposing } from '@/lib/ime'
  * 标题栏负责「随时能看到、随手能点」，这里负责「说清楚现在是什么情况、
  * 以及把检查频率和代理配好」。两边都读 useUpdateStore，不存在状态不一致。
  */
-export function UpdateSection(): JSX.Element {
+export function UpdateSection(): React.JSX.Element {
   const settings = useSettingsStore((s) => s.settings)
   const updateSettings = useSettingsStore((s) => s.update)
   const status = useUpdateStore((s) => s.status)

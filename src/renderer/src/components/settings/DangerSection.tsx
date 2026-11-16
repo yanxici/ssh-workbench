@@ -1,8 +1,9 @@
+import type * as React from 'react'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { Row } from './sectionUi'
 
 /** 设置 → 危险命令关键词（每行一个；命中即二次确认） */
-export function DangerSection(): JSX.Element {
+export function DangerSection(): React.JSX.Element {
   const settings = useSettingsStore((s) => s.settings)
   const update = useSettingsStore((s) => s.update)
 

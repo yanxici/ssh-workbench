@@ -1,3 +1,4 @@
+import type * as React from 'react'
 /**
  * 全局传输进度浮层。
  *
@@ -23,6 +24,7 @@ import {
   Loader2,
   Pause,
   Play,
+  RefreshCw,
   X
 } from 'lucide-react'
 import type { TransferTask } from '@shared/types'
@@ -96,7 +98,14 @@ function statusText(task: TransferTask): string {
   return '失败'
 }
 
-export function TransferProgressDock(): JSX.Element | null {
+/*
+ * 传输列表硬上限（阶段 3）。原实现无上限：批量上传 500 个文件就挂 500 行 DOM，
+ * 每行都订阅进度事件并参与重排。200 覆盖「一次批量传一个目录」的常见规模。
+ * 超出部分不渲染行，但底部汇总数字仍按全量统计（用户看到的进度是对的）。
+ */
+const MAX_TRANSFERS = 200
+
+export function TransferProgressDock(): React.JSX.Element | null {
   const transfers = useSftpStore((s) => s.transfers)
   const collapsed = useSftpStore((s) => s.dockCollapsed)
   const closed = useSftpStore((s) => s.dockClosed)
@@ -251,7 +260,7 @@ export function TransferProgressDock(): JSX.Element | null {
 
         {!collapsed && (
           <div className="scroll-thin max-h-[248px] space-y-1 overflow-y-auto border-t border-edge-soft p-1.5">
-            {transfers.map((task) => (
+            {transfers.slice(0, MAX_TRANSFERS).map((task) => (
               <TransferRow key={task.id} task={task} onDismiss={() => dismissTask(task.id)} />
             ))}
           </div>
@@ -279,7 +288,7 @@ function TransferRow({
 }: {
   task: TransferTask
   onDismiss: () => void
-}): JSX.Element {
+}): React.JSX.Element {
   const pauseTask = useSftpStore((s) => s.pauseTask)
   const resumeTask = useSftpStore((s) => s.resumeTask)
   const cancelTask = useSftpStore((s) => s.cancelTask)
@@ -398,6 +407,19 @@ function TransferRow({
           <span className="shrink-0 whitespace-nowrap">{amount.right}</span>
         )}
       </div>
+
+      {/*
+       * 断线续传的实时状态。原来是只写进 title 提示框里 —— 传输卡住时
+       * 用户根本不会去 hover，看到的就是「进度条不动了」。必须显式可见。
+       */}
+      {!failed && task.note && isLive(task) && (
+        <div className="mt-0.5 flex items-center gap-1 text-3xs leading-3 text-warning">
+          <RefreshCw size={9} className="shrink-0 animate-spin" />
+          <span className="min-w-0 flex-1 truncate" title={task.note}>
+            {task.note}
+          </span>
+        </div>
+      )}
     </div>
   )
 }

@@ -1,3 +1,4 @@
+import type * as React from 'react'
 import type { Command } from '@shared/types'
 import { CommandPanel } from '@/components/commands/CommandPanel'
 import { useLayoutStore } from '@/stores/layoutStore'
@@ -23,7 +24,7 @@ export function CommandRail({
 }: {
   width: number
   onEdit: (initial: Command | null, presetGroup?: string) => void
-}): JSX.Element | null {
+}): React.JSX.Element | null {
   const visible = useLayoutStore((s) => s.commandRailVisible)
   const toggleCommandRail = useLayoutStore((s) => s.toggleCommandRail)
 

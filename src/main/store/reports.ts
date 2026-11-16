@@ -3,6 +3,7 @@ import { promises as fs } from 'node:fs'
 import { basename, join, resolve, sep } from 'node:path'
 import type { DiagReport, DiagReportMeta } from '@shared/types'
 import { generateHtml, generateMarkdown } from '../util/reportFormat'
+import { dialogDefaultPath, rememberDialogPick } from '../util/dialogDirs'
 
 /**
  * 诊断报告的持久化与导出。
@@ -108,7 +109,10 @@ export async function exportReport(
 
   const res = await dialog.showSaveDialog(win as BrowserWindow, {
     title: format === 'html' ? '导出诊断报告（HTML）' : '导出诊断报告（Markdown）',
-    defaultPath: `${sanitize(report.connectionName)}-诊断报告-${report.id.slice(0, 15)}.${ext}`,
+    defaultPath: dialogDefaultPath(
+      'report',
+      `${sanitize(report.connectionName)}-诊断报告-${report.id.slice(0, 15)}.${ext}`
+    ),
     filters: [
       format === 'html'
         ? { name: 'HTML 文件', extensions: ['html'] }
@@ -116,6 +120,7 @@ export async function exportReport(
     ]
   })
   if (res.canceled || !res.filePath) return { canceled: true }
+  rememberDialogPick('report', res.filePath, false)
   await fs.writeFile(res.filePath, text, 'utf-8')
   return { canceled: false, path: res.filePath }
 }

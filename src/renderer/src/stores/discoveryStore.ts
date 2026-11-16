@@ -4,6 +4,7 @@ import { call } from '@/lib/ipc'
 import { uid } from '@/lib/utils'
 import { useToastStore } from './toastStore'
 import { useUiStore } from './uiStore'
+import { notifyTask } from '@/lib/taskNotify'
 
 /**
  * 设备发现状态：网段扫描（TCP 探针）+ mDNS 服务发现。
@@ -109,8 +110,9 @@ export const useDiscoveryStore = create<DiscoveryState>()((set, get) => ({
     set({ scanning: false, runId: null })
     if (hosts) {
       set({ hosts })
-      useToastStore.getState().push({
-        kind: hosts.length > 0 ? 'success' : 'info',
+      // 网段扫描按 /24 逐 IP 探活，几百个探测点几十秒跑不完，同样属于"跑完要告诉我"
+      void notifyTask({
+        kind: 'discover',
         title: hosts.length > 0 ? `发现 ${hosts.length} 台设备` : '扫描完成：没有发现开放目标端口的设备',
         detail: hosts.length === 0 ? '可尝试增加端口（如 23/8080）或确认网段是否正确' : undefined
       })

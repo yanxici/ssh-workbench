@@ -2,6 +2,7 @@ import { app, BrowserWindow, dialog } from 'electron'
 import { mkdirSync } from 'node:fs'
 import { IPC } from '@shared/ipc'
 import { dialogParent } from '../windowRef'
+import { dialogDefaultPath, rememberDialogDir, rememberDialogPick } from '../util/dialogDirs'
 import { handle } from './handle'
 import { sftpManager } from '../ssh/sftpManager'
 
@@ -59,9 +60,12 @@ export function registerSftpIpc(): void {
     const res = await dialog.showOpenDialog(dialogParent() as BrowserWindow, {
       title: `选择要上传到 ${target} 的文件`,
       buttonLabel: '上传',
+      defaultPath: dialogDefaultPath('file'),
       properties: ['openFile', 'multiSelections']
     })
     if (res.canceled || res.filePaths.length === 0) return { canceled: true, count: 0 }
+    // 多选时只要有一个路径就足以反推目录；用第一个即可
+    rememberDialogPick('file', res.filePaths[0], false)
     const ids = sftpManager.upload(sessionId, res.filePaths, target)
     return { canceled: false, count: ids.length }
   })
@@ -74,9 +78,11 @@ export function registerSftpIpc(): void {
       const res = await dialog.showOpenDialog(dialogParent() as BrowserWindow, {
         title: `选择要上传到 ${target} 的文件夹（可多选）`,
         buttonLabel: '上传',
+        defaultPath: dialogDefaultPath('folder'),
         properties: ['openDirectory', 'multiSelections']
       })
       if (res.canceled || res.filePaths.length === 0) return { canceled: true, count: 0 }
+      rememberDialogPick('folder', res.filePaths[0], true)
       const ids = sftpManager.upload(sessionId, res.filePaths, target, {
         // 默认保留目录名，用户明确选的是「文件夹」而不是「文件夹里的东西」
         keepRoot: keepRoot !== false
@@ -92,10 +98,11 @@ export function registerSftpIpc(): void {
     const res = await dialog.showOpenDialog(dialogParent() as BrowserWindow, {
       title: '选择保存目录',
       buttonLabel: '下载到此处',
-      defaultPath: app.getPath('downloads'),
+      defaultPath: dialogDefaultPath('folder'),
       properties: ['openDirectory', 'createDirectory']
     })
     if (res.canceled || res.filePaths.length === 0) return { canceled: true, count: 0 }
+    rememberDialogDir('folder', res.filePaths[0])
     const ids = sftpManager.download(sessionId, remotePaths, res.filePaths[0])
     return { canceled: false, count: ids.length }
   })

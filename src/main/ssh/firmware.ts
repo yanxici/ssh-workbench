@@ -8,6 +8,7 @@ import type {
   FirmwareUpgradeResult,
   FirmwareVerifyResult
 } from '@shared/types'
+import { dialogDefaultPath, rememberDialogPick } from '../util/dialogDirs'
 import { execCollect, type CancellationToken } from './exec'
 import { sessionManager } from './sessionManager'
 import { sftpManager } from './sftpManager'
@@ -42,6 +43,7 @@ class FirmwareOps {
     const res = await dialog.showOpenDialog(win as BrowserWindow, {
       title: '选择固件文件',
       buttonLabel: '选择',
+      defaultPath: dialogDefaultPath('firmware'),
       properties: ['openFile'],
       filters: [
         { name: '固件镜像', extensions: ['bin', 'img', 'fw', 'hex', 'gz', 'tgz', 'tar', 'zip', 'swu', 'upg'] },
@@ -50,6 +52,7 @@ class FirmwareOps {
     })
     if (res.canceled || res.filePaths.length === 0) return { canceled: true }
     const path = res.filePaths[0]
+    rememberDialogPick('firmware', path, false)
     const st = await fs.stat(path)
     return { canceled: false, file: { path, name: basename(path), size: st.size } }
   }

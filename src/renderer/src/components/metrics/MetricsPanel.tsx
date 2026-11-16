@@ -1,3 +1,4 @@
+import type * as React from 'react'
 import { Gauge, PauseCircle, PlayCircle, Wifi, X } from 'lucide-react'
 import type { MetricsSample } from '@shared/types'
 import { cn } from '@/lib/utils'
@@ -9,7 +10,7 @@ import { useSessionStore, useSshSessions } from '@/stores/sessionStore'
  * 资源仪表盘（覆盖主区域）：实时 CPU / 内存 / 磁盘 / 温度 / 网络曲线。
  * 采样在主进程侧进行（3s 一帧），这里只做滚动序列渲染（每会话最多 120 点）。
  */
-export function MetricsPanel(): JSX.Element | null {
+export function MetricsPanel(): React.JSX.Element | null {
   const panelOpen = useMetricsStore((s) => s.panelOpen)
   const monitored = useMetricsStore((s) => s.monitored)
   const order = useMetricsStore((s) => s.order)
@@ -19,7 +20,7 @@ export function MetricsPanel(): JSX.Element | null {
   const close = (): void => useMetricsStore.setState({ panelOpen: false })
 
   return (
-    <div className="fixed inset-x-0 bottom-[26px] top-[38px] z-30 flex flex-col bg-app">
+    <div className="panel-shell fixed inset-x-0 z-30 flex flex-col bg-app">
       {/* 标题栏 */}
       <div className="flex h-9 shrink-0 items-center gap-2 border-b border-edge bg-panel px-3">
         <Gauge size={14} className="text-accent" />
@@ -57,12 +58,12 @@ export function MetricsPanel(): JSX.Element | null {
  *  左：监控目标
  * ------------------------------------------------------------------ */
 
-function MonitorTargets(): JSX.Element {
+function MonitorTargets(): React.JSX.Element {
   const sessions = useSshSessions()
   const monitored = useMetricsStore((s) => s.monitored)
 
   return (
-    <div className="flex w-[248px] shrink-0 flex-col border-r border-edge bg-panel">
+    <div className="flex rail-w shrink-0 flex-col border-r border-edge bg-panel">
       <div className="flex shrink-0 items-center gap-1.5 border-b border-edge-soft px-2.5 py-1.5">
         <span className="text-2xs font-semibold text-ink-2">监控目标</span>
         <span className="text-2xs text-ink-3">
@@ -153,7 +154,7 @@ function MonitorTargets(): JSX.Element {
  *  单会话卡片
  * ------------------------------------------------------------------ */
 
-function SessionCard({ series }: { series?: SessionSeries }): JSX.Element | null {
+function SessionCard({ series }: { series?: SessionSeries }): React.JSX.Element | null {
   const session = useSessionStore((s) => s.sessions.find((x) => x.id === series?.sessionId))
   if (!series) return null
 
@@ -323,7 +324,7 @@ function MetricTile({
   series: Array<{ values: number[]; token: SeriesToken }>
   max?: number
   hint?: string
-}): JSX.Element {
+}): React.JSX.Element {
   return (
     <div className="rounded-md border border-edge-soft bg-app/40 px-2.5 py-2">
       <div className="flex items-baseline gap-2">
@@ -354,7 +355,7 @@ function Sparkline({
   series: Array<{ values: number[]; token: SeriesToken }>
   max?: number
   height?: number
-}): JSX.Element {
+}): React.JSX.Element {
   const W = 240
   const H = height
   const count = Math.max(...series.map((s) => s.values.length), 2)

@@ -231,9 +231,20 @@ function emit(sessionId: string, p: ZmodemProgress): void {
   watchers.get(sessionId)?.(p)
 }
 
-/** 读取某个会话当前的进度快照（界面重挂载时用来恢复面板） */
+/**
+ * 读取某个会话当前的进度快照（界面重挂载时用来恢复面板）。
+ *
+ * 只恢复「还没结束」的快照。done / error 是终态：面板自己会在 2.5s / 6s 后收起，
+ * 但快照会一直留到会话关闭 —— 若这里原样返回，用户每切走再切回这个标签页，
+ * 已经结束的传输条就会重新冒出来再消失一次，看起来像「浮层自己乱闪」。
+ * 终态快照仍然留在 lastProgress 里给内部看门狗（stall / 续传）读 bytesTotal 用，
+ * 只是不再往界面上恢复。
+ */
 export function getZmodemProgress(sessionId: string): ZmodemProgress | null {
-  return lastProgress.get(sessionId) ?? null
+  const snap = lastProgress.get(sessionId)
+  if (!snap) return null
+  if (snap.phase === 'done' || snap.phase === 'error') return null
+  return snap
 }
 
 /** UI 注册进度监听，返回取消函数 */

@@ -1,3 +1,4 @@
+import type * as React from 'react'
 import { useEffect, useMemo, useState } from 'react'
 import {
   BookUser,
@@ -28,7 +29,7 @@ import { useToastStore } from '@/stores/toastStore'
  * 客户 / 设备档案面板（覆盖主区域）。
  * 左侧档案列表；右侧详情：基本信息编辑 + 关联连接 + 该客户诊断报告 + 常用命令分组。
  */
-export function ProfilesPanel(): JSX.Element | null {
+export function ProfilesPanel(): React.JSX.Element | null {
   const panelOpen = useProfileStore((s) => s.panelOpen)
   const profiles = useProfileStore((s) => s.profiles)
   const keyword = useProfileStore((s) => s.keyword)
@@ -61,7 +62,7 @@ export function ProfilesPanel(): JSX.Element | null {
   }
 
   return (
-    <div className="fixed inset-x-0 bottom-[26px] top-[38px] z-30 flex flex-col bg-app">
+    <div className="panel-shell fixed inset-x-0 z-30 flex flex-col bg-app">
       {/* 标题栏 */}
       <div className="flex h-9 shrink-0 items-center gap-2 border-b border-edge bg-panel px-3">
         <BookUser size={14} className="text-accent" />
@@ -208,7 +209,7 @@ function ProfileDetail({
 }: {
   profile: DeviceProfile | null
   onDone: () => void
-}): JSX.Element {
+}): React.JSX.Element {
   const isNew = profile === null
   const connections = useConnectionStore((s) => s.connections)
   const reports = useDiagStore((s) => s.reports)

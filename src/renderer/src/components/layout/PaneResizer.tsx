@@ -1,3 +1,4 @@
+import type * as React from 'react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { LayoutSizes } from '@shared/types'
 import { useSettingsStore } from '@/stores/settingsStore'
@@ -40,7 +41,7 @@ export function PaneResizer({
   onChange: (next: number) => void
   /** 松手 / 双击 / 键盘调整后提交（父组件写入 settings） */
   onCommit: (next: number) => void
-}): JSX.Element {
+}): React.JSX.Element {
   const spec = PANE_SPECS[pane]
   const horizontal = spec.axis === 'x'
   // dragging 用 ref 判定、用 state 上色：
@@ -122,7 +123,7 @@ export function PaneResizer({
       title={`拖动调整${PANE_LABEL[pane]}，双击恢复默认`}
       className={cn(
         'group/rz relative z-20 shrink-0 focus:outline-none',
-        horizontal ? '-mx-[3px] w-[6px] cursor-col-resize' : '-my-[3px] h-[6px] cursor-row-resize'
+        horizontal ? 'mx-[-3px] w-[6px] cursor-col-resize' : 'my-[-3px] h-[6px] cursor-row-resize'
       )}
       onPointerDown={beginDrag}
       onPointerMove={moveDrag}

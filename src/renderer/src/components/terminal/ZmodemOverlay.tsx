@@ -1,3 +1,4 @@
+import type * as React from 'react'
 /**
  * ZMODEM 传输交互：
  * - 检测到远端 sz/rz 时弹出确认，用户同意才接管字节流（避免普通输出被误判）
@@ -34,7 +35,7 @@ interface PendingConfirm {
   sessionName: string
 }
 
-export function ZmodemOverlay(): JSX.Element | null {
+export function ZmodemOverlay(): React.JSX.Element | null {
   const sessions = useSessionStore((s) => s.sessions)
   const activeId = useSessionStore((s) => s.activeId)
 

@@ -1,9 +1,10 @@
-import { app, BrowserWindow, clipboard, dialog } from 'electron'
+import { BrowserWindow, clipboard, dialog } from 'electron'
 import { promises as fs } from 'node:fs'
 import { basename, join } from 'node:path'
 import { IPC } from '@shared/ipc'
 import type { ConnExportOptions, ConnImportMode, ConnectionInput } from '@shared/types'
 import { dialogParent } from '../windowRef'
+import { dialogDefaultPath, rememberDialogPick } from '../util/dialogDirs'
 import { handle } from './handle'
 import { dataDir } from '../store/jsonStore'
 import { MAX_KEY_BYTES, inspectPrivateKey } from '../util/privateKey'
@@ -46,10 +47,11 @@ export function registerConnectionIpc(): void {
     const stamp = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`
     const res = await dialog.showSaveDialog(dialogParent() as BrowserWindow, {
       title: '导出连接',
-      defaultPath: join(app.getPath('desktop'), `SSH连接-${stamp}.swconn`),
+      defaultPath: dialogDefaultPath('file', `SSH连接-${stamp}.swconn`),
       filters: [{ name: 'SSH Workbench 连接', extensions: ['swconn'] }]
     })
     if (res.canceled || !res.filePath) return { canceled: true as const }
+    rememberDialogPick('file', res.filePath, false)
     const result = await exportConnectionsToFile(res.filePath, opts)
     return { canceled: false as const, ...result }
   })
@@ -67,6 +69,7 @@ export function registerConnectionIpc(): void {
   handle(IPC.CONN_IMPORT_PICK, async () => {
     const res = await dialog.showOpenDialog(dialogParent() as BrowserWindow, {
       title: '导入连接',
+      defaultPath: dialogDefaultPath('file'),
       properties: ['openFile'],
       filters: [
         { name: 'SSH Workbench 连接', extensions: ['swconn', 'json'] },
@@ -75,6 +78,7 @@ export function registerConnectionIpc(): void {
     })
     if (res.canceled || res.filePaths.length === 0) return { canceled: true }
     const path = res.filePaths[0]
+    rememberDialogPick('file', path, false)
     const { encrypted } = await inspectImportFile(path)
     importPaths.add(path)
     return { canceled: false, path, encrypted }
@@ -99,6 +103,7 @@ export function registerConnectionIpc(): void {
     const res = await dialog.showOpenDialog(dialogParent() as BrowserWindow, {
       title: '选择私钥文件',
       buttonLabel: '使用此私钥',
+      defaultPath: dialogDefaultPath('file'),
       properties: ['openFile', 'showHiddenFiles'],
       filters: [
         { name: '所有文件', extensions: ['*'] },
@@ -108,6 +113,7 @@ export function registerConnectionIpc(): void {
     if (res.canceled || res.filePaths.length === 0) return { canceled: true }
 
     const src = res.filePaths[0]
+    rememberDialogPick('file', src, false)
     const stat = await fs.stat(src)
     if (stat.size > MAX_KEY_BYTES) throw new Error('文件过大，不是私钥文件')
     const data = await fs.readFile(src)
@@ -122,7 +128,15 @@ export function registerConnectionIpc(): void {
   })
 
   handle(IPC.CONN_HAS_SECRET, (id: string) => hasSecret(id))
-  handle(IPC.CONN_PARSE_SSH_CMD, (text?: string) =>
-    parseSshCommand(typeof text === 'string' && text ? text : clipboard.readText())
-  )
+  /*
+   * Electron 45 把 clipboard 的四个读写方法按 W3C Clipboard API 改成 Promise：
+   * readText() 现在返回 Promise<string>，不再是同步字符串（RFC 0019 的重构）。
+   * 所以这里必须 await —— 少一个 await 不是「写错了」，而是拿到一个 Promise 对象
+   * 送进 parseSshCommand，正则匹配永远失败，表现为「剪贴板识别按钮没反应」。
+   */
+  handle(IPC.CONN_PARSE_SSH_CMD, async (text?: string) => {
+    const fromClip =
+      typeof text === 'string' && text ? text : await clipboard.readText()
+    return parseSshCommand(fromClip)
+  })
 }

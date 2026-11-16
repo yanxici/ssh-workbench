@@ -1,3 +1,4 @@
+import type * as React from 'react'
 import { useEffect, useRef, useState } from 'react'
 import type { Connection, ConnectionInput } from '@shared/types'
 import { useLayoutStore, type ActivityView } from '@/stores/layoutStore'
@@ -41,7 +42,7 @@ export function SideNav({
 }: {
   width: number
   onEditConnection: (initial: Connection | null, preset?: Partial<ConnectionInput>) => void
-}): JSX.Element | null {
+}): React.JSX.Element | null {
   const sidebarVisible = useLayoutStore((s) => s.sidebarVisible)
   const activityView = useLayoutStore((s) => s.activityView)
   const setActivityView = useLayoutStore((s) => s.setActivityView)
@@ -63,7 +64,7 @@ export function SideNav({
   if (!sidebarVisible) return null
 
   /** 每个视图都包一层：非当前项 display:none，但仍保持挂载 */
-  const pane = (view: ActivityView, node: JSX.Element): JSX.Element => (
+  const pane = (view: ActivityView, node: React.JSX.Element): React.JSX.Element => (
     <div
       key={view}
       data-pane={view}

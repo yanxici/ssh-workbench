@@ -1,3 +1,4 @@
+import type * as React from 'react'
 import { useEffect, useMemo, useState } from 'react'
 import { AlertTriangle, Copy, FileDown, RefreshCw, Search, Trash2, X } from 'lucide-react'
 import type { ErrorEntry } from '@shared/types'
@@ -13,7 +14,7 @@ import { cn } from '@/lib/utils'
  * - 相同错误已由主进程聚合（×N），这里直接展示次数；
  * - 一键复制单条 / 导出全部，方便贴给同事或提 issue。
  */
-export function ErrorLogSection(): JSX.Element {
+export function ErrorLogSection(): React.JSX.Element {
   const [entries, setEntries] = useState<ErrorEntry[]>([])
   const [loading, setLoading] = useState(false)
   const [keyword, setKeyword] = useState('')
@@ -58,7 +59,7 @@ export function ErrorLogSection(): JSX.Element {
     })
   }
 
-  const copyOne = (e: ErrorEntry): void => {
+  const copyOne = async (e: ErrorEntry): Promise<void> => {
     const text = [
       `[${e.level}] ${fmt(e.at)} ×${e.count}`,
       `来源：${e.source}`,
@@ -67,8 +68,18 @@ export function ErrorLogSection(): JSX.Element {
     ]
       .filter(Boolean)
       .join('\n')
-    void navigator.clipboard.writeText(text)
-    useToastStore.getState().push({ kind: 'success', title: '已复制到剪贴板' })
+    /*
+     * 走 preload 的 clip.write 而不是 navigator.clipboard：
+     * Electron 44 已把 clipboard 模块从渲染进程移除，虽然 Web API 还在，
+     * 但两条路并存意味着「有的面板能复制、有的不能」这类问题要靠猜。
+     * 统一到一条链路后，权限问题（窗口失焦时 navigator.clipboard 会 reject）
+     * 只在主进程侧处理一次。
+     */
+    const ok = await call(window.api.clip.write(text), { silent: true })
+    useToastStore.getState().push({
+      kind: ok === null ? 'warning' : 'success',
+      title: ok === null ? '复制失败，请手动选择文本' : '已复制到剪贴板'
+    })
   }
 
   return (

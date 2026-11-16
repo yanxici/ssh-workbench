@@ -1,9 +1,10 @@
+import type * as React from 'react'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { Toggle } from '@/components/ui'
 import { Row, Segmented } from './sectionUi'
 
 /** 设置 → 终端（字号 / 行高 / 光标 / 回滚缓冲） */
-export function TerminalSection(): JSX.Element {
+export function TerminalSection(): React.JSX.Element {
   const settings = useSettingsStore((s) => s.settings)
   const update = useSettingsStore((s) => s.update)
 

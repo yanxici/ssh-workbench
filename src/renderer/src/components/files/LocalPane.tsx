@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState, type MouseEvent } from 'react'
+import type * as React from 'react'
+import { useEffect, useMemo, useRef, useState, type MouseEvent } from 'react'
 import {
   ArrowUp,
   FileText,
@@ -22,9 +23,11 @@ import {
   type MenuEntry
 } from '@/components/ui'
 import { isImeComposing } from '@/lib/ime'
+import { useTokenFlag } from '@/lib/useTokenFlag'
+import { useVirtualizer } from '@tanstack/react-virtual'
 
 /** 文件管理器左栏：本地文件系统（上传来源 / 下载目标） */
-export function LocalPane(): JSX.Element {
+export function LocalPane(): React.JSX.Element {
   const dir = useSftpStore((s) => s.localDir)
   /** 本面板所属会话：上传/下载执行链路要求显式传入（不再依赖 store.sessionId） */
   const sessionId = useSftpStore((s) => s.sessionId)
@@ -55,12 +58,21 @@ export function LocalPane(): JSX.Element {
   /* 选中集合 Set 化：与 RemotePane 同理，原来的每行 includes 是 O(n²) */
   const selSet = useMemo(() => new Set(sel), [sel])
 
-  /* 渲染截断：与 RemotePane / FileExplorer / SessionFileTree 统一 300 口径 */
-  const ROW_LIMIT = 300
-  const shownFiles = useMemo(
-    () => (files.length > ROW_LIMIT ? files.slice(0, ROW_LIMIT) : files),
-    [files]
-  )
+  /*
+   * 虚拟滚动（阶段 3）：与 RemotePane 同一口径。原来截断到 300 项，
+   * 本地目录动辄几千个文件（node_modules、构建产物），截断后用户找不到目标。
+   * 选中语义仍基于 files 全量。
+   */
+  /* 设计 token 灰度（阶段 1）：行高 24px */
+  const tokensOn = useTokenFlag('sftp')
+  const ROW_H = tokensOn ? 24 : 22
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const vrow = useVirtualizer({
+    count: files.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => ROW_H,
+    overscan: 8
+  })
 
   const clickRow = (path: string, e: MouseEvent): void => {
     if (e.ctrlKey || e.metaKey) {
@@ -154,6 +166,7 @@ export function LocalPane(): JSX.Element {
 
       {/* 列表（同时是下载落点） */}
       <div
+        ref={scrollRef}
         className="scroll-thin min-h-0 flex-1 overflow-y-auto p-1"
         onDragOver={(e) => {
           if (e.dataTransfer.types.includes('application/x-remote-paths')) e.preventDefault()
@@ -174,49 +187,63 @@ export function LocalPane(): JSX.Element {
             <Loader2 size={13} className="animate-spin" /> 读取中…
           </div>
         )}
-        {shownFiles.map((f) => (
-          <div
-            key={f.path}
-            draggable
-            onDragStart={(e) => {
-              e.dataTransfer.setData(
-                'application/x-local-paths',
-                JSON.stringify(selSet.has(f.path) ? sel : [f.path])
-              )
-              e.dataTransfer.effectAllowed = 'copy'
-            }}
-            onClick={(e) => clickRow(f.path, e)}
-            onDoubleClick={() => {
-              if (f.isDir) void nav(f.path)
-            }}
-            onContextMenu={(e) => openMenu(e, f.path)}
-            className={cn(
-              'file-row-cv flex cursor-default items-center gap-2 rounded px-2 py-[3px] text-xs',
-              selSet.has(f.path)
-                ? 'bg-accent/15 text-ink'
-                : 'text-ink-2 hover:bg-hover/60'
-            )}
-            title={f.path}
-          >
-            {f.isDir ? (
-              <Folder size={13} className="shrink-0 text-accent/80" />
-            ) : (
-              <FileText size={13} className="shrink-0 text-ink-3" />
-            )}
-            <span className="min-w-0 flex-1 truncate">{f.name}</span>
-            <span className="w-16 shrink-0 text-right font-mono text-2xs text-ink-3">
-              {f.isDir ? '—' : formatBytes(f.size)}
-            </span>
-            <span className="w-[104px] shrink-0 text-right font-mono text-2xs text-ink-3">
-              {formatTime(f.mtime)}
-            </span>
-          </div>
-        ))}
-        {files.length > shownFiles.length && (
-          <div className="px-2 py-1 text-2xs text-ink-3">
-            仅显示前 {shownFiles.length} 项，共 {files.length} 项 —— 用上方的路径栏可直接进入目标目录
-          </div>
-        )}
+        {/* 虚拟滚动：只渲染视口内的行 */}
+        <div style={{ height: vrow.getTotalSize(), position: 'relative', width: '100%' }}>
+          {vrow.getVirtualItems().map((vi) => {
+            const f = files[vi.index]
+            if (!f) return null
+            return (
+              <div
+                key={f.path}
+                style={{
+                  position: 'absolute',
+                  top: 0,
+                  left: 0,
+                  width: '100%',
+                  height: vi.size,
+                  transform: `translateY(${vi.start}px)`
+                }}
+              >
+                <div
+                  key={f.path}
+                  draggable
+                  onDragStart={(e) => {
+                    e.dataTransfer.setData(
+                      'application/x-local-paths',
+                      JSON.stringify(selSet.has(f.path) ? sel : [f.path])
+                    )
+                    e.dataTransfer.effectAllowed = 'copy'
+                  }}
+                  onClick={(e) => clickRow(f.path, e)}
+                  onDoubleClick={() => {
+                    if (f.isDir) void nav(f.path)
+                  }}
+                  onContextMenu={(e) => openMenu(e, f.path)}
+                  className={cn(
+                    'flex h-full cursor-default items-center gap-2 rounded px-2 text-xs',
+                    selSet.has(f.path)
+                      ? 'bg-accent/15 text-ink'
+                      : 'text-ink-2 hover:bg-hover/60'
+                  )}
+                  title={f.path}
+                >
+                  {f.isDir ? (
+                    <Folder size={13} className="shrink-0 text-accent/80" />
+                  ) : (
+                    <FileText size={13} className="shrink-0 text-ink-3" />
+                  )}
+                  <span className="min-w-0 flex-1 truncate">{f.name}</span>
+                  <span className="w-16 shrink-0 text-right font-mono text-2xs text-ink-3">
+                    {f.isDir ? '—' : formatBytes(f.size)}
+                  </span>
+                  <span className="w-[104px] shrink-0 text-right font-mono text-2xs text-ink-3">
+                    {formatTime(f.mtime)}
+                  </span>
+                </div>
+              </div>
+            )
+          })}
+        </div>
       </div>
 
       {menu && <ContextMenu x={menu.x} y={menu.y} items={menuItems(menu.target)} onClose={closeMenu} />}

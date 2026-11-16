@@ -1,3 +1,4 @@
+import type * as React from 'react'
 import { useEffect, useState } from 'react'
 import { Download, FolderOpen, Play, RefreshCw, ScrollText, Search, Trash2 } from 'lucide-react'
 import type { SessionLogFile } from '@shared/types'
@@ -20,7 +21,7 @@ function parseLogName(name: string): { title: string; time: string } {
  * 会话日志面板（侧栏「日志」页）：
  * 列出自动录制产生的 cast 文件，支持搜索、回放、导出、删除。
  */
-export function SessionLogsPanel(): JSX.Element {
+export function SessionLogsPanel(): React.JSX.Element {
   const [logs, setLogs] = useState<SessionLogFile[]>([])
   const [loading, setLoading] = useState(false)
   const [keyword, setKeyword] = useState('')

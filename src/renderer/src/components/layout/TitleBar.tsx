@@ -1,3 +1,4 @@
+import type * as React from 'react'
 import { Minus, Search, Settings, Square, TerminalSquare, X } from 'lucide-react'
 import { useLayoutStore } from '@/stores/layoutStore'
 import { useUiStore } from '@/stores/uiStore'
@@ -19,7 +20,7 @@ import { UpdateBadge } from './UpdateBadge'
  * - 标签页本身是半透明白底（未激活）/ 纯白底（激活），激活标签与下方
  *   工作区的白色背景连成一片，形成 VS Code 那种「标签属于内容」的观感。
  */
-export function TitleBar(): JSX.Element {
+export function TitleBar(): React.JSX.Element {
   const openCommandCenter = useUiStore((s) => s.openCommandCenter)
   const setSettingsOpen = useLayoutStore((s) => s.setSettingsOpen)
 

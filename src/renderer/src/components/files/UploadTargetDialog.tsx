@@ -1,3 +1,4 @@
+import type * as React from 'react'
 import { useEffect, useState } from 'react'
 import { ArrowUp, Folder, FolderPlus, Loader2 } from 'lucide-react'
 import type { RemoteFile } from '@shared/types'
@@ -36,7 +37,7 @@ export function UploadTargetDialog({
   kind?: 'file' | 'folder'
   onCancel: () => void
   onConfirm: (dir: string) => void
-}): JSX.Element | null {
+}): React.JSX.Element | null {
   const [dir, setDir] = useState(defaultDir)
   const [input, setInput] = useState(defaultDir)
   const [dirs, setDirs] = useState<RemoteFile[] | null>(null)

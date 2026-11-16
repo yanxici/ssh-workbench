@@ -1,3 +1,4 @@
+import type * as React from 'react'
 import { useEffect, useMemo, useRef, useState, type DragEvent } from 'react'
 import {
   ArrowDown,
@@ -93,7 +94,7 @@ export function CommandPanel({
   layout?: 'vertical' | 'horizontal'
   /** 头部「折叠」按钮回调；不传则不显示该按钮 */
   onCollapse?: () => void
-}): JSX.Element {
+}): React.JSX.Element {
   const horizontal = layout === 'horizontal'
   const commands = useCommandStore((s) => s.commands)
   const keyword = useCommandStore((s) => s.keyword)
@@ -454,7 +455,7 @@ export function CommandPanel({
     }
   }
 
-  const scopes: Array<{ scope: Scope; label: string; icon: JSX.Element }> = [
+  const scopes: Array<{ scope: Scope; label: string; icon: React.JSX.Element }> = [
     { scope: { kind: 'all' }, label: '全部', icon: <Braces size={10} /> },
     { scope: { kind: 'pinned' }, label: '收藏', icon: <Star size={10} /> },
     { scope: { kind: 'recent' }, label: '最近', icon: <Clock3 size={10} /> }
@@ -629,7 +630,7 @@ export function CommandPanel({
               key={group}
               className={cn(
                 horizontal &&
-                  'h-full w-[248px] shrink-0 overflow-y-auto rounded-md border border-edge-soft bg-panel/50 px-1 pt-1',
+                  'h-full rail-w shrink-0 overflow-y-auto rounded-md border border-edge-soft bg-panel/50 px-1 pt-1',
                 'relative mb-1',
                 dragGroup === group && 'opacity-40'
               )}
@@ -642,8 +643,8 @@ export function CommandPanel({
                   className={cn(
                     'pointer-events-none absolute z-10 rounded-full bg-accent',
                     horizontal
-                      ? cn('inset-y-0 w-[2px]', groupDrop.after ? '-right-[5px]' : '-left-[5px]')
-                      : cn('inset-x-0 h-[2px]', groupDrop.after ? '-bottom-[3px]' : '-top-[3px]')
+                      ? cn('inset-y-0 w-[2px]', groupDrop.after ? 'right-[-5px]' : 'left-[-5px]')
+                      : cn('inset-x-0 h-[2px]', groupDrop.after ? 'bottom-[-3px]' : 'top-[-3px]')
                   )}
                 />
               )}

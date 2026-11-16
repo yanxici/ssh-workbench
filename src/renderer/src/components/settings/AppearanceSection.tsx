@@ -1,3 +1,4 @@
+import type * as React from 'react'
 import { Monitor, Moon, Palette, Sun } from 'lucide-react'
 import type { ColorThemeId, ThemeMode } from '@shared/types'
 import { COLOR_THEMES } from '@/theme/colorThemes'
@@ -7,7 +8,7 @@ import { Row, Segmented } from './sectionUi'
 
 /** 设置 → 外观（明暗模式 + 配色主题画廊） */
 
-const THEME_OPTIONS: Array<{ value: ThemeMode; label: string; icon: JSX.Element }> = [
+const THEME_OPTIONS: Array<{ value: ThemeMode; label: string; icon: React.JSX.Element }> = [
   { value: 'dark', label: '暗色', icon: <Moon size={13} /> },
   { value: 'light', label: '亮色', icon: <Sun size={13} /> },
   { value: 'system', label: '跟随系统', icon: <Monitor size={13} /> }
@@ -25,7 +26,7 @@ export function ColorThemeGallery({
   value: ColorThemeId
   dark: boolean
   onChange: (next: ColorThemeId) => void
-}): JSX.Element {
+}): React.JSX.Element {
   return (
     <div className="grid grid-cols-3 gap-2">
       {COLOR_THEMES.map((t) => {
@@ -90,7 +91,7 @@ export function ColorThemeGallery({
   )
 }
 
-export function AppearanceSection(): JSX.Element {
+export function AppearanceSection(): React.JSX.Element {
   const settings = useSettingsStore((s) => s.settings)
   const update = useSettingsStore((s) => s.update)
   const dark = useIsDark()

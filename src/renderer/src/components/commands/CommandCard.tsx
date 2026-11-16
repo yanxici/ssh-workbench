@@ -1,3 +1,4 @@
+import type * as React from 'react'
 import { useState, type DragEvent, type MouseEvent } from 'react'
 import { createPortal } from 'react-dom'
 import { Pencil, Pin } from 'lucide-react'
@@ -53,7 +54,7 @@ export function CommandCard({
   onDragLeave: () => void
   onDrop: (e: DragEvent<HTMLButtonElement>) => void
   onDragEnd: () => void
-}): JSX.Element {
+}): React.JSX.Element {
   const tone = accentTone(c, pinned)
   const [anchor, setAnchor] = useState<{ x: number; y: number; w: number; h: number } | null>(null)
 

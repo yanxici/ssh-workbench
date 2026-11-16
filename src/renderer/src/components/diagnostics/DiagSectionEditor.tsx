@@ -1,3 +1,4 @@
+import type * as React from 'react'
 import { useEffect, useState } from 'react'
 import type { DiagSection, DiagSectionInput } from '@shared/types'
 import { Combobox, Field, Modal } from '@/components/ui'
@@ -43,7 +44,7 @@ export function DiagSectionEditor({
   /** 传入表示编辑/复制已有项（复制时 id 置空——由调用方处理） */
   initial: DiagSection | null
   onClose: () => void
-}): JSX.Element {
+}): React.JSX.Element {
   const sections = useDiagStore((s) => s.sections)
   const [form, setForm] = useState<FormState>(EMPTY)
   const [saving, setSaving] = useState(false)

@@ -1,3 +1,4 @@
+import type * as React from 'react'
 import { useState } from 'react'
 import { FileText, Save } from 'lucide-react'
 
@@ -15,7 +16,7 @@ export function RemoteEditorDialog({
   content: string
   onClose: () => void
   onSave: (content: string) => void
-}): JSX.Element {
+}): React.JSX.Element {
   const [text, setText] = useState(content)
   const dirty = text !== content
 

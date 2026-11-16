@@ -1,3 +1,4 @@
+import type * as React from 'react'
 import { ArrowDownToLine, ArrowLeft, ArrowRight, FolderTree, X } from 'lucide-react'
 import { useSftpStore } from '@/stores/sftpStore'
 import { LocalPane } from './LocalPane'
@@ -9,7 +10,7 @@ import { UploadTargetDialog } from './UploadTargetDialog'
  * 左：本地文件系统；右：远端设备文件系统；中间：上传/下载按钮。
  * 传输进度统一由全局 TransferProgressDock 展示（不随面板开关消失）。
  */
-export function FileManagerPanel(): JSX.Element | null {
+export function FileManagerPanel(): React.JSX.Element | null {
   const open = useSftpStore((s) => s.open)
   const sessionTitle = useSftpStore((s) => s.sessionTitle)
   const close = useSftpStore((s) => s.close)
@@ -32,7 +33,7 @@ export function FileManagerPanel(): JSX.Element | null {
   ).length
 
   return (
-    <div className="fixed inset-x-0 bottom-[26px] top-[38px] z-30 flex flex-col bg-app">
+    <div className="panel-shell fixed inset-x-0 z-30 flex flex-col bg-app">
       {/* 标题栏 */}
       <div className="flex h-9 shrink-0 items-center gap-2 border-b border-edge bg-panel px-3">
         <FolderTree size={14} className="text-accent" />

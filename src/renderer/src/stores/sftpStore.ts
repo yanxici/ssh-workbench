@@ -10,6 +10,19 @@ import { localDirname, localJoin, remoteDirname, remoteJoin } from '@/lib/utils'
 import { normalizeRemoteDir, rememberUploadDir, resolveUploadDir } from '@/lib/uploadDir'
 import { clearDirCache, invalidateDir, loadDir, peekDir } from '@/lib/dirCache'
 import { useToastStore } from './toastStore'
+import { queueTransferNotify } from '@/lib/taskNotify'
+
+/**
+ * 已经发过完成通知的 taskId。
+ *
+ * 为什么需要：主进程的进度事件有节流队列，同一个 taskId 的终态（done/error）
+ * 可能重复到达（applyProgress 里专门为"晚到的旧事件"做了单调保护）。
+ * 每多弹一条「传输完成」，用户对这条提示的信任就掉一截。
+ *
+ * 不清空是有意的：taskId 是每次传输新生成的 uuid，集合增长的速度等于
+ * 一次会话里的传输次数（几十到几百），比任何清空时机都便宜。
+ */
+const notifiedTasks = new Set<string>()
 
 /** 一次「选本地 → 上传」的结果：入队数 + 实际落点 */
 export interface UploadResult {
@@ -384,6 +397,13 @@ export const useSftpStore = create<SftpState>()((set, get) => ({
   },
 
   applyProgress: (e) => {
+    /*
+     * set() 的 updater 是个纯函数，里面的局部量出门就没了；而下面的通知判定
+     * 需要用到「这一帧算出来的终态」。所以用一个外置槽位把它带出来 ——
+     * 比在 set 之后再 findIndex 查一遍更稳（并发多个 taskId 时查回来的可能是别人）。
+     */
+    let terminal: TransferTask | null = null
+
     set((s) => {
       const idx = s.transfers.findIndex((t) => t.id === e.taskId)
       const base: TransferTask =
@@ -418,6 +438,7 @@ export const useSftpStore = create<SftpState>()((set, get) => ({
         finishedAt: finished ? Date.now() : base.finishedAt
       }
 
+      if (finished) terminal = updated
       const next = [...s.transfers]
       if (idx >= 0) next[idx] = updated
       else next.push(updated)
@@ -429,6 +450,27 @@ export const useSftpStore = create<SftpState>()((set, get) => ({
     if (e.status === 'done') {
       if (e.direction === 'upload') void get().refreshRemote()
       else void get().refreshLocal()
+    }
+
+    /*
+     * 完成/失败的通知。
+     *
+     * 必须去重：主进程的进度事件有节流队列，同一个 taskId 的 done 可能重复到达
+     * （见上面"晚到的旧事件不能把进度条往回拉"那条注释）。这里用一份
+     * 已通知过的 taskId 集合挡住重复 —— 每多弹一条"传输完成"，用户对这条
+     * 提示的信任就掉一截。
+     */
+    if (terminal && !notifiedTasks.has(e.taskId)) {
+      notifiedTasks.add(e.taskId)
+      const done: TransferTask = terminal
+      const name = done.remotePath || done.localPath || '文件'
+      const base = name.split(/[\\/]/).pop() || name
+      queueTransferNotify({
+        sessionId: e.sessionId,
+        ok: done.status === 'done',
+        bytes: done.total > 0 ? done.total : done.transferred,
+        name: base
+      })
     }
   },
 

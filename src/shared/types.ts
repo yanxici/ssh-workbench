@@ -194,6 +194,17 @@ export interface ConnectionSecret {
   passphrase?: string
 }
 
+/**
+ * 连接过程中的细分阶段。
+ *
+ * 为什么需要它：原先只有 connecting / connected / disconnected 三态，
+ * 用户在看到「连接中」时无法判断卡在哪一步 —— TCP 没通、认证被拒、还是跳板链在等。
+ * 这三类问题的排查动作完全不同（查网络 / 查凭据 / 查跳板机），所以必须外露。
+ *
+ * 取值刻意保持粗粒度：细到「第几个跳板」对用户没有意义，反而让状态栏抖动。
+ */
+export type ConnPhase = 'tcp' | 'handshake' | 'auth' | 'jump' | 'shell'
+
 export type ConnStatus =
   | 'connecting'
   | 'connected'
@@ -287,6 +298,11 @@ export interface SessionInfo {
   target: string
   title: string
   status: ConnStatus
+  /**
+   * 连接细分阶段（仅在 status === 'connecting' 时有意义）。
+   * 缺省表示未知（老数据 / 串口会话）。
+   */
+  phase?: ConnPhase
   error?: string
   createdAt: number
   /** 最近一次探测的往返延迟（ms） */
@@ -324,6 +340,43 @@ export interface TerminalPrefs {
   cursorStyle: 'block' | 'underline' | 'bar'
   cursorBlink: boolean
   scrollback: number
+}
+
+/**
+ * 终端输出高亮的一条规则。
+ *
+ * 为什么 pattern 存字符串而不是 RegExp：它要落进 settings.json。
+ * 正则源串 + 标志分开存，编译时机由使用方决定（渲染层 compileRules），
+ * 这样「写错的正则」可以在设置页就地报错，而不是加载设置时整份配置炸掉。
+ *
+ * 为什么只支持 #RRGGBB：xterm 的 IDecorationOptions.backgroundColor /
+ * foregroundColor 只认这一种格式，喂 rgba() 会静默不上色。
+ */
+export interface HighlightRule {
+  id: string
+  name: string
+  /** 正则源串（不含定界符） */
+  pattern: string
+  /** 正则标志，只允许 i / m / s / u 的子集（g、y 有状态，会残留 lastIndex） */
+  flags?: string
+  enabled: boolean
+  /** 整行背景色 */
+  background?: string
+  /** 行内文字前景色（缺省保留终端原有配色） */
+  foreground?: string
+}
+
+/**
+ * 终端输出高亮的偏好。
+ *
+ * 缺省规则（两条内置规则）刻意**不**写在主进程的 DEFAULT_SETTINGS 里，
+ * 而是由渲染层的 lib/highlight.ts 提供 —— 规则的默认值和渲染逻辑必须
+ * 待在一起，否则两边各存一份必然漂移（本项目已经有过 FALLBACK 与
+ * DEFAULT_SETTINGS 不一致的先例）。这里 undefined 就表示「用渲染层默认」。
+ */
+export interface OutputHighlightPrefs {
+  enabled: boolean
+  rules: HighlightRule[]
 }
 
 export interface AppSettings {
@@ -390,6 +443,17 @@ export interface AppSettings {
    * 否则等于永久关掉了更新提示。
    */
   updateSkippedVersion?: string
+  /** 终端输出关键词高亮（缺省 undefined = 用渲染层内置的两条规则） */
+  outputHighlight?: OutputHighlightPrefs
+  /** 任务完成通知偏好（缺省由主进程 DEFAULT_SETTINGS 补齐） */
+  taskNotify?: TaskNotifyPrefs
+  /**
+   * 分屏布局（按**连接 id**存，不是会话 id）。
+   *
+   * 只在 restoreSessions 打开时写/读。单格标签不写 —— 那种情况下什么都没变，
+   * 存了反而让 lastOpenSessions 与它两处都要维护同一份信息。
+   */
+  splitLayout?: SplitLayoutMap
   /**
    * 外观外壳版本号。
    *
@@ -398,7 +462,57 @@ export interface AppSettings {
    * 「用户主动选的」还是「装的时候写进去的」，只能靠版本号判定。
    */
   uiShellVersion?: number
+  /**
+   * 实验性开关（设计 token 灰度）。
+   *
+   * 为什么按「面板」而不是按「token 类别」分：验收标准是「各面板看起来统一」，
+   * 按面板灰度才能逐个面板确认视觉；按类别分会让每个面板都处于半新半旧状态，
+   * 反而更难看，也让「关掉谁能回到旧样子」这个问题失去答案。
+   *
+   * 为什么走 settings 而不是 URL 参数/localStorage：项目已有一条完整的
+   * 持久化链路（settingsService + JsonStore + IpcResult），复用它不新增依赖，
+   * 也能让用户跨会话保留选择。
+   */
+  experimental?: ExperimentalFlags
 }
+
+/** 实验性开关（缺省全部关闭 = 旧视觉） */
+export interface ExperimentalFlags {
+  /** 各面板的设计 token 灰度开关；true 表示该面板使用新 token */
+  tokens?: Partial<Record<TokenPanel, boolean>>
+  /**
+   * 强制软件渲染（关闭 GPU 加速）。
+   *
+   * 由**自愈机制**自动写入：检测到 GPU 进程异常退出后，下一次启动直接走软件路径，
+   * 避免同一台机器反复崩。也可以由用户在设置里手动打开（远程桌面/老显卡场景）。
+   *
+   * 为什么用「自我修复 + 持久化」而不是启动时探测：
+   *   `app.disableHardwareAcceleration()` 必须在 whenReady 之前**同步**调用，
+   *   而 `app.getGPUInfo()` 是异步的 —— 探测不到真实 GPU 状态。
+   *   与其假装能预判，不如把「真实崩溃」当作信号，崩一次之后永久降级。
+   */
+  softwareRender?: boolean
+  /**
+   * 终端渲染后端。
+   *
+   * 为什么默认 DOM 而不是 WebGL：
+   *   xterm 6.0.0 + @xterm/addon-webgl 0.19.0 在 Intel UHD / ANGLE D3D11 上
+   *   把字形画得明显小于格子（实测同一行 `MWMWMWMW` 的墨迹宽度 WebGL 27~34px、
+   *   DOM 31px，细笔 `i`/`l` 只剩 5~7px），视觉上就是「字距突然变宽、笔画变细」。
+   *   格子（cell）尺寸两条路径完全一致，所以这不是字号/DPI/字体栈问题，
+   *   而是图集栅格化后的字形尺寸回归 —— 只能靠换后端绕开。
+   *   帧率收益远不如「看着正常」重要，因此默认 DOM，WebGL 作为可选加速。
+   *
+   * 取值：'dom'（默认）| 'webgl'（强制，失败仍回落）| 'auto'（先试 WebGL）
+   */
+  terminalRenderer?: TerminalRenderer
+}
+
+/** 终端渲染后端 */
+export type TerminalRenderer = 'dom' | 'webgl' | 'auto'
+
+/** 可独立灰度的面板 */
+export type TokenPanel = 'terminal' | 'sftp' | 'connections' | 'commandPanel' | 'statusBar'
 
 /**
  * 侧栏尺寸。每个值都是「用户显式拖动过」才会写入，
@@ -446,8 +560,33 @@ export type ShortcutAction =
   | 'terminalCopy'
   | 'terminalPaste'
   | 'commandCenter'
+  | 'paneLeft'
+  | 'paneRight'
+  | 'paneUp'
+  | 'paneDown'
 
 export type ShortcutMap = Partial<Record<ShortcutAction, string>>
+
+/* ------------------------------------------------------------------ *
+ *  分屏
+ * ------------------------------------------------------------------ */
+
+/**
+ * 落盘用的分屏树。
+ *
+ * 字段名压缩成单字母是因为这棵树会按连接重复存进 settings.json，
+ * 每多一个键就多一份冗余（一棵 4 格树 = 7 个节点）。
+ *
+ * 叶子里存 **connectionId** 而不是 sessionId：sessionId 是每次启动新生成的
+ * uid()，存它下次启动一个都对不上。恢复时把 connectionId 换成「这次启动
+ * 新建的会话」—— 由于分屏只在同一连接内，顺序是确定的。
+ */
+export type PersistedPane =
+  | { t: 'l'; c: string }
+  | { t: 's'; d: 'row' | 'col'; r: number; k: [PersistedPane, PersistedPane] }
+
+/** connectionId -> 该连接的标签分屏树 */
+export type SplitLayoutMap = Record<string, PersistedPane>
 
 /* ------------------------------------------------------------------ *
  *  设备档案（P2 使用，类型先行）
@@ -602,6 +741,15 @@ export interface ConnectionInput {
   remark?: string
   proxyJump?: string[]
   proxy?: ProxyConfig
+  /**
+   * 「另存为新设备」时带上原连接 id：新记录落库后把原连接保险箱里的
+   * password / passphrase / proxyPassword 复制一份过去。
+   *
+   * 没有这个字段的话，另存出来的新 id 在保险箱里是空的 —— 用户点了
+   * 「另存为新设备并连接」，密码却丢了，第一次连接又要手输一遍。
+   * 只对「新建记录」生效（同 id 更新本来就沿用原值），源 id 不存在时静默跳过。
+   */
+  reuseSecretFrom?: string
 }
 
 export interface TestConnectionInput {
@@ -1097,6 +1245,8 @@ export interface SessionStatusEvent {
   sessionId: string
   status: ConnStatus
   error?: string
+  /** 连接阶段（仅 connecting 时有值） */
+  phase?: ConnPhase
 }
 
 /** 终端数据推送（主进程 -> 渲染进程） */
@@ -1109,6 +1259,29 @@ export interface SessionDataEvent {
    * 而 data 是经 StringDecoder 解码的文本，不能用于协议解析。
    */
   raw?: string
+}
+
+/* ------------------------------------------------------------------ *
+ *  trzsz 文件传输（trz / tsz）
+ * ------------------------------------------------------------------ */
+
+/**
+ * 一个会话的 trzsz 传输状态。
+ *
+ * 为什么不复用 TransferProgressEvent：那套是 SFTP 的字节级进度（transferred/total），
+ * 而 trzsz 的进度只存在于远端发来的进度条文本里（「文件名 [███░░░] 45% | …」），
+ * 我们只能从文本里抠百分比，拿不到总字节数。硬塞进同一张表会让状态条要么显示假数据、
+ * 要么到处判空。
+ */
+export interface TrzszTransferState {
+  /** 是否有传输在进行（false 表示这条状态是收尾/提示） */
+  active: boolean
+  /** 当前文件名（trzsz 进度条里那一个，可能是截断过的） */
+  file?: string
+  /** 0~100，拿不到具体进度条时缺省 */
+  percent?: number
+  /** 非进度类的提示 */
+  notice?: 'no-remote-trz'
 }
 
 /* ------------------------------------------------------------------ *
@@ -1161,4 +1334,80 @@ export interface UpdateStatus {
    * 点过后标题栏收起成一个小圆点，不再强提示；重启应用会重置。
    */
   dismissed?: boolean
+}
+/* ------------------------------------------------------------------ *
+ *  TFTP：给 U-Boot 刷机用的内置服务端
+ * ------------------------------------------------------------------ */
+
+/**
+ * 内置 TFTP 服务端状态。
+ *
+ * 只服务「一台设备、一个文件」这一种用法：现场刷 7628 时 U-Boot 侧
+ * 只会 RRQ 一次固件，服务完就该停掉 —— 长期挂在 69 端口上等着，
+ * 等于把本机文件系统的一部分暴露给同网段的任何人。
+ */
+export interface TftpServerState {
+  running: boolean
+  port: number
+  /** 服务目录（固件所在目录）。未启动时为空 */
+  dir: string | null
+  /** 当前对外提供的文件名（固件名），未启动时为空 */
+  file: string | null
+  /** 本机可用 IPv4，用于在 U-Boot 里 setenv serverip */
+  addresses: string[]
+  /** 最近一次传输的对端（ip:port），无传输时为空 */
+  client: string | null
+  /** 已传字节 / 总字节，用于进度显示 */
+  transferred: number
+  total: number
+}
+
+/** TFTP 服务端日志（启动/请求/重传/失败/完成），推给串口引导条显示 */
+export interface TftpLogEvent {
+  level: 'info' | 'error'
+  message: string
+  at: number
+}
+
+/**
+ * 任务完成通知偏好（v2.1.4）。
+ *
+ * 为什么四项攒成一个对象而不是散在 AppSettings 顶层：它们是同一件事
+ * 「长任务跑完了要不要吵我」的四个维度，设置页里也是一个分区；散着放
+ * 以后每加一个维度就要动一次 mergeSettings 的键清单。
+ */
+export interface TaskNotifyPrefs {
+  /** 总开关：关掉后不再产生任何任务完成提示 */
+  enabled: boolean
+  /** 窗口失焦时发系统通知（Windows 操作中心），聚焦时只留应用内 toast */
+  system: boolean
+  /** 伴随提示音 */
+  sound: boolean
+  /**
+   * 启发式「疑似任务结束」：终端静默 1.5s 以上且窗口失焦时提醒。
+   *
+   * 默认关闭 —— 它只能靠「没动静了」来猜，猜错就是纯噪声：用户在别的
+   * 窗口看文档、设备那边 tail -f 每隔几秒吐一行，永远不触发；反过来
+   * 编译到一半去倒水，回来收到一条「疑似完成」。文案里写「疑似」而不是
+   * 「已完成」，就是不让它冒充确定事实。
+   */
+  heuristic: boolean
+  /**
+   * 已静音的连接 id。
+   *
+   * 存**连接**而不是会话：sessionId 每次启动都是新的，按会话静音的话，
+   * 「重启后那条一直在刷日志的设备又开始弹」会反复发生；用户真正想要的
+   * 语义是「这台设备别烦我」。
+   */
+  mutedConnectionIds?: string[]
+}
+
+/** 弹一条系统通知的入参（渲染层 -> 主进程） */
+export interface TaskNotifyPayload {
+  title: string
+  body?: string
+  /** 点击通知后要切过去的会话 id；空则只激活窗口、不切标签 */
+  sessionId?: string
+  /** 这条不响（逐条覆盖，最终是否出声还看偏好里的 sound） */
+  silent?: boolean
 }

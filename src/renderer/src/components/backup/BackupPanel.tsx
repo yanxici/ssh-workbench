@@ -1,3 +1,4 @@
+import type * as React from 'react'
 import { useState } from 'react'
 import {
   Archive,
@@ -21,7 +22,7 @@ import { useToastStore } from '@/stores/toastStore'
  * 配置备份对比（覆盖主区域）：
  * 备份设备配置文件到本地 → 与设备当前内容逐文件对比（行级 diff）→ 一键还原（自动留 .bak）。
  */
-export function BackupPanel(): JSX.Element | null {
+export function BackupPanel(): React.JSX.Element | null {
   const panelOpen = useBackupStore((s) => s.panelOpen)
   const backups = useBackupStore((s) => s.backups)
   const selectedId = useBackupStore((s) => s.selectedId)
@@ -31,7 +32,7 @@ export function BackupPanel(): JSX.Element | null {
   const close = (): void => useBackupStore.setState({ panelOpen: false })
 
   return (
-    <div className="fixed inset-x-0 bottom-[26px] top-[38px] z-30 flex flex-col bg-app">
+    <div className="panel-shell fixed inset-x-0 z-30 flex flex-col bg-app">
       {/* 标题栏 */}
       <div className="flex h-9 shrink-0 items-center gap-2 border-b border-edge bg-panel px-3">
         <Archive size={14} className="text-accent" />
@@ -86,7 +87,7 @@ export function BackupPanel(): JSX.Element | null {
  *  左侧行
  * ------------------------------------------------------------------ */
 
-function BackupRow({ backup, selected }: { backup: BackupMeta; selected: boolean }): JSX.Element {
+function BackupRow({ backup, selected }: { backup: BackupMeta; selected: boolean }): React.JSX.Element {
   const [confirming, setConfirming] = useState(false)
   return (
     <div
@@ -145,7 +146,7 @@ function BackupRow({ backup, selected }: { backup: BackupMeta; selected: boolean
  *  右侧详情
  * ------------------------------------------------------------------ */
 
-function BackupDetailView(): JSX.Element {
+function BackupDetailView(): React.JSX.Element {
   const detail = useBackupStore((s) => s.detail)
   const diffs = useBackupStore((s) => s.diffs)
   const diffPath = useBackupStore((s) => s.diffPath)
@@ -302,7 +303,7 @@ function BackupDetailView(): JSX.Element {
               <X size={11} />
             </button>
           </div>
-          <div className="scroll-thin min-h-0 flex-1 overflow-auto bg-app px-2 py-1.5 font-mono text-2xs leading-[1.5]">
+          <div className="scroll-thin min-h-0 flex-1 overflow-auto bg-app px-2 py-1.5 font-mono text-2xs leading-normal">
             {!diff && <div className="text-ink-3">对比中…</div>}
             {diff?.status === 'same' && (
               <div className="py-3 text-center text-ink-3">设备当前内容与备份完全一致 ✓</div>
@@ -378,7 +379,7 @@ function DiffStatusChip({
 }: {
   entry?: string
   diff?: BackupDiffResult
-}): JSX.Element {
+}): React.JSX.Element {
   if (entry) {
     return <span className="shrink-0 rounded bg-warning/10 px-1 py-px text-3xs text-warning" title={entry}>读取失败</span>
   }
@@ -401,7 +402,7 @@ function DiffStatusChip({
 
 const DEFAULT_PATHS = '/etc/config\n/etc/network/interfaces\n/etc/hosts'
 
-function CreateBackupModal(): JSX.Element {
+function CreateBackupModal(): React.JSX.Element {
   const open = useBackupStore((s) => s.createOpen)
   const sessions = useSshSessions()
   const connected = sessions.filter((s) => s.status === 'connected')

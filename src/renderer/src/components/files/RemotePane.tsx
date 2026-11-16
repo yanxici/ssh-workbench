@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState, type MouseEvent } from 'react'
+import type * as React from 'react'
+import { useEffect, useMemo, useRef, useState, type MouseEvent } from 'react'
 import {
   ArrowUp,
   Download,
@@ -24,9 +25,11 @@ import {
   type MenuEntry
 } from '@/components/ui'
 import { isImeComposing } from '@/lib/ime'
+import { useTokenFlag } from '@/lib/useTokenFlag'
+import { useVirtualizer } from '@tanstack/react-virtual'
 
 /** 文件管理器右栏：远程设备文件系统（下载来源 / 上传目标） */
-export function RemotePane(): JSX.Element {
+export function RemotePane(): React.JSX.Element {
   const dir = useSftpStore((s) => s.remoteDir)
   /** 本面板所属会话：上传/下载执行链路要求显式传入（不再依赖 store.sessionId） */
   const sessionId = useSftpStore((s) => s.sessionId)
@@ -68,12 +71,29 @@ export function RemotePane(): JSX.Element {
    * 与 FileExplorer/SessionFileTree 用同一个上限口径（300），
    * 超出部分给「还有 N 项」，用户主动点才全量渲染。
    */
-  const ROW_LIMIT = 300
-  const shownFiles = useMemo(
-    () => (files.length > ROW_LIMIT ? files.slice(0, ROW_LIMIT) : files),
-    [files]
-  )
+  /* 设计 token 灰度：为 true 时行使用 24px 固定行高 */
+  const tokensOn = useTokenFlag('sftp')
 
+  /*
+   * 虚拟滚动（阶段 3）。
+   *
+   * 原做法是「截断到 300 项 + 提示还有 N 项」：1 万文件的目录用户看不到全貌，
+   * 只能靠路径栏猜。改成窗口化后 DOM 里始终只有视口内十几行，滚动覆盖全部条目。
+   *
+   * 行高必须固定（ROW_H）：虚拟化靠「索引 × 行高」定位，动态行高需要 measureElement，
+   * 而这里所有行结构完全相同，固定高是最优解。24px 与阶段 1 的 token 行口径一致。
+   *
+   * 注意：**选中与全选语义仍基于 files 全量**（sel / selSet 不变），
+   * 不受「当前渲染了哪几行」影响 —— 否则 Ctrl+A 会退化成「全选可见部分」。
+   */
+  const ROW_H = tokensOn ? 24 : 22
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const vrow = useVirtualizer({
+    count: files.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => ROW_H,
+    overscan: 8
+  })
   const clickRow = (path: string, e: MouseEvent): void => {
     if (e.ctrlKey || e.metaKey) {
       setSel(selSet.has(path) ? sel.filter((p) => p !== path) : [...sel, path])
@@ -168,6 +188,7 @@ export function RemotePane(): JSX.Element {
 
       {/* 列表（同时是上传落点） */}
       <div
+        ref={scrollRef}
         className="scroll-thin min-h-0 flex-1 overflow-y-auto p-1"
         onDragOver={(e) => {
           if (e.dataTransfer.types.includes('application/x-local-paths')) e.preventDefault()
@@ -192,53 +213,64 @@ export function RemotePane(): JSX.Element {
             <Loader2 size={13} className="animate-spin" /> 读取中…
           </div>
         )}
-        {shownFiles.map((f) => (
-          <div
-            key={f.path}
-            draggable
-            onDragStart={(e) => {
-              e.dataTransfer.setData(
-                'application/x-remote-paths',
-                JSON.stringify(selSet.has(f.path) ? sel : [f.path])
-              )
-              e.dataTransfer.effectAllowed = 'copy'
-            }}
-            onClick={(e) => clickRow(f.path, e)}
-            onDoubleClick={() => {
-              if (f.type === 'directory') void nav(f.path)
-              else void openEditor(sessionId, f.path)
-            }}
-            onContextMenu={(e) => openMenu(e, f.path)}
-            className={cn(
-              'file-row-cv flex cursor-default items-center gap-2 rounded px-2 py-[3px] text-xs',
-              selSet.has(f.path) ? 'bg-accent/15 text-ink' : 'text-ink-2 hover:bg-hover/60'
-            )}
-            title={f.path}
-          >
-            {f.type === 'directory' ? (
-              <Folder size={13} className="shrink-0 text-accent/80" />
-            ) : f.isLink ? (
-              <Link2 size={13} className="shrink-0 text-warning/80" />
-            ) : (
-              <FileText size={13} className="shrink-0 text-ink-3" />
-            )}
-            <span className="min-w-0 flex-1 truncate">{f.name}</span>
-            <span className="w-16 shrink-0 text-right font-mono text-2xs text-ink-3">
-              {f.type === 'directory' ? '—' : formatBytes(f.size)}
-            </span>
-            <span className="w-[88px] shrink-0 text-right font-mono text-2xs text-ink-3">
-              {f.modeStr}
-            </span>
-            <span className="w-[104px] shrink-0 text-right font-mono text-2xs text-ink-3">
-              {formatTime(f.mtime)}
-            </span>
-          </div>
-        ))}
-        {files.length > shownFiles.length && (
-          <div className="px-2 py-1 text-2xs text-ink-3">
-            仅显示前 {shownFiles.length} 项，共 {files.length} 项 —— 用上方的路径栏可直接进入目标目录
-          </div>
-        )}
+        {/* 虚拟滚动：只渲染视口内的行，滚动覆盖全部 files */}
+        <div style={{ height: vrow.getTotalSize(), position: 'relative', width: '100%' }}>
+          {vrow.getVirtualItems().map((vi) => {
+            const f = files[vi.index]
+            if (!f) return null
+            return (
+              <div
+                key={f.path}
+                style={{
+                  position: 'absolute',
+                  top: 0,
+                  left: 0,
+                  width: '100%',
+                  height: vi.size,
+                  transform: `translateY(${vi.start}px)`
+                }}
+                draggable
+                onDragStart={(e) => {
+                  e.dataTransfer.setData(
+                    'application/x-remote-paths',
+                    JSON.stringify(selSet.has(f.path) ? sel : [f.path])
+                  )
+                  e.dataTransfer.effectAllowed = 'copy'
+                }}
+                onClick={(e) => clickRow(f.path, e)}
+                onDoubleClick={() => {
+                  if (f.type === 'directory') void nav(f.path)
+                  else void openEditor(sessionId, f.path)
+                }}
+                onContextMenu={(e) => openMenu(e, f.path)}
+                className={cn(
+                  'flex h-full cursor-default items-center gap-2 rounded px-2 text-xs',
+                  tokensOn && 'file-row-token-inner',
+                  selSet.has(f.path) ? 'bg-accent/15 text-ink' : 'text-ink-2 hover:bg-hover/60'
+                )}
+                title={f.path}
+              >
+                {f.type === 'directory' ? (
+                  <Folder size={13} className="shrink-0 text-accent/80" />
+                ) : f.isLink ? (
+                  <Link2 size={13} className="shrink-0 text-warning/80" />
+                ) : (
+                  <FileText size={13} className="shrink-0 text-ink-3" />
+                )}
+                <span className="min-w-0 flex-1 truncate">{f.name}</span>
+                <span className="w-16 shrink-0 text-right font-mono text-2xs text-ink-3">
+                  {f.type === 'directory' ? '—' : formatBytes(f.size)}
+                </span>
+                <span className="w-[88px] shrink-0 text-right font-mono text-2xs text-ink-3">
+                  {f.modeStr}
+                </span>
+                <span className="w-[104px] shrink-0 text-right font-mono text-2xs text-ink-3">
+                  {formatTime(f.mtime)}
+                </span>
+              </div>
+            )
+          })}
+        </div>
       </div>
 
       {menu && <ContextMenu x={menu.x} y={menu.y} items={menuItems(menu.target)} onClose={closeMenu} />}

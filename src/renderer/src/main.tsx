@@ -1,7 +1,17 @@
 import ReactDOM from 'react-dom/client'
 import { App } from './App'
+import { installCanvasFontShim } from './lib/canvasFont'
 import './styles/index.css'
 import '@xterm/xterm/css/xterm.css'
+
+/*
+ * 必须在任何 canvas 绘制之前打上字体串补丁：
+ * WebGL 终端（@xterm/addon-webgl）拼字体串时会多出一个前导空格，
+ * Chromium 的 canvas font 解析器不 trim，整串被判非法而静默退回
+ * 10px sans-serif —— 表现就是「字被画小、笔画变细、字距看着变宽」。
+ * 详见 lib/canvasFont.ts 的注释。
+ */
+installCanvasFontShim()
 
 /**
  * 刻意不启用 StrictMode：

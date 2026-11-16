@@ -1,3 +1,4 @@
+import type * as React from 'react'
 import { useEffect, useMemo, useState } from 'react'
 import {
   Activity,
@@ -38,7 +39,7 @@ import { BundleDialog } from './BundleDialog'
  * - 运行诊断：左侧勾选诊断项（内置 + 自定义），右侧实时展示逐节采集结果；
  * - 报告库：历史报告的查看 / 导出（Markdown / HTML）/ 删除。
  */
-export function DiagnosticsPanel(): JSX.Element | null {
+export function DiagnosticsPanel(): React.JSX.Element | null {
   const panelOpen = useDiagStore((s) => s.panelOpen)
   const tab = useDiagStore((s) => s.tab)
   const setTab = useDiagStore((s) => s.setTab)
@@ -58,7 +59,7 @@ export function DiagnosticsPanel(): JSX.Element | null {
   const close = (): void => useDiagStore.setState({ panelOpen: false })
 
   return (
-    <div className="fixed inset-x-0 bottom-[26px] top-[38px] z-30 flex flex-col bg-app">
+    <div className="panel-shell fixed inset-x-0 z-30 flex flex-col bg-app">
       {/* 标题栏 */}
       <div className="flex h-9 shrink-0 items-center gap-2 border-b border-edge bg-panel px-3">
         <Activity size={14} className="text-accent" />
@@ -126,7 +127,7 @@ export function DiagnosticsPanel(): JSX.Element | null {
  *  运行诊断视图
  * ------------------------------------------------------------------ */
 
-function RunView({ onEditSection }: { onEditSection: (s: DiagSection | null) => void }): JSX.Element {
+function RunView({ onEditSection }: { onEditSection: (s: DiagSection | null) => void }): React.JSX.Element {
   const sections = useDiagStore((s) => s.sections)
   const selected = useDiagStore((s) => s.selected)
   const running = useDiagStore((s) => s.running)
@@ -372,7 +373,7 @@ function RunView({ onEditSection }: { onEditSection: (s: DiagSection | null) => 
   )
 }
 
-function SummaryBar({ report }: { report: DiagReport }): JSX.Element {
+function SummaryBar({ report }: { report: DiagReport }): React.JSX.Element {
   return (
     <div className="flex items-center gap-2 rounded-lg border border-edge bg-panel px-3 py-2">
       <CheckCircle2 size={14} className="text-success" />
@@ -394,7 +395,7 @@ function SummaryBar({ report }: { report: DiagReport }): JSX.Element {
  *  逐节结果卡片
  * ------------------------------------------------------------------ */
 
-function LiveResultCard({ sectionId }: { sectionId: string }): JSX.Element | null {
+function LiveResultCard({ sectionId }: { sectionId: string }): React.JSX.Element | null {
   const section = useDiagStore((s) => s.sections.find((x) => x.id === sectionId))
   const status = useDiagStore((s) => s.statuses[sectionId])
   const result = useDiagStore((s) => s.results[sectionId])
@@ -412,7 +413,7 @@ function PlaceholderCard({
   name: string
   group: string
   status: DiagSectionStatus
-}): JSX.Element {
+}): React.JSX.Element {
   return (
     <div className="flex items-center gap-2 rounded-lg border border-edge-soft bg-panel/60 px-3 py-2">
       <StatusIcon status={status} />
@@ -424,7 +425,7 @@ function PlaceholderCard({
   )
 }
 
-function StatusIcon({ status }: { status: DiagSectionStatus }): JSX.Element {
+function StatusIcon({ status }: { status: DiagSectionStatus }): React.JSX.Element {
   switch (status) {
     case 'running':
       return <Loader2 size={13} className="shrink-0 animate-spin text-accent" />
@@ -441,7 +442,7 @@ function StatusIcon({ status }: { status: DiagSectionStatus }): JSX.Element {
   }
 }
 
-function ResultCard({ result, defaultOpen = false }: { result: DiagSectionResult; defaultOpen?: boolean }): JSX.Element {
+function ResultCard({ result, defaultOpen = false }: { result: DiagSectionResult; defaultOpen?: boolean }): React.JSX.Element {
   const [open, setOpen] = useState(defaultOpen || result.status === 'error' || result.status === 'timeout')
 
   const copyOutput = (): void => {
@@ -503,7 +504,7 @@ function ResultCard({ result, defaultOpen = false }: { result: DiagSectionResult
  *  报告库
  * ------------------------------------------------------------------ */
 
-function ReportsListView({ onBundle }: { onBundle: (id: string) => void }): JSX.Element {
+function ReportsListView({ onBundle }: { onBundle: (id: string) => void }): React.JSX.Element {
   const reports = useDiagStore((s) => s.reports)
   const [keyword, setKeyword] = useState('')
   const [pendingDelete, setPendingDelete] = useState<string | null>(null)
@@ -646,7 +647,7 @@ function ReportDetailView({
 }: {
   report: DiagReport
   onBundle: (id: string) => void
-}): JSX.Element {
+}): React.JSX.Element {
   const closeReport = useDiagStore((s) => s.closeReport)
   return (
     <div className="flex min-h-0 flex-1 flex-col">

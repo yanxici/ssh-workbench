@@ -21,6 +21,8 @@ function channelTitle(channel: string): string {
     'session:write': '终端写入失败',
     'serial:list': '枚举串口失败',
     'serial:refresh': '刷新串口列表失败',
+    'tftp:start': '启动 TFTP 服务端失败',
+    'tftp:stop': '停止 TFTP 服务端失败',
     'sftp:list': '读取远程目录失败',
     'sftp:upload': '上传失败',
     'sftp:upload-folder-dialog': '上传文件夹失败',
@@ -34,7 +36,11 @@ function channelTitle(channel: string): string {
     'sftp:writeText': '写入远程文件失败',
     'tunnel:start': '启动端口转发失败',
     'diag:run': '诊断巡检失败',
-    'batch:run': '批量执行失败'
+    'batch:run': '批量执行失败',
+    'notify:show': '弹出系统通知失败',
+    'win:focus': '激活窗口失败',
+    'trzsz:upload': '开始 trzsz 上传失败',
+    'trzsz:cancel': '取消 trzsz 传输失败'
   }
   return map[channel] ?? `操作失败（${channel}）`
 }
