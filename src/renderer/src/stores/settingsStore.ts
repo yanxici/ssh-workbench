@@ -19,6 +19,8 @@ const FALLBACK: AppSettings = {
   commandPanelPosition: 'right',
   latencyProbe: true,
   autoLog: true,
+  logPlainText: true,
+  logTimestamp: true,
   dangerPatterns: ['rm -rf', 'mkfs', 'dd if=', 'shutdown', 'reboot', 'poweroff'],
   strictHostKey: true,
   /* 与主进程 DEFAULT_SETTINGS 对齐：缺省全部关闭（旧视觉），终端用 DOM 渲染器 */

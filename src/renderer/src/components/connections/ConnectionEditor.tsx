@@ -28,6 +28,13 @@ import type {
   TestConnectionResult
 } from '@shared/types'
 import { describeSerialTarget } from '@shared/serialDisplay'
+import {
+  SERIAL_MAX_CHAR_DELAY_MS,
+  SERIAL_MAX_LINE_DELAY_MS,
+  describeSerialPacing,
+  normalizeCharDelayMs,
+  normalizeLineDelayMs
+} from '@shared/serialTiming'
 import { useConnectionStore } from '@/stores/connectionStore'
 import { useSessionStore } from '@/stores/sessionStore'
 import { useToastStore } from '@/stores/toastStore'
@@ -77,6 +84,14 @@ interface FormState {
   /** 打开端口时拉 DTR 复位设备（默认关，见 types.ts 里的事故说明） */
   serialAutoReset: boolean
   /**
+   * 逐字符发送间隔（毫秒）与换行后间隔，存字符串。
+   *
+   * 和波特率同理：输入过程中会出现空串，Number('') 是 0 而不是 NaN，
+   * 直接存 number 会让「删空再输入」变得不可能（值被立刻钉成 0）。
+   */
+  serialCharDelay: string
+  serialLineDelay: string
+  /**
    * 选中端口时记下的 USB 身份，保存时一并落库。
    *
    * 它的用途不是"显示"，而是热插拔后把连接找回同一台设备：COM 号会漂，
@@ -114,6 +129,8 @@ const EMPTY: FormState = {
   serialCharset: 'utf-8',
   serialNewline: 'cr',
   serialAutoReset: false,
+  serialCharDelay: '0',
+  serialLineDelay: '0',
   serialSn: '',
   serialPnp: ''
 }
@@ -283,6 +300,8 @@ export function ConnectionEditor({
         serialCharset: initial.serial?.charset ?? EMPTY.serialCharset,
         serialNewline: initial.serial?.newline ?? EMPTY.serialNewline,
         serialAutoReset: initial.serial?.autoReset ?? false,
+        serialCharDelay: String(initial.serial?.charDelayMs ?? 0),
+        serialLineDelay: String(initial.serial?.lineDelayMs ?? 0),
         serialSn: initial.serial?.usbSerialNumber ?? '',
         serialPnp: initial.serial?.usbPnpId ?? ''
       })
@@ -392,10 +411,26 @@ export function ConnectionEditor({
       charset: form.serialCharset,
       newline: form.serialNewline,
       autoReset: form.serialAutoReset,
+      // 收敛放在共享模块里：界面允许填错（空串、负数、超出上限），
+      // 落库和传输层拿到的一定是合法值
+      charDelayMs: normalizeCharDelayMs(form.serialCharDelay),
+      lineDelayMs: normalizeLineDelayMs(form.serialLineDelay),
       usbSerialNumber: form.serialSn.trim() || undefined,
       usbPnpId: form.serialPnp.trim() || undefined
     }
   }
+
+  /*
+   * 发送节奏的预览文案。算一次就够 —— 里面两个 normalize 各要跑一遍，
+   * 直接写在 JSX 里会为了「判断非空」和「显示」调用两次。
+   * 没选端口时不显示：那时整块预览还是占位文案，节奏信息没有落点。
+   */
+  const pacingPreview = form.serialPath.trim()
+    ? describeSerialPacing({
+        charDelayMs: normalizeCharDelayMs(form.serialCharDelay),
+        lineDelayMs: normalizeLineDelayMs(form.serialLineDelay)
+      })
+    : ''
 
   const buildInput = (forceClearSecret = false, asNew = false): ConnectionInput => ({
     id: asNew ? undefined : initial?.id,
@@ -1171,20 +1206,63 @@ export function ConnectionEditor({
               </div>
             </Field>
 
+            <Field
+              label="每字符间隔"
+              hint="逐字符发送的停顿。粘贴长命令被设备吞字节时调大"
+            >
+              <div className="flex items-center gap-1.5">
+                <input
+                  className="input w-16 text-center"
+                  type="number"
+                  min={0}
+                  max={SERIAL_MAX_CHAR_DELAY_MS}
+                  step={1}
+                  value={form.serialCharDelay}
+                  onChange={(e) => set('serialCharDelay', e.target.value)}
+                />
+                <span className="text-2xs text-ink-3">ms</span>
+              </div>
+            </Field>
+
+            <Field
+              label="换行后间隔"
+              hint="每行发完停一下。AT 通道、bootloader 菜单需要"
+            >
+              <div className="flex items-center gap-1.5">
+                <input
+                  className="input w-16 text-center"
+                  type="number"
+                  min={0}
+                  max={SERIAL_MAX_LINE_DELAY_MS}
+                  step={10}
+                  value={form.serialLineDelay}
+                  onChange={(e) => set('serialLineDelay', e.target.value)}
+                />
+                <span className="text-2xs text-ink-3">ms</span>
+              </div>
+            </Field>
+
             {/* 让用户看清保存后标签上会显示什么 */}
             <div className="col-span-2 rounded-lg border border-edge-soft bg-app/60 px-3 py-2 font-mono text-2xs text-ink-3">
-              {form.serialPath.trim()
-                ? describeSerialTarget({
-                    path: form.serialPath.trim(),
-                    baudRate: Number(form.serialBaud) || 115200,
-                    dataBits: form.serialDataBits,
-                    stopBits: form.serialStopBits,
-                    parity: form.serialParity,
-                    flowControl: form.serialFlow,
-                    charset: form.serialCharset,
-                    newline: form.serialNewline
-                  })
-                : '选择端口后这里显示会话名称'}
+              <div>
+                {form.serialPath.trim()
+                  ? describeSerialTarget({
+                      path: form.serialPath.trim(),
+                      baudRate: Number(form.serialBaud) || 115200,
+                      dataBits: form.serialDataBits,
+                      stopBits: form.serialStopBits,
+                      parity: form.serialParity,
+                      flowControl: form.serialFlow,
+                      charset: form.serialCharset,
+                      newline: form.serialNewline
+                    })
+                  : '选择端口后这里显示会话名称'}
+              </div>
+              {/*
+                发送节奏是「隐性行为」，标签上看不出来。放在这里让用户保存前
+                就确认自己确实加上了延迟 —— 否则下次粘贴命令还是被吞。
+              */}
+              {pacingPreview !== '' && <div className="mt-0.5 text-warning">{pacingPreview}</div>}
             </div>
           </>
         )}

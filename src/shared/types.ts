@@ -55,6 +55,25 @@ export interface SerialConfig {
    */
   autoReset?: boolean
   /**
+   * 逐字符发送间隔（毫秒），0 / 缺省 = 整段直发。
+   *
+   * 为什么需要：往 U-Boot 提示符或 9600 波特率的老设备上粘贴一整条长命令时，
+   * 对端常常来不及收 —— 缓冲区溢出的表现是中间几个字符凭空消失，
+   * 用户看到的命令和发出去的不是同一条，排查时极易误判成设备问题。
+   * 加上字符间隔后，发送节奏由本端控制，等价于「手敲得慢一点」。
+   *
+   * 上限见 serialTiming.ts 的 SERIAL_MAX_CHAR_DELAY_MS：延迟是按字符累加的，
+   * 允许填大值等于允许把一次粘贴变成几分钟的无响应。
+   */
+  charDelayMs?: number
+  /**
+   * 每个换行之后的追加间隔（毫秒），0 / 缺省 = 不加。
+   *
+   * 有些设备（AT 通道、bootloader 菜单）要「执行完这一行才回 OK」，
+   * 连发多条命令时即使逐字符间隔够大，行与行之间仍会撞车。
+   */
+  lineDelayMs?: number
+  /**
    * USB 身份，用于拔插后找回同一台设备。
    *
    * 优先 serialNumber（芯片出厂唯一），退而求其次 pnpId（含 VID/PID/序列号，
@@ -309,6 +328,14 @@ export interface SessionInfo {
   latencyMs?: number
   cols: number
   rows: number
+  /**
+   * 串口会话当前生效的波特率（SSH 会话无此字段）。
+   *
+   * 单独给一个字段而不是让渲染层从 target 里抠数字：target 是给人看的一整串
+   * （`COM3 · 115200 8N1`），而且用户在会话中途可以改速率 —— 那时 target 与
+   * 输入框都该跟着变，靠字符串解析会把「改了但显示没改」变成常态故障。
+   */
+  baudRate?: number
 }
 
 /* ------------------------------------------------------------------ *
@@ -390,6 +417,16 @@ export interface AppSettings {
   latencyProbe: boolean
   /** 是否自动录制会话日志（终端输入输出，cast 格式） */
   autoLog: boolean
+  /**
+   * 是否同时写一份纯文本日志（.log）。
+   *
+   * cast 是给回放器用的，要按时间轴重放就得保留原始控制码 —— 于是它没法
+   * 直接扔给 grep，也没法发到微信里让同事看。现场排查时想要的是后者。
+   * 默认开：多写一份纯文本的成本只是磁盘，而"录了但读不了"的成本是白录。
+   */
+  logPlainText?: boolean
+  /** 纯文本日志是否带墙上时间戳（默认开；关掉只影响 .log，cast 始终是相对秒） */
+  logTimestamp?: boolean
   /** 危险命令关键词（命中即需要二次确认，即使命令未标记危险） */
   dangerPatterns: string[]
   /** 连接时忽略主机指纹首次记录（严格模式默认开启校验） */
@@ -1228,13 +1265,20 @@ export interface BackupDiffResult {
  *  会话日志录制
  * ------------------------------------------------------------------ */
 
-/** 一次会话的录制文件（asciinema cast v2 兼容格式） */
+/** 一次会话的日志文件：.cast（asciinema cast v2）或 .log（剥了控制码的纯文本） */
 export interface SessionLogFile {
   path: string
-  /** 文件名，形如 20261014-155401-A区.cast */
+  /** 文件名，形如 20261014-155401-A区.cast / 20261014-155401-A区.log */
   name: string
   size: number
   mtime: number
+  /**
+   * 格式。缺省按 'cast' 处理（V2.1.x 及更早只有这一种）。
+   *
+   * 'cast' 给回放器用；'log' 是给人看、给 grep 用的纯文本 —— 界面据此
+   * 决定「回放」按钮能不能点（纯文本没有时间轴，回放没意义）。
+   */
+  format?: 'cast' | 'log'
 }
 
 /** 统一 IPC 返回结构：主进程永不抛异常给渲染层，统一包装 */

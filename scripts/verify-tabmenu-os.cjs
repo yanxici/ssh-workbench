@@ -30,7 +30,17 @@ const os = require('node:os')
 const fs = require('node:fs')
 
 const ROOT = path.join(__dirname, '..')
-const PWSH = process.env.PWSH || 'C:\\Users\\Administrator\\AppData\\Local\\Microsoft\\WindowsApps\\pwsh.exe'
+// pwsh 不能硬编码路径：写死某个用户名时，换机器 / 换账号就直接 ENOENT，
+// 表现为「这项 OS 回归恒红」，而不是「本机没装 pwsh」。按顺序找，最后回退到 PATH。
+const PWSH = (() => {
+  if (process.env.PWSH) return process.env.PWSH
+  const cands = [
+    path.join(process.env.ProgramFiles || 'C:\\Program Files', 'PowerShell', '7', 'pwsh.exe'),
+    path.join(process.env.LOCALAPPDATA || '', 'Microsoft', 'WindowsApps', 'pwsh.exe')
+  ]
+  for (const c of cands) { try { if (c && fs.existsSync(c)) return c } catch {} }
+  return 'pwsh'
+})()
 const HELPER = path.join(ROOT, 'scripts', '_osclick.ps1')
 function pickPort(min, max) { return min + Math.floor(Math.random() * (max - min)) }
 const APP_PORT = Number(process.env.TM_CDP_PORT || pickPort(21000, 28000))

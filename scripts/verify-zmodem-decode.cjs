@@ -97,7 +97,14 @@ const SAMPLE = '登录成功：设备型号 GW-200，温度 23.5℃\r\nroot@host
 
   const serT = fs.readFileSync(path.join(ROOT, 'src/main/transport/serialTransport.ts'), 'utf8')
   check('串口传输用流式解码器', /stream: true|getDecoder\(charset\)/.test(serT))
-  check('串口传输区分原始字节与文本', /onData\(chunk, this\.decode\(chunk\)\)/.test(serT))
+  // 判据是「同时交出原始字节与已解码文本」，不是「第二个参数恰好长成 this.decode(chunk)」。
+  // v2.2.0 起串口入站要先过 normalizeInboundNewlines（裸 LF 补 CR），
+  // 于是实参变成 inbound.text —— 契约没变，写死表达式会假红。
+  check(
+    '串口传输区分原始字节与文本',
+    /onData\(\s*chunk\s*,\s*[A-Za-z_$][\w$]*\.text\s*\)/.test(serT),
+    serT.match(/onData\([^)]*\)/)?.[0]
+  )
 })()
 
 console.log('')

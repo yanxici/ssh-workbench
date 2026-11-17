@@ -48,6 +48,9 @@ tmp-probe/
 # 串口原生模块 spike 的临时产物（asar 对照实验 / 结果 json）
 serial-spike-result.json
 
+# 字体渲染探针（probe-font7..15）：同一份脚本的逐次变体，只在本地跑，不入库
+scripts/probe-font*.cjs
+
 # 一次性排查脚本（截图 / 坐标标定 / CDP 探针），只在本地跑，不入库。
 # _osclick.ps1 是 verify-tabmenu-os.cjs / verify-tabbar-os.cjs 的操作系统级点击依赖，必须入库。
 scripts/_*

@@ -1,7 +1,7 @@
 import { useMemo } from 'react'
 import { create } from 'zustand'
 import type { ConnKind, ConnPhase, ConnStatus, Connection, ReconnectEvent } from '@shared/types'
-import { connectionTarget } from '@shared/serialDisplay'
+import { connectionTarget, describeSerialTarget } from '@shared/serialDisplay'
 import type { Terminal } from '@xterm/xterm'
 import type { FitAddon } from '@xterm/addon-fit'
 import type { SearchAddon } from '@xterm/addon-search'
@@ -52,6 +52,14 @@ export interface SessionUi {
   cols: number
   rows: number
   createdAt: number
+  /**
+   * 串口参数快照（SSH 会话没有）。
+   *
+   * 存下来是为了「会话中途改波特率」能就地重算 target ——
+   * 只改波特率一个字段，显示名却是由端口 + 速率 + 帧格式拼出来的，
+   * 不存配置就只能拿字符串硬替换，迟早换成 `COM3120000` 这种鬼东西。
+   */
+  serialConfig?: Connection['serial']
 }
 
 /**
@@ -99,6 +107,11 @@ interface SessionState {
   closeOthers: (id: string) => void
   setActive: (id: string) => void
   setTitle: (id: string, title: string) => void
+  /**
+   * 串口会话改了波特率：更新配置快照并重算 target。
+   * 由 SerialBootBar 在切换成功后调用 —— 主进程是唯一权威，这里只跟随。
+   */
+  applySerialBaud: (id: string, baudRate: number) => void
   updateStatus: (id: string, status: ConnStatus, error?: string, phase?: ConnPhase) => void
   updateLatency: (id: string, ms: number) => void
   setSize: (id: string, cols: number, rows: number) => void
@@ -146,7 +159,8 @@ export const useSessionStore = create<SessionState>()((set, get) => ({
       status: 'connecting',
       cols: 80,
       rows: 24,
-      createdAt: Date.now()
+      createdAt: Date.now(),
+      serialConfig: conn.kind === 'serial' && conn.serial ? { ...conn.serial } : undefined
     }
     // 会话打开不再抢占左侧栏视图。
     // 旧行为是「连接成功就自动展开文件树」，那是在文件树独占左栏的年代；
@@ -285,6 +299,16 @@ export const useSessionStore = create<SessionState>()((set, get) => ({
   setTitle: (id, title) =>
     set((s) => ({
       sessions: s.sessions.map((x) => (x.id === id ? { ...x, title } : x))
+    })),
+
+  applySerialBaud: (id, baudRate) =>
+    set((s) => ({
+      sessions: s.sessions.map((x) => {
+        if (x.id !== id) return x
+        if (!x.serialConfig) return { ...x, serialConfig: undefined }
+        const serialConfig = { ...x.serialConfig, baudRate }
+        return { ...x, serialConfig, target: describeSerialTarget(serialConfig) }
+      })
     })),
 
   updateStatus: (id, status, error, phase) =>

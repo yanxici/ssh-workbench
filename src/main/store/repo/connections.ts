@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
 import type { Connection, ConnectionInput, ConnKind, SerialConfig } from '@shared/types'
+import { normalizeBaudRate } from '@shared/serialBaud'
+import { normalizeCharDelayMs, normalizeLineDelayMs } from '@shared/serialTiming'
 import { JsonStore, dataDir } from '../jsonStore'
 import { deleteSecret, getSecret, setSecret } from '../vault'
 
@@ -24,7 +26,8 @@ function normalizeSerial(serial: ConnectionInput['serial']): SerialConfig | unde
   const stopBits = Number(serial.stopBits)
   return {
     path: (serial.path ?? '').trim(),
-    baudRate: Number.isFinite(baud) && baud > 0 ? Math.floor(baud) : 115200,
+    // 收敛上限与导入侧同源（serialBaud），避免手工改出 9_000_000 这种打不开的值
+    baudRate: normalizeBaudRate(baud),
     dataBits: ([5, 6, 7, 8] as const).includes(dataBits as 5 | 6 | 7 | 8)
       ? (dataBits as SerialConfig['dataBits'])
       : 8,
@@ -36,6 +39,9 @@ function normalizeSerial(serial: ConnectionInput['serial']): SerialConfig | unde
     charset: serial.charset ?? 'utf-8',
     newline: serial.newline ?? 'cr',
     autoReset: serial.autoReset === true,
+    // 发送节奏：0 表示关闭（保持整段直发的旧行为），上限由 serialTiming 收口
+    charDelayMs: normalizeCharDelayMs(serial.charDelayMs),
+    lineDelayMs: normalizeLineDelayMs(serial.lineDelayMs),
     usbSerialNumber: serial.usbSerialNumber || undefined,
     usbPnpId: serial.usbPnpId || undefined,
     pathPending: serial.pathPending === true

@@ -90,6 +90,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
   commandPanelPosition: 'right',
   latencyProbe: true,
   autoLog: true,
+  // 纯文本日志 + 时间戳默认都开：现场排查要的是能 grep、能与设备日志对表的那一份
+  logPlainText: true,
+  logTimestamp: true,
   dangerPatterns: [
     'rm -rf',
     'mkfs',

@@ -61,7 +61,11 @@ export function registerBackupTunnelIpc(): void {
       title: '导出会话日志',
       defaultPath: dialogDefaultPath('report', basename(path)),
       filters: [
-        { name: 'Asciinema Cast', extensions: ['cast'] },
+        // 按被导出的那份决定默认扩展名：另存对话框里过滤器顺序会影响补全的后缀，
+        // 把不匹配的那一种排在前面，用户导出的纯文本就会莫名带上 .cast
+        ...(path.endsWith('.log')
+          ? [{ name: '文本日志', extensions: ['log'] }]
+          : [{ name: 'Asciinema Cast', extensions: ['cast'] }]),
         { name: '所有文件', extensions: ['*'] }
       ]
     })

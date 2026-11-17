@@ -36,6 +36,16 @@ export const IPC = {
   SESSION_RESIZE: 'session:resize',
   SESSION_BROADCAST: 'session:broadcast',
   SESSION_LIST: 'session:list',
+  /**
+   * 在线切换串口波特率（不重开会话）。
+   *
+   * 设备两个阶段跑不同速率是常态：7628 的 U-Boot 57600、进系统 115200；
+   * ESP 的 ROM 74880、应用 115200。以前的唯一办法是断开 → 改连接 → 重连，
+   * 而那几秒恰好是启动日志最密集的几秒。
+   */
+  SESSION_SET_BAUD: 'session:setBaud',
+  /** 发 BREAK：TX 拉低一段时间，bootloader / 交换机控制台进维护模式用 */
+  SESSION_BREAK: 'session:break',
 
   /* ---------------- 串口设备 ---------------- */
   /**

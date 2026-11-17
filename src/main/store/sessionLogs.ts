@@ -29,18 +29,25 @@ function assertInside(filePath: string): string {
   return target
 }
 
-/** 列出全部录制文件，按修改时间倒序 */
+/**
+ * 列出全部会话日志（.cast 与纯文本 .log 都在内），按修改时间倒序。
+ *
+ * 两种格式都列：一次会话会落两个同名不同后缀的文件，只列 .cast 会让
+ * 「我要那份纯文本」变成一件需要去文件夹里翻的事 —— 而录文本的初衷
+ * 恰恰是让人不必翻文件夹。
+ */
 export async function listSessionLogs(): Promise<SessionLogFile[]> {
   const dir = sessionLogDir()
   await fs.mkdir(dir, { recursive: true })
   const names = await fs.readdir(dir)
   const out: SessionLogFile[] = []
   for (const name of names) {
-    if (!name.endsWith('.cast')) continue
+    const format = name.endsWith('.cast') ? 'cast' : name.endsWith('.log') ? 'log' : null
+    if (!format) continue
     const full = join(dir, name)
     try {
       const st = await fs.stat(full)
-      out.push({ path: full, name, size: st.size, mtime: st.mtimeMs })
+      out.push({ path: full, name, size: st.size, mtime: st.mtimeMs, format })
     } catch {
       /* 跳过读取失败的文件 */
     }
@@ -53,7 +60,20 @@ export async function readSessionLog(filePath: string): Promise<string> {
   return fs.readFile(assertInside(filePath), 'utf-8')
 }
 
-/** 删除一个录制文件（只允许日志目录内的路径） */
+/**
+ * 删除一个日志文件（只允许日志目录内的路径）。
+ *
+ * 连同它的「另一份」一起删：一次会话的 .cast 与 .log 是同一次录制的两种形态，
+ * 留着半份要么白占地方、要么在列表里变成一个没有回放来源的孤儿。
+ * 用户删的是「那次会话的记录」，不是「那个后缀」。
+ */
 export async function removeSessionLog(filePath: string): Promise<void> {
-  await fs.rm(assertInside(filePath), { force: true })
+  const target = assertInside(filePath)
+  await fs.rm(target, { force: true })
+  const twin = target.endsWith('.cast')
+    ? target.slice(0, -'.cast'.length) + '.log'
+    : target.endsWith('.log')
+      ? target.slice(0, -'.log'.length) + '.cast'
+      : null
+  if (twin) await fs.rm(twin, { force: true }).catch(() => {})
 }

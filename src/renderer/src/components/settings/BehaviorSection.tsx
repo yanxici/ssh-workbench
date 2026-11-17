@@ -19,6 +19,28 @@ export function BehaviorSection(): React.JSX.Element {
       >
         <Toggle checked={settings.autoLog} onChange={(v) => void update({ autoLog: v })} />
       </Row>
+      {settings.autoLog && (
+        <Row
+          label="同时写纯文本日志"
+          hint="除 cast 回放文件外，再写一份剥掉控制码的 .log，可直接 grep 或发给同事（同一次录制共用一个 50MB 上限）"
+        >
+          <Toggle
+            checked={settings.logPlainText !== false}
+            onChange={(v) => void update({ logPlainText: v })}
+          />
+        </Row>
+      )}
+      {settings.autoLog && settings.logPlainText !== false && (
+        <Row
+          label="纯文本带时间戳"
+          hint="每行前缀墙上时间 HH:MM:SS.mmm，便于与设备日志、抓包对表；关掉则只有终端内容"
+        >
+          <Toggle
+            checked={settings.logTimestamp !== false}
+            onChange={(v) => void update({ logTimestamp: v })}
+          />
+        </Row>
+      )}
       <Row
         label="断线自动重连"
         hint="网络抖动断开后在后台按 1/2/4/8/16 秒退避重试，标签上显示进度；用户主动关闭标签则不重连"

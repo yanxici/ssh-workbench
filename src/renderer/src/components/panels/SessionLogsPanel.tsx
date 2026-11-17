@@ -8,10 +8,10 @@ import { ConfirmDialog, EmptyState } from '@/components/ui'
 import { useToastStore } from '@/stores/toastStore'
 import { LogPlayerDialog } from './LogPlayerDialog'
 
-/** 文件名 → 会话名与录制时间：20261014-155401-A区.cast */
+/** 文件名 → 会话名与录制时间：20261014-155401-A区.cast / .log */
 function parseLogName(name: string): { title: string; time: string } {
-  const m = name.match(/^(\d{8})-(\d{6})-(.+)\.cast$/)
-  if (!m) return { title: name.replace(/\.cast$/, ''), time: '' }
+  const m = name.match(/^(\d{8})-(\d{6})-(.+)\.(cast|log)$/)
+  if (!m) return { title: name.replace(/\.(cast|log)$/, ''), time: '' }
   const [, d, t, title] = m
   const time = `${d.slice(0, 4)}-${d.slice(4, 6)}-${d.slice(6, 8)} ${t.slice(0, 2)}:${t.slice(2, 4)}:${t.slice(4, 6)}`
   return { title, time }
@@ -107,8 +107,20 @@ export function SessionLogsPanel(): React.JSX.Element {
               className="group rounded-md px-2 py-1.5 transition-colors hover:bg-hover/60"
             >
               <div className="flex items-center gap-1.5">
-                <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-danger/70" title="录制文件" />
+                <span
+                  className={cn(
+                    'h-1.5 w-1.5 shrink-0 rounded-full',
+                    log.format === 'log' ? 'bg-ink-3/60' : 'bg-danger/70'
+                  )}
+                  title={log.format === 'log' ? '纯文本日志' : '录制文件'}
+                />
                 <span className="min-w-0 flex-1 truncate text-xs text-ink">{title}</span>
+                {/* 同名两份是常态，纯文本那份必须能被一眼认出 —— 否则用户每次都得靠后缀猜 */}
+                {log.format === 'log' && (
+                  <span className="shrink-0 rounded border border-edge px-1 text-3xs text-ink-3">
+                    txt
+                  </span>
+                )}
                 <span className="shrink-0 font-mono text-2xs text-ink-3">
                   {formatBytes(log.size)}
                 </span>
@@ -116,16 +128,23 @@ export function SessionLogsPanel(): React.JSX.Element {
               <div className="mt-0.5 flex items-center gap-1.5 pl-3 text-3xs text-ink-3">
                 <span>{time || formatTime(log.mtime)}</span>
                 <span className="flex-1" />
+                {/* 纯文本没有时间轴，回放没有意义；不给按钮而不是给个点了没反应的按钮 */}
+                {log.format !== 'log' && (
+                  <button
+                    className="btn-icon h-5 w-5 opacity-0 group-hover:opacity-100"
+                    title="回放"
+                    onClick={() => setPlaying(log)}
+                  >
+                    <Play size={11} />
+                  </button>
+                )}
                 <button
                   className="btn-icon h-5 w-5 opacity-0 group-hover:opacity-100"
-                  title="回放"
-                  onClick={() => setPlaying(log)}
-                >
-                  <Play size={11} />
-                </button>
-                <button
-                  className="btn-icon h-5 w-5 opacity-0 group-hover:opacity-100"
-                  title="导出（可分享给他人或用 asciinema 播放）"
+                  title={
+                    log.format === 'log'
+                      ? '导出纯文本（可直接 grep 或发给同事）'
+                      : '导出（可分享给他人或用 asciinema 播放）'
+                  }
                   onClick={() => void exportLog(log)}
                 >
                   <Download size={11} />

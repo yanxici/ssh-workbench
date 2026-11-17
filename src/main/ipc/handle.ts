@@ -19,6 +19,8 @@ function channelTitle(channel: string): string {
     'conn:test': '测试连接失败',
     'session:open': '打开会话失败',
     'session:write': '终端写入失败',
+    'session:setBaud': '切换串口波特率失败',
+    'session:break': '发送 BREAK 失败',
     'serial:list': '枚举串口失败',
     'serial:refresh': '刷新串口列表失败',
     'tftp:start': '启动 TFTP 服务端失败',

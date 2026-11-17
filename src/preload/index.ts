@@ -188,7 +188,17 @@ export const api = {
       invoke(IPC.SESSION_RESIZE, sessionId, cols, rows),
     broadcast: (sessionIds: string[], data: string): Promise<IpcResult<void>> =>
       invoke(IPC.SESSION_BROADCAST, sessionIds, data),
-    list: (): Promise<IpcResult<SessionInfo[]>> => invoke(IPC.SESSION_LIST)
+    list: (): Promise<IpcResult<SessionInfo[]>> => invoke(IPC.SESSION_LIST),
+    /**
+     * 在线切换串口波特率，返回实际生效的值（主进程会把非法值收敛回旧速率）。
+     * 返回 number 而不是 void：输入框要按真实生效值回填，否则用户会以为
+     * 填的 3000000 生效了，而驱动其实还跑在 115200。
+     */
+    setBaud: (sessionId: string, baudRate: number): Promise<IpcResult<number>> =>
+      invoke(IPC.SESSION_SET_BAUD, sessionId, baudRate),
+    /** 发 BREAK；durationMs 缺省 250，主进程夹到 50..2000 */
+    break: (sessionId: string, durationMs?: number): Promise<IpcResult<void>> =>
+      invoke(IPC.SESSION_BREAK, sessionId, durationMs)
   },
 
   /**

@@ -366,6 +366,57 @@ async function main() {
         good.serial.autoReset === false,
       JSON.stringify(good.serial)
     )
+    // 发送节奏默认关闭：老导出文件里没有这两个字段，导入后必须是 0 而不是 NaN
+    check(
+      '缺省发送节奏为 0',
+      good.serial.charDelayMs === 0 && good.serial.lineDelayMs === 0,
+      JSON.stringify(good.serial)
+    )
+
+    /* ---- 串口发送节奏：导出 / 导入收敛 ---- */
+    const fPacing = bad(
+      'serial-pacing',
+      JSON.stringify({
+        format: 'ssh-workbench-connections',
+        version: 1,
+        encrypted: false,
+        payload: {
+          connections: [
+            { ref: 'a', name: '节奏-正常', kind: 'serial', serial: { path: 'COM1', baudRate: 115200, charDelayMs: 5, lineDelayMs: 100 } },
+            { ref: 'b', name: '节奏-越界', kind: 'serial', serial: { path: 'COM2', baudRate: 115200, charDelayMs: 9999, lineDelayMs: 5000 } },
+            { ref: 'c', name: '节奏-脏值', kind: 'serial', serial: { path: 'COM3', baudRate: 115200, charDelayMs: 'abc', lineDelayMs: -1 } },
+            { ref: 'd', name: '节奏-小数', kind: 'serial', serial: { path: 'COM4', baudRate: 115200, charDelayMs: 7.9, lineDelayMs: 12.4 } }
+          ],
+          keys: {}
+        }
+      })
+    )
+    const pvP = await F.previewImport(fPacing)
+    check('发送节奏不影响合法性', pvP.count === 4 && pvP.invalid === 0, JSON.stringify({ count: pvP.count, invalid: pvP.invalid }))
+    await F.applyImport(fPacing, undefined, 'skip')
+    const paced = byName(await F.listConnections())
+    const ok = paced.get('节奏-正常')
+    check('合法节奏原样保留', ok.serial.charDelayMs === 5 && ok.serial.lineDelayMs === 100, JSON.stringify(ok.serial))
+    const clamped = paced.get('节奏-越界')
+    check(
+      '越界节奏收敛到上限',
+      clamped.serial.charDelayMs === 100 && clamped.serial.lineDelayMs === 2000,
+      JSON.stringify(clamped.serial)
+    )
+    const dirty = paced.get('节奏-脏值')
+    check('脏节奏当 0', dirty.serial.charDelayMs === 0 && dirty.serial.lineDelayMs === 0, JSON.stringify(dirty.serial))
+    const frac = paced.get('节奏-小数')
+    check('小数向下取整', frac.serial.charDelayMs === 7 && frac.serial.lineDelayMs === 12, JSON.stringify(frac.serial))
+
+    // 节奏必须跟着导出走，否则换台电脑重导就静默丢了
+    const fPacingOut = path.join(work, 'serial-pacing.swconn')
+    await F.exportConnectionsToFile(fPacingOut, { includeSecrets: false })
+    const rawPacing = fs.readFileSync(fPacingOut, 'utf8')
+    check(
+      '导出文件带发送节奏',
+      rawPacing.includes('"charDelayMs"') && rawPacing.includes('"lineDelayMs"'),
+      rawPacing.slice(0, 200)
+    )
   }
 
   /* ================= 规模：3000 条 ================= */

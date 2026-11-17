@@ -36,5 +36,11 @@ export function registerSessionIpc(): void {
   handle(IPC.SESSION_BROADCAST, (sessionIds: string[], data: string) =>
     sessionManager.broadcast(sessionIds, data)
   )
+  handle(IPC.SESSION_SET_BAUD, (sessionId: string, baudRate: number) =>
+    sessionManager.setSerialBaudRate(sessionId, baudRate)
+  )
+  handle(IPC.SESSION_BREAK, (sessionId: string, durationMs?: number) =>
+    sessionManager.sendSerialBreak(sessionId, durationMs)
+  )
   handle(IPC.SESSION_LIST, () => sessionManager.list())
 }

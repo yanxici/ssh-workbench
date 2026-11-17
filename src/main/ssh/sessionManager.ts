@@ -264,7 +264,10 @@ class SessionManager {
       createdAt: s.createdAt,
       latencyMs: s.latencyMs,
       cols: s.cols,
-      rows: s.rows
+      rows: s.rows,
+      // 串口当前波特率：界面要显示「现在跑在多少」，而 target 是给标签栏看的
+      // 一长串描述，让渲染层去正则里抠数字属于自找麻烦。
+      baudRate: s.serialConfig?.baudRate
     }))
   }
 
@@ -449,7 +452,12 @@ class SessionManager {
 
       // 会话日志录制（asciinema cast 格式，可在「会话日志」面板回放）
       if (settings.autoLog) {
-        void recorder.start(sessionId, conn.name, record.cols, record.rows).catch(() => {})
+        void recorder
+          .start(sessionId, conn.name, record.cols, record.rows, {
+            plainText: settings.logPlainText,
+            timestamp: settings.logTimestamp
+          })
+          .catch(() => {})
       }
     } catch (err) {
       const message = this.describeError(err, conn)
@@ -523,7 +531,12 @@ class SessionManager {
 
       await touchConnection(connectionId)
       if (settings.autoLog) {
-        void recorder.start(sessionId, conn.name, record.cols, record.rows).catch(() => {})
+        void recorder
+          .start(sessionId, conn.name, record.cols, record.rows, {
+            plainText: settings.logPlainText,
+            timestamp: settings.logTimestamp
+          })
+          .catch(() => {})
       }
       // 打开了就说明不需要再等设备（手动重连、热插拔恢复都走这里）
       this.serialWaiting.delete(sessionId)
@@ -648,7 +661,12 @@ class SessionManager {
 
       const settings = await getSettings()
       if (settings.autoLog && !record.closed) {
-        void recorder.start(sessionId, record.connectionName, record.cols, record.rows).catch(() => {})
+        void recorder
+          .start(sessionId, record.connectionName, record.cols, record.rows, {
+            plainText: settings.logPlainText,
+            timestamp: settings.logTimestamp
+          })
+          .catch(() => {})
       }
     } catch (err) {
       const message = humanizeConnectError(err instanceof Error ? err.message : String(err))
@@ -792,6 +810,73 @@ class SessionManager {
     // 把 ZMODEM 的帧写进 trzsz 的 base64 流里只会两边都坏掉。
     if (trzszManager.get(sessionId)?.active) return
     rec.transport.writeBytes(data)
+  }
+
+  /* ------------------------------------------------------------------ *
+   *  串口专有操作：在线切波特率 / BREAK
+   * ------------------------------------------------------------------ */
+
+  /**
+   * 取出这个会话的串口传输层。
+   *
+   * 不走 requireSshClient 的反面（没有 requireSerialTransport 的现成实现）：
+   * 串口专有能力只有 SerialTransport 有，而 Transport 接口是两种 kind 的共同
+   * 最小面（见 transport/types.ts 的设计约束）。这里用能力探测而不是
+   * instanceof —— 测试里注入的假传输层只要实现了同名方法就能被驱动。
+   */
+  private requireSerialTransport(sessionId: string): {
+    setBaudRate?: (baud: number) => Promise<number>
+    sendBreak?: (ms?: number) => Promise<void>
+  } {
+    const record = this.sessions.get(sessionId)
+    if (!record) throw new Error('会话不存在或已断开，请先打开连接')
+    if (record.kind !== 'serial') throw new Error('只有串口会话可以切换波特率或发 BREAK')
+    const transport = record.transport as unknown as {
+      setBaudRate?: (baud: number) => Promise<number>
+      sendBreak?: (ms?: number) => Promise<void>
+    }
+    if (!transport) throw new Error('串口尚未打开，请稍后重试')
+    return transport
+  }
+
+  /**
+   * 在线切换波特率。
+   *
+   * 为什么值得做：设备的两个阶段跑不同速率（U-Boot 57600 → 系统 115200，
+   * ESP ROM 74880 → 应用 115200）。旧流程是断开 → 改连接配置 → 重连，
+   * 中间几秒的输出全丢，而启动日志恰恰是最值钱的那几秒。
+   *
+   * 成功后把新速率写回 serialConfig 快照并重算显示名：拔插恢复时用最后生效的
+   * 速率重开，标签栏也不会继续显示旧值。返回实际生效值，界面据此纠正输入框。
+   */
+  async setSerialBaudRate(sessionId: string, baudRate: number): Promise<number> {
+    const record = this.sessions.get(sessionId)
+    if (!record) throw new Error('会话不存在或已断开，请先打开连接')
+    if (record.status !== 'connected') throw new Error('串口尚未连接，请先打开会话')
+    const transport = this.requireSerialTransport(sessionId)
+    if (typeof transport.setBaudRate !== 'function') {
+      throw new Error('当前串口传输层不支持在线改波特率')
+    }
+    const applied = await transport.setBaudRate(baudRate)
+    if (record.serialConfig) {
+      record.serialConfig.baudRate = applied
+      record.target = describeSerialTarget(record.serialConfig)
+    }
+    return applied
+  }
+
+  /**
+   * 发 BREAK。时长由界面给（默认 250ms），传输层负责夹到 50..2000。
+   */
+  async sendSerialBreak(sessionId: string, durationMs?: number): Promise<void> {
+    const record = this.sessions.get(sessionId)
+    if (!record) throw new Error('会话不存在或已断开，请先打开连接')
+    if (record.status !== 'connected') throw new Error('串口尚未连接，请先打开会话')
+    const transport = this.requireSerialTransport(sessionId)
+    if (typeof transport.sendBreak !== 'function') {
+      throw new Error('当前串口传输层不支持发送 BREAK')
+    }
+    await transport.sendBreak(durationMs)
   }
 
   resize(sessionId: string, cols: number, rows: number): void {

@@ -274,8 +274,8 @@ for (const it of rows) {
 
 console.log('\n=== 断言 ===')
 check(
-  '需要守卫的 handler 数 === 13（少一处就是漏修）',
-  needGuard.length === 13,
+  '需要守卫的 handler 数 === 14（少一处就是漏修）',
+  needGuard.length === 14,
   `实际 ${needGuard.length}`
 )
 check(

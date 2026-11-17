@@ -28,6 +28,8 @@ import type {
   SerialPortInfo,
   SerialStopBits
 } from '@shared/types'
+import { SERIAL_MAX_BAUD, SERIAL_MIN_BAUD } from '@shared/serialBaud'
+import { normalizeCharDelayMs, normalizeLineDelayMs } from '@shared/serialTiming'
 import { dataDir } from './jsonStore'
 import { bulkUpsertConnections, listConnections } from './repository'
 import { getSecret, setSecretsBulk, type PlainSecret } from './vault'
@@ -621,9 +623,8 @@ const SERIAL_PARITIES: SerialParity[] = ['none', 'even', 'odd', 'mark', 'space']
 const SERIAL_FLOWS: SerialFlowControl[] = ['none', 'hardware', 'software']
 const SERIAL_DATA_BITS: SerialDataBits[] = [5, 6, 7, 8]
 const SERIAL_STOP_BITS: SerialStopBits[] = [1, 1.5, 2]
-/** 常用波特率；不在表里的自定义值也放行，只要在合理区间 */
-const SERIAL_MIN_BAUD = 50
-const SERIAL_MAX_BAUD = 4_000_000
+/* 波特率区间从 @shared/serialBaud 引入：在线切波特率与导入校验必须用同一组数字，
+ * 否则会出现「界面允许 3000000，导入却判非法」这种自相矛盾 */
 
 /**
  * 校验并归一化文件里的串口参数。
@@ -660,6 +661,9 @@ function cleanSerial(v: unknown): SerialConfig | undefined {
       : 'cr',
     // 自动复位是危险开关，默认关；文件里明确写了 true 才开
     autoReset: s.autoReset === true,
+    // 发送节奏：导入的 JSON 是别人给的，这里照样按上限收敛，不做「照抄」
+    charDelayMs: normalizeCharDelayMs(s.charDelayMs),
+    lineDelayMs: normalizeLineDelayMs(s.lineDelayMs),
     usbSerialNumber: str(s.usbSerialNumber, 128),
     usbPnpId: str(s.usbPnpId, 255),
     pathPending: s.pathPending === true

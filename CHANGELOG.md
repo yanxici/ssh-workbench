@@ -5,6 +5,91 @@ All notable changes to SSH Workbench will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.0] - 2026-11-17
+
+### Fixed（串口收到裸 LF 时屏幕呈阶梯状）
+
+**问题**：连 IFLY 机器人这类 Linux 设备，命令行输出是一路向右错位的阶梯。原因不在编码也不在终端字体 —— 设备只发了 `\n`。终端里「换行」是两个动作：`\n` 把光标下移一行、`\r` 把光标拉回行首，只发前者就只有下移，每一行都比上一行更靠右。按理说设备 tty 的 `ONLCR` 会把 `\n` 翻成 `\r\n` 再吐出来，但 busybox 的精简 shell、不少裸机固件往串口直接 `write("\n")`、以及输出被重定向到串口的场景都不会翻。
+
+**做法**：在 `SerialTransport` 的**入站文本通道**把裸 LF 补成 CRLF，新函数 `normalizeInboundNewlines(text, lastWasCR)`。四个刻意的选择：
+
+- **放传输层，不开 xterm 的 `convertEol`**。那是终端实例级的开关，SSH 会话会跟着被改写，而 SSH 对端发的本来就是完整 CRLF；一旦上游已经补过 CR，多余的改写会变成 `\r\r\n`。经过串口传输层的只有串口数据。
+- **`raw` 一个字节都不动**。`onData(chunk, text)` 的两个参数分开走：`raw` 原样透传，ZMODEM 帧与二进制协议靠它判帧，改一个字节 CRC 就废了；只有 `text` 被归一。这样录制、高亮行切分、终端看到的是同一份内容，不会出现「屏幕对了、日志里还是阶梯」。
+- **跨帧状态 `lastWasCR`**。串口按块到达，上一块末尾是 `\r`、下一块开头是 `\n` 时那是一个完整的 CRLF；只看当前块会用「前面不是 CR」的假设把它补成 `\r\r\n`，屏幕上反而多一个空行。`open()` 时重置为 false —— 上一条连接末尾的 CR 不该影响这一条的首帧。
+- **不看 `config.newline`**。那个字段描述的是「我们发出去用什么」，跟设备回什么没有关系。
+
+纯文本日志不受影响：`recorder.writeText` 本来就把 `\r\n` 与 `\r` 都归一成 `\n`，入库站 CRLF 后 `.log` 不会多出空行。
+
+**新增验证**：`scripts/verify-serial.cjs` 补 12b 与 14b-2 两段（91 → 102 项）：裸 LF 被补、已有 CRLF 不重复补、跨帧 CR|LF 不被拆成 CRCRLF、末尾残留 CR 传给下一帧、连续多个裸 LF 各自补、无换行时原样返回；以及走真实 `SerialTransport` 的端到端两条 —— 假端口 `emit('data')` 后 `text` 是 CRLF 而 `raw` 与源字节逐字节相同、分两帧发出的 CRLF 只补裸 LF 那一处。
+
+### Fixed（串口波特率输入框漏了输入法守卫）
+
+`SerialBootBar` 里新加的波特率输入框在 `onKeyDown` 消费 Enter，但没判输入法组合态 —— 中文输入法下敲数字后再敲回车只是想确认候选词，却会把半截数字当速率应用下去。补 `if (isImeComposing(e)) return`，并把 `scripts/verify-ime-guard.cjs` 的期望处数从 13 提到 14（这个脚本的价值就在于「少一处就红」，数字不跟着走等于把守卫变成可选的）。
+
+### Added（串口刷机配套：内置 TFTP 服务端 + U-Boot 引导条）
+
+**背景**：7628 板子的部署文档要求「PC 开 tftp 工具 → 串口工具连 57600 → 重启板子 2 秒内按 2 → 输 Y → 两次回车 → 填固件名」。串口本身 v2.0.0 已经能用（57600 8N1 / CR / UTF-8 全在支持范围内），但这条流程有四件事必须切到别的工具或靠手速：TFTP 服务端在外面、2 秒窗口靠掐表、`Y` 不带回车这个细节容易错、固件名要手打一遍。
+
+**改动**：
+
+- `src/main/tftp/server.ts`（新增）：内置 TFTP 服务端，只用 `node:dgram` + `node:fs`，**零新依赖**。RFC 1350 只读服务：RRQ → DATA/ACK 循环，512 字节块；接受 `blksize` / `tsize` / `timeout` 三个选项并回 OACK（不回 OACK 的话新 U-Boot 直接判失败）；`blksize` 夹在 8..1468。**每次传输另起一个 UDP socket 绑随机端口** —— RFC 1350 的 TID 规则要求如此，复用 69 端口回包会被 U-Boot 当成陌生来源丢掉，症状是「板子一直重试、服务端看起来啥也没发生」。超时 2 秒重传，5 次放弃并提示「检查网线是否直连、PC 与板子是否同网段」。WRQ 一律回 ERROR 2（只读，不接受写入）；文件名不匹配回 ERROR 1 而不是静默超时。`EADDRINUSE` 翻译成「端口 69 已被占用（可能有别的 TFTP 工具正在运行），关掉它再试」。
+- IPC：`TFTP_START` / `TFTP_STOP` / `TFTP_STATE` + 事件 `EVT_TFTP_LOG`，`handle.ts` 的 `channelTitle` 补两条，`preload` 暴露 `tftp.start` / `tftp.stop` / `tftp.state` / `on.tftpLog`。主进程退出时（`window-all-closed`）显式 `tftpServer.stop()` —— 它持有 69 端口和固件文件句柄，不关会让下次启动直接撞端口。
+- `src/renderer/src/components/terminal/SerialBootBar.tsx`（新增）：串口会话顶部的引导条，只在 `session.kind === 'serial'` 时出现。三步各一键：①点一下按钮，倒计时 6 秒后每 250ms 连发 `2`、共 16 发（也可以点「立即发送」发单个）—— 倒计时的起点是点按钮那一刻，不是上电那一刻，中间隔着人去拨电源，所以按文档写的「2 秒」设会变成还没摸到开关就发完；连发则是为了盖住那 2 秒窗口，发一次等于赌自己刚好卡在里面；②发 `Y`（不带回车）；③回车 / 发固件名（取服务端正在提供的文件名，没有则用文档里的默认名）。下半部分是 TFTP 开关：选固件、启动 / 停止、实时传输进度，以及**本机网口地址** —— 7628 这套引导菜单通常把 tftp 地址写死，所以界面给的是「本机是什么」，对不上就把电脑该网口 IP 改成它要的那个。
+- `src/renderer/src/stores/tftpStore.ts`（新增）：服务端状态 + 最近 200 条日志。
+- `ConnectionEditor`：加「7628 U-Boot 控制台」预设（57600 / 8 / 1 / none / none / utf-8 / cr），点一下套用，套完仍可逐项改。
+
+**为什么不放进固件升级面板**：那个面板全程走 SSH（`sftpManager` 上传 + 远端跑命令），而刷 U-Boot 的时候板子上还没有系统、没有 IP、没有 SSH —— 唯一的通道就是串口。硬塞进去只会让「固件升级」这个入口的语义变得不可预测。
+
+**新增验证**：`scripts/verify-tftp.cjs`（29 项，真起 UDP 服务端 + 自写最小客户端）：未启动状态、空固件拒绝、带 `blksize`/`tsize` 的完整传输（OACK 回显、**数据确实从新端口发出**、SHA256 与源文件一致）、无选项的 512 块老客户端、文件名不符回 ERROR 1、WRQ 回 ERROR 2、`stop()` 后端口可重绑、端口被占用时报可读错误。已接入 `npm run test:features`。
+
+### Added（串口发送节奏：逐字符间隔 / 换行后间隔）
+
+**问题**：往 U-Boot 或 9600 的老设备粘贴一条长命令，设备会吞掉中间的字节 —— 提示符回来了，但只有半条命令在跑，或者干脆进不了命令。串口本身没有流控握手可用（现场那条线上通常只接了 TX/RX/GND），谁也拦不住 PC 一股脑往驱动里灌。
+
+**做法**：`SerialConfig` 加 `charDelayMs`（逐字符间隔）与 `lineDelayMs`（换行后间隔），合法区间与文案收口在 `src/shared/serialTiming.ts`：
+
+- 上限 `SERIAL_MAX_CHAR_DELAY_MS = 100`。延迟是按**每个字符**累加的，填 1000ms 意味着 100 字符的命令要发 100 秒 —— 那不是慢速设备，是表单填错了。100ms 已是 9600 波特率下单字节时间（约 10.4ms）的十倍，再慢该靠流控而不是延迟。
+- 上限 `SERIAL_MAX_LINE_DELAY_MS = 2000`，用于「执行完一行才回 OK」的 AT 通道与 bootloader 菜单。
+- 两个都为 0 时走原来的整段直发快路径，行为与 v2.1.9 完全一致。
+
+发送节奏落在 `SerialTransport` 而不是会话管理器：会话层的 `write()` 只负责 `recorder.appendInput`，真正的落端口在传输层。实现是**字符队列 + 定时器**，`write()` 仍然同步返回 —— `types.ts` 里写着「键盘输入必须保序，宁可同步阻塞」，改成 async 循环会让两个并发调用互相插队，串口上的命令就拼错了：
+
+```ts
+const delay = isLineBreakAt(head.data, at)
+  ? Math.max(this.lineDelayMs, this.charDelayMs)
+  : this.charDelayMs
+if (delay > 0 && this.waitThen(delay)) return
+```
+
+几处刻意的细节：①按码点切而不是按 UTF-16 code unit 切（`nextUnit` 用 `codePointAt` + `size = code > 0xffff ? 2 : 1`），否则一个汉字会被劈成两个残字节；②CRLF 只算一次行尾（`isLineBreakAt` 里 `\r` 后跟 `\n` 时返回 false），两个都算会让配置成 CRLF 的连接每行停两次；③两个延迟都配了时取 `max` 而不是相加，「每字符 5ms + 换行后 200ms」的意图是「这一行发完停 200ms 等设备回 OK」，不是 205ms；④`writeBytes` 不逐字节节流（协议帧整块交给驱动），但排在已有文本之后，顺序不乱；⑤`close()` / `handleClosed()` 都调 `resetPacing()` 清队列与定时器，否则下次 pump 会撞到已释放的 port。
+
+**界面**：连接编辑器在 DTR 开关之后加了「每字符间隔」「换行后间隔」两个数字输入（复用 `input w-16 text-center` 的既有写法），预览行下方追加一行 `describeSerialPacing` 的说明 —— 发送节奏是隐性行为，标签上看不出来，不写到预览里用户下次粘贴命令还是被吞。
+
+**落盘与导入**：`normalizeSerial`（connections.json 可被手改）与 `cleanSerial`（别人给的导出文件）都过同一对 `normalizeCharDelayMs` / `normalizeLineDelayMs`。不收敛的后果是「界面能填 500、传输层只认 100」这种自相矛盾；脏值（`'abc'`、负数、`null`）一律当 0，越界收敛到上限而不是判非法。导出侧走 `{ ...c.serial }` 自动带上。
+
+**新增验证**：`scripts/verify-serial.cjs` 补第 14c 段（50 → 72 项）：无节奏时整段一次写出、逐字符时一次只落一个字符且 `write` 立即返回、汉字不被劈开、行间延迟真的等了且 CRLF 只停一次、无换行不等行间延迟、文本与 bytes 混排保持顺序且二进制不被拆分、关闭时清空队列、收敛函数与文案断言。`verify-conn-transfer.cjs` 补发送节奏导出 / 导入收敛（非法、越界、脏值、小数，以及老文件缺字段时默认 0）。
+
+### Added（串口三件套：在线切波特率 / BREAK / 纯文本日志）
+
+**问题**：三件在不同现场都会撞上的事。①设备上电跑在 115200，进系统后切成 9600，或者反过来 —— 以前只能断开重连，中间那段输出全丢。②板子已经在自动启动，想打断它进维护模式，串口线上只有 BREAK 这一种手段，而工具里没有。③录制只有 `.cast`：那是给回放器读的时间轴 + 控制码，要 grep 一个报错、要把它发到群里，得先另找一个工具转一遍。
+
+**在线切波特率**：`SerialTransport.setBaudRate(baudRate)` 走 `port.update({ baudRate })`，**不是 `close()` + 新建 `SerialPort`**。重开一次会重新走 DTR/RTS 的默认电平（接了自动下载电路的板子会被重启），也会让设备在系统里重新枚举一次；`update` 只改 UART 分频，端口对象和事件订阅都还在，输出一帧都不丢。生效值写回 `this.config.baudRate`，返回实际速率 —— 输入框按这个值回填，而不是按用户敲的那串数字回填。非法值（字符串、负数、超过 4000000）回落**当前**速率而不是静默改成一个默认值：切波特率时看到「已切到 115200」而实际没变，比报错难查得多。判定收口在新文件 `src/shared/serialBaud.ts`（`SERIAL_MIN_BAUD = 50`、`SERIAL_MAX_BAUD = 4_000_000`、`isValidBaudRate`、`normalizeBaudRate`），`connections.json` 的落盘、导入校验、传输层在线切三处必须同源，否则会出现「界面能填、导入认、打开时被 serialport 拒」这种自相矛盾。
+
+**BREAK**：`sendBreak(durationMs = 250)` 用 `port.set({ brk: true })` → 等 → `port.set({ brk: false })`。三处刻意的写法：①时长夹在 50..2000ms —— 太短某些 UART 根本不产生中断，太长会让整条线看起来像挂了；②**释放无条件执行**，置位抛错也照样把 `brk` 拉回 false，否则 TX 被钉在 break 状态，之后敲什么都不出去，只能拔线；③只碰 `brk` 字段（`port.set` 会顺手把没写的字段也当默认值处理，带上 `dtr`/`rts` 就等于顺手复位板子）。界面上 BREAK 成功不弹提示：它的价值在于对端有没有反应（掉没掉进 U-Boot），本地「拉低成功」说明不了任何事。
+
+**纯文本日志**：`recorder` 在写 `.cast` 的同时再写一份同名 `.log`（`RecorderOptions.plainText`，默认开）。文本通道自己做四件事：`stripAnsi` 剥 CSI / OSC（手写扫描而不是正则 —— 控制码套起来时没人敢改那条正则）；`\r\n` 与 `\r` 都归一成 `\n`（进度条那种原地重绘会变成一行行刷屏，但比粘成一行好读）；行首补**墙上时间** `[HH:MM:SS.mmm]`（`RecorderOptions.timestamp`，默认开）—— 现场排查要的是能与设备日志、抓包对表的时间，相对秒数对不上任何东西；输入行前缀 `> `，一眼分得清谁敲的。两种格式**各自计数**：`.cast` 撞到 50MB 只停 cast，`.log` 撞到 50MB 只停 log，一条通道被掐不会顺手把另一条也关了。
+
+日志面板按后缀分格式（`SessionLogFile.format: 'cast' | 'log'`）：`.log` 标一个 `txt` 标签并**不显示回放按钮**（纯文本没有时间轴，给个点了没反应的按钮比不给更糟），导出对话框按后缀选默认扩展名（`文本日志 .log` / `Asciinema Cast .cast`，顺序影响另存时补全的后缀）。删除按「那次会话」而不是「那个文件」：删 `.cast` 连带删同名 `.log`，反之亦然。
+
+**IPC**：新增 `session:setBaud` / `session:break` 两条，`channelTitle` 补「切换串口波特率失败」「发送 BREAK 失败」，`preload` 暴露 `session.setBaud` / `session.break`（前者返回生效速率）。`SessionInfo` 加 `baudRate?`，标签栏要显示当前速率时不必去正则解析 `COM3 · 57600 8N1` 那个显示名。
+
+**界面**：`SerialBootBar` 折叠头右侧常驻 `Gauge + 速率`，展开体顶部单独一段「串口参数」—— 与刷机三步分开，因为「设备不吐字」和「刷机」是两件事：波特率错了的表现就是一片空白或满屏乱码，能就地试另一个速率；BREAK 用来打断已经在自动启动的板子。速率输入框 + 常用档位下拉（选中只填进输入框，不立刻切换）+「应用」，「应用」在速率没变时禁用。切换成功后同时更新会话显示名（`sessionStore.applySerialBaud` 就地重算 `describeSerialTarget`），标签栏与状态条跟着变。
+
+**设置**：`logPlainText` / `logTimestamp` 两个开关（默认都开），前者关掉后 `logTimestamp` 那一行也一起隐藏 —— 它没有独立含义。
+
+**新增验证**：`scripts/verify-serial.cjs` 补 14d–14f 三段（72 → 91 项）：切波特率真的走 `port.update` 而不是重建端口、生效值写回 config、非法与超上限回落当前值、驱动没有 `update` 时报可读错误；BREAK 先 `brk: true` 后 `brk: false`、只碰 `brk` 字段、时长被夹取、真实等待到点；会话层经假传输层转发并在 `list()` 里看到新速率与新的显示名。新增 `scripts/verify-session-log.cjs`（24 项，临时 userData + 真实 `createWriteStream`）：同名 `.cast`/`.log` 成对出现、ANSI 被剥干净、时间戳一行的量、输入行前缀、`plainText: false` 与 `timestamp: false` 各自的边界、两种格式双向截断互不影响、`listSessionLogs` 带 `format`、删一种连带删另一种。
+
+
 ## [2.1.9] - 2026-11-16
 
 ### Fixed（ZMODEM 浮层：切走标签再切回来，结束的传输又"重现"一次）
@@ -251,21 +336,7 @@ A 剥 ANSI（11）· B 切行器（9）· C 颜色/标志清洗（10）· D 规�
 
 ## [Unreleased]
 
-### Added（串口刷机配套：内置 TFTP 服务端 + U-Boot 引导条）
-
-**背景**：7628 板子的部署文档要求「PC 开 tftp 工具 → 串口工具连 57600 → 重启板子 2 秒内按 2 → 输 Y → 两次回车 → 填固件名」。串口本身 v2.0.0 已经能用（57600 8N1 / CR / UTF-8 全在支持范围内），但这条流程有四件事必须切到别的工具或靠手速：TFTP 服务端在外面、2 秒窗口靠掐表、`Y` 不带回车这个细节容易错、固件名要手打一遍。
-
-**改动**：
-
-- `src/main/tftp/server.ts`（新增）：内置 TFTP 服务端，只用 `node:dgram` + `node:fs`，**零新依赖**。RFC 1350 只读服务：RRQ → DATA/ACK 循环，512 字节块；接受 `blksize` / `tsize` / `timeout` 三个选项并回 OACK（不回 OACK 的话新 U-Boot 直接判失败）；`blksize` 夹在 8..1468。**每次传输另起一个 UDP socket 绑随机端口** —— RFC 1350 的 TID 规则要求如此，复用 69 端口回包会被 U-Boot 当成陌生来源丢掉，症状是「板子一直重试、服务端看起来啥也没发生」。超时 2 秒重传，5 次放弃并提示「检查网线是否直连、PC 与板子是否同网段」。WRQ 一律回 ERROR 2（只读，不接受写入）；文件名不匹配回 ERROR 1 而不是静默超时。`EADDRINUSE` 翻译成「端口 69 已被占用（可能有别的 TFTP 工具正在运行），关掉它再试」。
-- IPC：`TFTP_START` / `TFTP_STOP` / `TFTP_STATE` + 事件 `EVT_TFTP_LOG`，`handle.ts` 的 `channelTitle` 补两条，`preload` 暴露 `tftp.start` / `tftp.stop` / `tftp.state` / `on.tftpLog`。主进程退出时（`window-all-closed`）显式 `tftpServer.stop()` —— 它持有 69 端口和固件文件句柄，不关会让下次启动直接撞端口。
-- `src/renderer/src/components/terminal/SerialBootBar.tsx`（新增）：串口会话顶部的引导条，只在 `session.kind === 'serial'` 时出现。三步各一键：①点一下按钮，倒计时 6 秒后每 250ms 连发 `2`、共 16 发（也可以点「立即发送」发单个）—— 倒计时的起点是点按钮那一刻，不是上电那一刻，中间隔着人去拨电源，所以按文档写的「2 秒」设会变成还没摸到开关就发完；连发则是为了盖住那 2 秒窗口，发一次等于赌自己刚好卡在里面；②发 `Y`（不带回车）；③回车 / 发固件名（取服务端正在提供的文件名，没有则用文档里的默认名）。下半部分是 TFTP 开关：选固件、启动 / 停止、实时传输进度，以及**本机网口地址** —— 7628 这套引导菜单通常把 tftp 地址写死，所以界面给的是「本机是什么」，对不上就把电脑该网口 IP 改成它要的那个。
-- `src/renderer/src/stores/tftpStore.ts`（新增）：服务端状态 + 最近 200 条日志。
-- `ConnectionEditor`：加「7628 U-Boot 控制台」预设（57600 / 8 / 1 / none / none / utf-8 / cr），点一下套用，套完仍可逐项改。
-
-**为什么不放进固件升级面板**：那个面板全程走 SSH（`sftpManager` 上传 + 远端跑命令），而刷 U-Boot 的时候板子上还没有系统、没有 IP、没有 SSH —— 唯一的通道就是串口。硬塞进去只会让「固件升级」这个入口的语义变得不可预测。
-
-**新增验证**：`scripts/verify-tftp.cjs`（29 项，真起 UDP 服务端 + 自写最小客户端）：未启动状态、空固件拒绝、带 `blksize`/`tsize` 的完整传输（OACK 回显、**数据确实从新端口发出**、SHA256 与源文件一致）、无选项的 512 块老客户端、文件名不符回 ERROR 1、WRQ 回 ERROR 2、`stop()` 后端口可重绑、端口被占用时报可读错误。已接入 `npm run test:features`。
+（暂无未发布内容 —— 串口刷机配套、发送节奏、在线切波特率 / BREAK / 纯文本日志均已随 v2.2.0 发布。）
 
 
 ## [2.1.2] - 2026-11-13
