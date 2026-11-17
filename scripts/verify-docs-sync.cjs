@@ -21,7 +21,9 @@
  *   3. CHANGELOG.md 有 `## [<ver>] - YYYY-MM-DD` 条目
  *   4. 两份 README 的「最近更新 / Recent updates」第一条就是当前版本
  *   5. 那一条不能只有版本号：正文长度有下限（占位符等于没写）
- *   6. release-notes-v<ver>.md 存在（发版日志，与 verify-release-notes 口径一致）
+ *   6. CHANGELOG 里的 [<ver>] 条目能抽出 ≥ 200 字符的正文（Release 正文的唯一来源，
+ *      见 scripts/release-notes.cjs）。原先这一条判的是仓库里的 release-notes-v<ver>.md，
+ *      那些文件已全部删除 —— 正文改由发布时从 CHANGELOG 现抽，不再进仓库。
  *
  * 为什么判「第一条」而不是「包含」：
  *   只判包含的话，把新版本条目追加到列表末尾也能过 —— 但读者看到的第一条
@@ -35,6 +37,8 @@ const path = require('node:path')
 const ROOT = path.join(__dirname, '..')
 /** 单条更新的正文长度下限：只写「- **v1.9.0**」这种占位符要判红 */
 const MIN_ENTRY_CHARS = 60
+/** Release 正文下限：与 scripts/release-notes.cjs 的 MIN_CHARS 同值 */
+const MIN_RELEASE_CHARS = 200
 
 const results = []
 function check(name, fn) {
@@ -132,13 +136,19 @@ check(`README.zh-CN.md 最近更新首条 = v${VER} 且有正文`, () =>
   assertFirstEntry('README.zh-CN.md', /^最近更新：\s*$/)
 )
 
-// ── 6. 发版日志文件存在 ──────────────────────────────────────────────
-check(`release-notes-v${VER}.md 存在`, () => {
-  const rel = `release-notes-v${VER}.md`
-  assert(fs.existsSync(path.join(ROOT, rel)), `缺少 ${rel}（发版日志没有出口）`)
-  const chars = fs.readFileSync(path.join(ROOT, rel), 'utf8').length
-  assert(chars >= 200, `${rel} 只有 ${chars} 字符，疑似占位符`)
-  return `${rel} ${chars} 字符`
+// ── 6. Release 正文能从 CHANGELOG 抽出 ──────────────────────────────
+// 仓库里已没有 release-notes-v<ver>.md（一次性文件，看着像重复碎片），
+// Release 正文统一由 scripts/release-notes.cjs 从 CHANGELOG 的 [<ver>] 段现抽。
+// 这里直接调那个脚本，判据与发版链路完全同源，不会出现「校验过了、发版抽不到」。
+check(`CHANGELOG [${VER}] 能抽出 ${MIN_RELEASE_CHARS} 字符以上的 Release 正文`, () => {
+  const gen = path.join(ROOT, 'scripts', 'release-notes.cjs')
+  assert(fs.existsSync(gen), '缺少 scripts/release-notes.cjs（Release 正文没有出口）')
+  const { spawnSync } = require('node:child_process')
+  const r = spawnSync(process.execPath, [gen, '--version', VER], { encoding: 'utf8' })
+  assert(r.status === 0, `release-notes.cjs 退出码 ${r.status}：${(r.stderr || '').trim().split('\n')[0]}`)
+  const chars = [...(r.stdout || '')].length
+  assert(chars >= MIN_RELEASE_CHARS, `从 CHANGELOG 只抽出 ${chars} 字符（下限 ${MIN_RELEASE_CHARS}），疑似占位符`)
+  return `${chars} 字符，取自 CHANGELOG [${VER}]`
 })
 
 // ── 输出 ─────────────────────────────────────────────────────────────

@@ -560,7 +560,7 @@ v1.6.1 收敛成：
 | **量化** | 129 条命令里被截断的从 **93 条**降到 **0~1 条**；名字可用宽度 54px → 70~81px；每行 4.9 字单行 → 7 字两行 |
 | **范围** | 只改右侧命令栏。Ctrl+K 命令中心与底部横排（`layout=horizontal`）保持原样 |
 | **回归** | 新增 `verify-command-wall.cjs`（37 项，断言刻意选「旧实现必红」的判据，如四列时下键步长必须是 4 而非写死的 3）与 `perf-command-wall.cjs`（20 项，真实应用 + 完整 IPC，渲染真实 129 条命令，340 / 400 / 600 三档宽度验列数与等高）。`verify-layout.cjs` 默认栏宽快照跟到 400 |
-| **发布链路** | 新增 `verify-docs-sync.cjs`（`npm run test:docs`）：README `Current:` / README.zh-CN `当前版本：` / CHANGELOG 本版条目 / 两份 README「最近更新」**首条**必须是本版且正文 ≥ 60 字符 / `release-notes-v<ver>.md` ≥ 200 字符。起因：v1.9.0 发出后 GitHub 上 README 还写 v1.8.1、CHANGELOG 没有 1.9.0 —— 发版日志有 CI 硬门禁所以从没漏过，README / CHANGELOG 只是 checklist 里的 checkbox，等于没有 |
+| **发布链路** | 新增 `verify-docs-sync.cjs`（`npm run test:docs`）：README `Current:` / README.zh-CN `当前版本：` / CHANGELOG 本版条目 / 两份 README「最近更新」**首条**必须是本版且正文 ≥ 60 字符 / CHANGELOG 的 [<ver>] 段能抽出 ≥ 200 字符的 Release 正文（`scripts/release-notes.cjs`，仓库内已无 `release-notes-v*.md`）。起因：v1.9.0 发出后 GitHub 上 README 还写 v1.8.1、CHANGELOG 没有 1.9.0 —— 发版日志有 CI 硬门禁所以从没漏过，README / CHANGELOG 只是 checklist 里的 checkbox，等于没有 |
 
 #### v1.6.3（2026-10-29）
 

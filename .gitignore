@@ -59,3 +59,8 @@ scripts/_*
 # 本地临时工作区与回归报告（截图、user-data-dir、e2e 日志）
 .tmp/
 reports/
+
+# 一次性发版日志（release-notes-v<ver>.md）：已全部删除，Release 正文改由
+# scripts/release-notes.cjs 从 CHANGELOG 现抽。这里再兜一层，防止顺手写回来。
+release-notes-v*.md
+release-notes-*.generated.md

@@ -20,7 +20,9 @@ param(
   # 空 = 自动探测（读系统代理注册表 + 常见 Clash 端口），探不到就直连。
   # 之前默认写死 7897，换了机器/换了 Clash 配置端口就整条链路挂掉，见 scripts/check-net.ps1。
   [string]$Proxy = "",
-  [string]$NotesFile = "RELEASE_NOTES.md",
+  # 留空 = 从 CHANGELOG 的 [<Version>] 段现抽（scripts/release-notes.cjs）。
+  # 仓库里不再有 release-notes-v<ver>.md / RELEASE_NOTES.md 这类按版复制的文件。
+  [string]$NotesFile = "",
   [switch]$IncludePortable
 )
 
@@ -223,14 +225,24 @@ $sha = (git rev-parse HEAD).Trim()
 Pop-Location
 Write-Host "target commit: $sha"
 
-# ---- 正文：优先用 RELEASE_NOTES.md ----
-$notesPath = Join-Path $root $NotesFile
-if (Test-Path $notesPath) {
-  $notes = Get-Content $notesPath -Raw -Encoding UTF8
+# ---- 正文：默认从 CHANGELOG 现抽，显式 -NotesFile 时才用文件 ----
+# 原先默认读 RELEASE_NOTES.md（一个按版手写的副本），与 CHANGELOG 内容重复，
+# 忘改就是「Release 正文还是上一版」。现在默认由 scripts/release-notes.cjs 从
+# CHANGELOG 的 [<Version>] 段抽出；抽不到直接失败，不给占位符正文。
+if ($NotesFile -and (Test-Path (Join-Path $root $NotesFile))) {
+  $notes = Get-Content (Join-Path $root $NotesFile) -Raw -Encoding UTF8
   Write-Host "正文取自 $NotesFile（$($notes.Length) 字符）"
 } else {
-  $notes = "SSH Workbench $tag"
-  Write-Host "未找到 $NotesFile，使用默认正文" -ForegroundColor Yellow
+  $gen = Join-Path $PSScriptRoot "release-notes.cjs"
+  $tmpNotes = Join-Path $env:TEMP "swb-release-notes-$tag.md"
+  & node $gen --version "$Version" --out $tmpNotes
+  if ($LASTEXITCODE -ne 0 -or -not (Test-Path $tmpNotes)) {
+    Write-Host "无法从 CHANGELOG 生成 Release 正文（[$Version] 条目缺失或过短），已中止" -ForegroundColor Red
+    exit 1
+  }
+  $notes = Get-Content $tmpNotes -Raw -Encoding UTF8
+  Write-Host "正文取自 CHANGELOG [$Version]（$($notes.Length) 字符）" -ForegroundColor Green
+  Remove-Item $tmpNotes -ErrorAction SilentlyContinue
 }
 
 $body = @{

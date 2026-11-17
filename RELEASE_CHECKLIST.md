@@ -183,7 +183,7 @@ npm run test:stress:e2e    # 真实 Electron：30 次连续目录读取
 - [ ] `package.json:3` 的 `version` 已 bump
 - [ ] `CHANGELOG.md` 顶部新增本版条目（Fixed / Added / Changed 分类）
 - [ ] `README.md` 与 `README.zh-CN.md` 的「当前版本 / 最近更新」已同步 —— **不要靠肉眼**，跑 `npm run test:docs`（`verify-docs-sync.cjs`）到全绿。v1.9.0 就是这一步只写在清单里没人跑，结果 GitHub 上 README 还写 v1.8.1、CHANGELOG 压根没有 1.9.0。现在 `release.ps1` 与 CI 都会跑它，红着发不出去
-- [ ] `RELEASE_NOTES.md` 已按本版重写
+- [ ] CHANGELOG 本版条目已写足（Release 正文从它现抽，见 `scripts/release-notes.cjs`）—— 仓库里不再有 `release-notes-v*.md` / `RELEASE_NOTES.md`
 - [ ] `DESIGN.md` 目录结构（§3）+ §5 对应小节 + §6 安全表 + §7 路线表 + §7.0 版本更新记录 + §9 已知限制 + §10 自检脚本清单 已补
 - [ ] `USAGE_GUIDE.md` 新功能的使用说明已补（按用户视角写，不写实现细节）
 - [ ] `RELEASE_CHECKLIST.md` §1「本次变更」已换成当次内容
@@ -305,7 +305,7 @@ git push origin v<ver>
 > 另注意 GitHub CDN 有缓存：刚 `--clobber` 完 `latest.yml` 读到的可能还是旧内容，等几十秒或加 `?t=<随机数>` 再读。
 
 - [ ] 创建 Release，tag 选中刚推的
-- [ ] 正文用 `RELEASE_NOTES.md` 内容
+- [ ] 正文由 `node scripts/release-notes.cjs --version <ver> --out <tmp>` 从 CHANGELOG 生成（`release.ps1` 与 CI 已内置，默认走这条）
 - [ ] **远端资产口径**（用户 2026-10-26 定的规则，v1.6.x 实际执行如下）
   - **最小口径（规则原文）**：只传 `ssh-workbench-Setup-<ver>.exe` + `.blockmap` + `latest.yml` —— 后两个是自动更新元数据，不是"另一个版本"，缺了客户端查不到更新 / 无法差量下载
   - **不传**：`portable.exe`、`win.zip` —— 与 Setup 解出来的 `win-unpacked` 一致，多传白费 200+ MB

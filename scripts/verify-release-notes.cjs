@@ -16,8 +16,8 @@
  *      **不得再出现** `--notes "Release $tag"` 这类占位符写法
  *   2. 创建/更新 Release 时必须走 `--notes-file`，指向 `release-notes-<tag>.md`
  *   3. 工作流必须对日志文件缺失、或文件过短（占位符）显式失败
- *   4. 仓库里当前 package.json 版本必须有对应的 `release-notes-v<ver>.md`，
- *      且长度不低于阈值 —— 防止「工作流改好了，但这一版压根没写日志文件」
+ *   4. 当前 package.json 版本必须能从 CHANGELOG 抽出 ≥ 200 字符的正文
+ *      （scripts/release-notes.cjs）—— 防止「工作流改好了，但这一版压根没写日志」
  *
  * 为什么第 4 条不能只判文件存在：
  *   存在一个只写了一行标题的文件，和没有文件在结果上是等价的 —— 用户打开
@@ -111,33 +111,27 @@ check('日志文件缺失或过短时工作流显式失败', () => {
   return '有 Test-Path 缺失判定 + 长度下限判定'
 })
 
-// ── 6. 当前版本必须有真实日志文件 ─────────────────────────────────────
-check(`当前版本有 release-notes-v<ver>.md 且 ≥ ${MIN_NOTES_CHARS} 字符`, () => {
+// ── 6. 当前版本的正文能真正从 CHANGELOG 抽出来 ────────────────────────
+// 仓库里已不再保留 release-notes-v<ver>.md（20 个重复碎片，看着老丑）。正文唯一
+// 来源是 CHANGELOG 的 [<ver>] 段，由 scripts/release-notes.cjs 现抽。这里直接
+// 跑那个脚本，判据与真实发版链路同源 —— 不会出现「校验自己看文件、发版却抽不到」。
+check(`CHANGELOG [<ver>] 能抽出 ≥ ${MIN_NOTES_CHARS} 字符正文`, () => {
   const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'))
   const ver = pkg.version
-  const f = path.join(ROOT, `release-notes-v${ver}.md`)
-  assert(fs.existsSync(f), `v${ver} 没有发布日志文件 release-notes-v${ver}.md`)
-  const text = fs.readFileSync(f, 'utf8')
-  const chars = text.length
-  assert(
-    chars >= MIN_NOTES_CHARS,
-    `release-notes-v${ver}.md 只有 ${chars} 字符（下限 ${MIN_NOTES_CHARS}），疑似占位符`
-  )
-  // 光有长度还不够：得确认它真的在讲这一版，而不是别的版本的旧文件改名
-  const head = text.split('\n').slice(0, 3).join('\n')
-  assert(head.includes(ver), `release-notes-v${ver}.md 开头没有版本号 ${ver}：${head.slice(0, 80)}`)
-  return `release-notes-v${ver}.md ${chars} 字符，开头含版本号`
+  const gen = path.join(ROOT, 'scripts', 'release-notes.cjs')
+  assert(fs.existsSync(gen), '缺少 scripts/release-notes.cjs（Release 正文没有出口）')
+  const { spawnSync } = require('node:child_process')
+  const r = spawnSync(process.execPath, [gen, '--version', ver], { encoding: 'utf8' })
+  assert(r.status === 0, `release-notes.cjs 退出码 ${r.status}：${(r.stderr || '').trim().split('\n')[0]}`)
+  const text = r.stdout || ''
+  const chars = [...text].length
+  assert(chars >= MIN_NOTES_CHARS, `只抽出 ${chars} 字符（下限 ${MIN_NOTES_CHARS}），疑似占位符`)
+  assert(text.includes(ver), `抽出的正文里没有版本号 ${ver}`)
+  return `${chars} 字符，取自 CHANGELOG [${ver}]`
 })
 
-// ── 7. 历史版本日志完整性（只提示，不失败）────────────────────────────
-const historical = (() => {
-  const tags = []
-  for (const f of fs.readdirSync(ROOT)) {
-    const m = /^release-notes-v([0-9.]+)\.md$/.exec(f)
-    if (m) tags.push(m[1])
-  }
-  return tags.sort()
-})()
+// ── 7. 仓库里不得再有按版复制的日志文件（只提示，不失败）──────────────
+const leftovers = fs.readdirSync(ROOT).filter((f) => /^release-notes-v[0-9.]+\.md$/.test(f))
 
 // ── 输出 ─────────────────────────────────────────────────────────────
 const pad = (s, n) => s + ' '.repeat(Math.max(0, n - [...s].reduce((a, c) => a + (c.charCodeAt(0) > 127 ? 2 : 1), 0)))
@@ -147,6 +141,6 @@ for (const r of results) {
   console.log(`  ${r.ok ? 'PASS' : 'FAIL'}  ${pad(r.name, 46)} ${r.detail}`)
   if (!r.ok) failed++
 }
-console.log(`\n  仓库内历史日志版本：${historical.length ? historical.join(', ') : '(无)'}`)
+console.log(`\n  仓库内按版复制的日志文件：${leftovers.length ? leftovers.join(', ') + '（应删除：正文改由 CHANGELOG 现抽）' : '(无，正常)'}`)
 console.log(`\n${failed === 0 ? `全部通过 (${results.length}/${results.length})` : `失败 ${failed}/${results.length}`}\n`)
 process.exit(failed === 0 ? 0 : 1)

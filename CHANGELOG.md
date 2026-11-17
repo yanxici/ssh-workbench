@@ -5,6 +5,22 @@ All notable changes to SSH Workbench will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.1] - 2026-11-17
+
+### Changed（发版日志：仓库里那 20 个 `release-notes-v*.md` 全删）
+
+**问题**：仓库根目录堆了 20 个 `release-notes-v<ver>.md`（v1.6.1 → v2.2.0），每版一个。内容与 CHANGELOG 高度重复，翻仓库时像一堆没整理的碎片。
+
+**改法**：正文不再按版复制进仓库，改由 `scripts/release-notes.cjs` 在发版时从 CHANGELOG 的 `## [<ver>]` 段现抽：
+
+- `node scripts/release-notes.cjs --version 2.2.0 --out <tmp>` —— 抽不到或不足 200 字符直接退出码 1，不给占位符正文
+- `.github/workflows/release.yml` 的发布步骤改为先跑这个脚本生成 `release-notes-<tag>.generated.md`，再 `gh release create --notes-file`
+- `scripts/release.ps1` 的 `-NotesFile` 默认值改为空：留空 = 从 CHANGELOG 现抽，显式传文件才用文件
+- `verify-release-notes.cjs` / `verify-docs-sync.cjs` 的第 6 条判据改为「跑 release-notes.cjs 能抽出 ≥ 200 字符」，与真实发版链路同源，不再自查一个仓库里已不存在的文件
+- `.gitignore` 补 `release-notes-v*.md` / `release-notes-*.generated.md`，防止再写回来
+
+**实测**：`verify-release-notes` 6/6、`verify-docs-sync` 6/6；抽出的 v2.2.0 正文 8223 字符，首行 `# SSH Workbench v2.2.0（2026-11-17）`。
+
 ## [2.2.0] - 2026-11-17
 
 ### Fixed（串口收到裸 LF 时屏幕呈阶梯状）
