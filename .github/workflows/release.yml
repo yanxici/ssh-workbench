@@ -171,16 +171,20 @@ jobs:
             Write-Host "缺少发布产物，实际找到：$($assets -join ', ')" -ForegroundColor Red
             exit 1
           }
-          # Release 日志：必须是仓库里的 release-notes-<tag>.md，缺了直接失败。
+          # Release 日志：从 CHANGELOG 现抽，抽不到直接失败。
           # 历史问题：这里原本写的是 --notes "Release $tag"，CI 自动建 Release 时
           # 正文就一行 "Release v1.8.0"，完整日志没有出口 —— 用户装到新版，
           # Release 页面只有一行标题，等于没有更新说明。
           #
           # 不做「找不到就拿别的版本日志顶上」的回退：v1.7 的日志挂到 v1.8 的
           # Release 上，比空日志更误导。宁可红在这里，让人去补文件。
-          $notesFile = "release-notes-$tag.md"
+          # 正文从 CHANGELOG.md 的 [<tag 去 v>] 段现抽（scripts/release-notes.cjs）。
+          # 仓库里不再有 release-notes-<tag>.md：一版一个文件堆在根目录，
+          # 内容与 CHANGELOG 重复，维护两份必然漂移。
+          $notesFile = "release-notes-$tag.generated.md"
+          node scripts/release-notes.cjs --version $($tag -replace '^v', '') --out $notesFile
           if (-not (Test-Path $notesFile)) {
-            Write-Host "缺少 $notesFile —— 发版必须带日志，先写这个文件再打 tag" -ForegroundColor Red
+            Write-Host "无法生成 $notesFile —— CHANGELOG 里没有这一版的条目，先写 CHANGELOG 再打 tag" -ForegroundColor Red
             exit 1
           }
           $notesLen = (Get-Content $notesFile -Raw).Length
