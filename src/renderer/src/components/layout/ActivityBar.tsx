@@ -1,6 +1,7 @@
 import type * as React from 'react'
 import {
   Archive,
+  ArrowUpDown,
   BookUser,
   Boxes,
   Cable,
@@ -23,6 +24,7 @@ import { useMetricsStore } from '@/stores/metricsStore'
 import { useFirmwareStore } from '@/stores/firmwareStore'
 import { useDiscoveryStore } from '@/stores/discoveryStore'
 import { useBackupStore } from '@/stores/backupStore'
+import { useTransferStore } from '@/stores/transferStore'
 import { cn } from '@/lib/utils'
 
 /**
@@ -65,10 +67,18 @@ export function ActivityBar(): React.JSX.Element {
   const firmwareOpen = useFirmwareStore((s) => s.panelOpen)
   const discoveryOpen = useDiscoveryStore((s) => s.panelOpen)
   const backupOpen = useBackupStore((s) => s.panelOpen)
+  const transferOpen = useTransferStore((s) => s.panelOpen)
 
   /** 任一工具面板打开时，「工具」入口也要点亮 */
   const toolsActive =
-    diagOpen || batchOpen || profileOpen || metricsOpen || firmwareOpen || discoveryOpen || backupOpen
+    diagOpen ||
+    batchOpen ||
+    profileOpen ||
+    metricsOpen ||
+    firmwareOpen ||
+    discoveryOpen ||
+    backupOpen ||
+    transferOpen
 
   return (
     <nav
@@ -168,6 +178,11 @@ function ToolsButton({ active }: { active: boolean }): React.JSX.Element {
       label: '配置备份对比',
       icon: <Archive size={14} />,
       onClick: () => useBackupStore.getState().togglePanel()
+    },
+    {
+      label: '传输记录',
+      icon: <ArrowUpDown size={14} />,
+      onClick: () => useTransferStore.getState().togglePanel()
     }
   ]
 

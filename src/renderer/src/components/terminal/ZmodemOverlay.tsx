@@ -27,6 +27,7 @@ import {
   type ZmodemProgress,
   type ZmodemDirection
 } from '@/lib/zmodem'
+import { setZmodemIdentityResolver } from '@/lib/zmodemRecord'
 import { useSessionStore } from '@/stores/sessionStore'
 
 interface PendingConfirm {
@@ -68,6 +69,26 @@ export function ZmodemOverlay(): React.JSX.Element | null {
     }
   }, [])
 
+  /*
+   * 传输记录的身份解析器：ZMODEM 的 sessionId 只在本进程有效，
+   * 记录里必须换算成 connectionId 才能在重启后还对得上。
+   * 放在 UI 层是因为协议层（lib/zmodem）不能依赖会话表 ——
+   * 它要被无头测试单独打包，拖着整棵 store 依赖树就跑不起来。
+   */
+  useEffect(() => {
+    setZmodemIdentityResolver((sessionId) => {
+      const s = useSessionStore.getState().sessions.find((x) => x.id === sessionId)
+      return s
+        ? {
+            connectionId: s.connectionId,
+            connectionName: s.connectionName,
+            target: s.target
+          }
+        : {}
+    })
+    return () => setZmodemIdentityResolver(null)
+  }, [])
+
   // 只监听当前活动会话的进度。
   // 挂载/切回时先取一次快照：传输可能停在「等待确认」「等待远端起始帧」
   // 这种不会再推送新事件的阶段，不恢复快照的话面板就是空的，
@@ -83,10 +104,15 @@ export function ZmodemOverlay(): React.JSX.Element | null {
     })
   }, [activeId])
 
-  // 完成/失败后自动收起（保留错误信息久一点）
+  // 完成/失败/取消后自动收起（保留错误信息久一点，取消的最快收起）
   useEffect(() => {
-    if (!progress || (progress.phase !== 'done' && progress.phase !== 'error')) return
-    const t = setTimeout(() => setProgress(null), progress.phase === 'error' ? 6000 : 2500)
+    if (!progress) return
+    const { phase } = progress
+    if (phase !== 'done' && phase !== 'error' && phase !== 'canceled') return
+    const t = setTimeout(
+      () => setProgress(null),
+      phase === 'error' ? 6000 : phase === 'canceled' ? 1800 : 2500
+    )
     return () => clearTimeout(t)
   }, [progress])
 
@@ -184,6 +210,8 @@ export function ZmodemOverlay(): React.JSX.Element | null {
       <CheckCircle2 size={14} className="text-emerald-400" />
     ) : progress.phase === 'error' ? (
       <XCircle size={14} className="text-danger" />
+    ) : progress.phase === 'canceled' ? (
+      <XCircle size={14} className="text-ink-3" />
     ) : progress.phase === 'detected' ? (
       receiving ? (
         <ArrowDownToLine size={14} />
@@ -201,7 +229,9 @@ export function ZmodemOverlay(): React.JSX.Element | null {
         ? progress.message || '传输完成'
         : progress.phase === 'error'
           ? progress.message || '传输失败'
-          : receiving
+          : progress.phase === 'canceled'
+            ? progress.message || '已取消'
+            : receiving
             ? '接收中'
             : '发送中'
 
@@ -237,7 +267,7 @@ export function ZmodemOverlay(): React.JSX.Element | null {
           <span>{total > 0 ? formatBytes(total) : '未知大小'}</span>
         </div>
 
-        {progress.message && progress.phase !== 'error' && (
+        {progress.message && progress.phase !== 'error' && progress.phase !== 'canceled' && (
           <div className="mt-1 truncate text-3xs text-ink-3" title={progress.message}>
             {progress.message}
           </div>

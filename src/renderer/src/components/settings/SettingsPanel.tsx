@@ -16,6 +16,7 @@ import { OutputHighlightSection } from './OutputHighlightSection'
 import { Section } from './sectionUi'
 import { ShortcutSection } from './ShortcutSection'
 import { TerminalSection } from './TerminalSection'
+import { TransferSection } from './TransferSection'
 import { UpdateSection } from './UpdateSection'
 
 /**
@@ -91,6 +92,10 @@ export function SettingsPanel({
         hint="延迟探测 / 自动录像 / 跟随终端 / 指纹校验 / 面板位置"
       >
         <BehaviorSection />
+      </Section>
+
+      <Section id="transfer" title="文件传输" hint="默认下载目录 / 重传跳过未变化文件">
+        <TransferSection />
       </Section>
 
       <Section

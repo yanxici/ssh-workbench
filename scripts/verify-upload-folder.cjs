@@ -35,6 +35,9 @@ fs.writeFileSync(
   stub,
   `exports.sessionManager = {
     waitUntilReady: async () => {},
+    list: () => [],
+    statusOf: () => 'connected',
+    isReconnecting: () => false,
     getClient: () => ({ sftp: (cb) => cb(null, globalThis.__FAKE_SFTP__) })
   }`
 )
@@ -90,9 +93,12 @@ function makeSftp() {
   const dirs = new Set(['/'])
   const handles = new Map()
   let nextHandle = 1
+  // 引擎现在用 lstat 判型（stat 会跟随符号链接，删链接会递归清空目标目录），
+  // 假对象必须提供同一个方法，否则判型直接抛 TypeError
   const statsOf = (size, isDir) => ({
     isFile: () => !isDir,
     isDirectory: () => isDir,
+    isSymbolicLink: () => false,
     size,
     mode: isDir ? 0o040755 : 0o100644,
     mtime: 0,
@@ -111,6 +117,29 @@ function makeSftp() {
       if (files.has(p)) return cb(null, statsOf(files.get(p).length, false))
       if (dirs.has(p)) return cb(null, statsOf(0, true))
       cb(new Error(`no such file: ${p}`))
+    },
+    lstat(p, cb) {
+      if (files.has(p)) return cb(null, statsOf(files.get(p).length, false))
+      if (dirs.has(p)) return cb(null, statsOf(0, true))
+      cb(new Error(`no such file: ${p}`))
+    },
+    rename(from, to, cb) {
+      if (files.has(from)) {
+        files.set(to, files.get(from))
+        files.delete(from)
+        return cb && cb(null)
+      }
+      if (dirs.has(from)) {
+        dirs.add(to)
+        dirs.delete(from)
+        return cb && cb(null)
+      }
+      cb && cb(new Error(`no such file: ${from}`))
+    },
+    unlink(p, cb) {
+      if (!files.has(p)) return cb && cb(new Error(`no such file: ${p}`))
+      files.delete(p)
+      cb && cb(null)
     },
     readdir(p, cb) {
       if (!dirs.has(p)) return cb(new Error(`no such dir: ${p}`))

@@ -105,17 +105,20 @@ async function waitText(file, predicate, ms = 3000) {
   return text
 }
 
-/** 按标题找到这一次录制产生的两个文件（同名不同后缀） */
-async function waitFiles(title) {
-  for (let i = 0; i < 200; i++) {
+/**
+ * 按标题找到这一次录制产生的两个文件（同名不同后缀）。
+ *
+ * 必须等**两份**都出现再返回：createWriteStream 是异步 open，.cast 先落地、
+ * .log 后落地是常态。只等 .cast 就返回时，log 会拿到 undefined，后面所有
+ * 针对 .log 的断言都会以空字符串静默失败（CI 上就是这样红的）。
+ * plainText:false 的用例显式传 expectLog = false。
+ */
+async function waitFiles(title, expectLog = true) {
+  for (let i = 0; i < 300; i++) {
     const list = await M.listSessionLogs()
     const cast = list.find((f) => f.format === 'cast' && f.name.endsWith(title + '.cast'))
-    if (cast) {
-      return {
-        cast,
-        log: list.find((f) => f.format === 'log' && f.name === cast.name.replace(/\.cast$/, '.log'))
-      }
-    }
+    const log = cast ? list.find((f) => f.format === 'log' && f.name === cast.name.replace(/\.cast$/, '.log')) : undefined
+    if (cast && (!expectLog || log)) return { cast, log }
     await sleep(10)
   }
   return {}
@@ -123,7 +126,7 @@ async function waitFiles(title) {
 
 async function startRec(sessionId, title, options) {
   await recorder.start(sessionId, title, 120, 32, options)
-  return waitFiles(title)
+  return waitFiles(title, !options || options.plainText !== false)
 }
 
 async function main() {

@@ -39,6 +39,7 @@ import { useMetricsStore } from '@/stores/metricsStore'
 import { useFirmwareStore } from '@/stores/firmwareStore'
 import { useDiscoveryStore } from '@/stores/discoveryStore'
 import { useBackupStore } from '@/stores/backupStore'
+import { useTransferStore } from '@/stores/transferStore'
 import { useUpdateStore } from '@/stores/updateStore'
 import { useTftpStore } from '@/stores/tftpStore'
 import { useUiStore } from '@/stores/uiStore'
@@ -92,6 +93,9 @@ const DiscoveryPanel = lazy(() =>
 )
 const BackupPanel = lazy(() =>
   import('@/components/backup/BackupPanel').then((m) => ({ default: m.BackupPanel }))
+)
+const TransferPanel = lazy(() =>
+  import('@/components/transfer/TransferPanel').then((m) => ({ default: m.TransferPanel }))
 )
 
 /**
@@ -159,6 +163,7 @@ export function App(): React.JSX.Element {
   const firmwareOpen = useFirmwareStore((s) => s.panelOpen)
   const discoveryOpen = useDiscoveryStore((s) => s.panelOpen)
   const backupOpen = useBackupStore((s) => s.panelOpen)
+  const transferOpen = useTransferStore((s) => s.panelOpen)
   /*
    * 骨架标题：从「当前打开的面板」反推，让兜底时不出现「加载中…」这种无信息文案。
    * 用 panelIdFor 而不是自己判断顺序，保证与下面的挂载顺序是同一份真相。
@@ -171,7 +176,8 @@ export function App(): React.JSX.Element {
     metrics: metricsOpen,
     firmware: firmwareOpen,
     discovery: discoveryOpen,
-    backup: backupOpen
+    backup: backupOpen,
+    transfer: transferOpen
   }
   const currentPanel = panelIdFor(openMap)
   const PANEL_TITLES: Record<string, string> = {
@@ -182,7 +188,8 @@ export function App(): React.JSX.Element {
     metrics: '资源仪表盘',
     firmware: '固件升级助手',
     discovery: '设备发现',
-    backup: '配置备份对比'
+    backup: '配置备份对比',
+    transfer: '传输记录'
   }
   const panelSkeletonTitle = currentPanel ? PANEL_TITLES[currentPanel] : undefined
 
@@ -397,6 +404,13 @@ export function App(): React.JSX.Element {
     const offTransfer = window.api.on.transferProgress((e) => {
       useSftpStore.getState().applyProgress(e)
     })
+    /*
+     * 传输记录变更信号：主进程只发「变了」，不发内容。
+     * 面板自己重拉一次列表 —— 这样渲染层永远不持有与磁盘不同步的镜像。
+     */
+    const offRecordChanged = window.api.on.recordChanged(() => {
+      useTransferStore.getState().applyChanged()
+    })
     // 应用更新状态：主进程每次推全量快照，这里直接覆盖
     const offUpdate = window.api.on.updateStatus((e) => {
       useUpdateStore.getState().applyEvent(e)
@@ -450,6 +464,7 @@ export function App(): React.JSX.Element {
       offUpdate()
       offNotifyClick()
       offTrzszState()
+      offRecordChanged()
     }
   }, [])
 
@@ -645,6 +660,7 @@ export function App(): React.JSX.Element {
         {firmwareOpen && <FirmwarePanel />}
         {discoveryOpen && <DiscoveryPanel />}
         {backupOpen && <BackupPanel />}
+        {transferOpen && <TransferPanel />}
       </Suspense>
       </div>
       {editing && (

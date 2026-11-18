@@ -25,10 +25,13 @@ import {
   Pause,
   Play,
   RefreshCw,
+  FolderOpen,
   X
 } from 'lucide-react'
 import type { TransferTask } from '@shared/types'
 import { useSftpStore } from '@/stores/sftpStore'
+import { useSessionStore } from '@/stores/sessionStore'
+import { useToastStore } from '@/stores/toastStore'
 import { cn, formatBytes } from '@/lib/utils'
 
 /** 超过该大小或持续该时长，才认为值得弹出进度浮层（避免小文件一闪而过） */
@@ -44,6 +47,34 @@ function isLive(task: TransferTask): boolean {
 
 function fileName(p: string): string {
   return p.split(/[\\/]/).filter(Boolean).pop() ?? p
+}
+
+/**
+ * 结束后定位到文件。
+ *
+ * 下载直接调系统的「在文件夹中显示」；上传没有本机路径，
+ * 打开该连接的文件管理面板并进入远端目录 —— 主进程那条 openDir
+ * 只认本机路径，所以远端定位走渲染层的 navRemote。
+ */
+async function revealTask(task: TransferTask): Promise<void> {
+  if (task.direction === 'download') {
+    await window.api.transfer.reveal(task.localPath).catch(() => undefined)
+    return
+  }
+  const dir = task.remotePath.slice(0, task.remotePath.lastIndexOf('/')) || '/'
+  const session = useSessionStore
+    .getState()
+    .sessions.find((s) => s.id === task.sessionId && s.status === 'connected')
+  if (!session) {
+    useToastStore.getState().push({
+      kind: 'warning',
+      title: '该连接当前未建立',
+      detail: '先连上这台设备，才能在远端打开这个目录'
+    })
+    return
+  }
+  await useSftpStore.getState().openFor(session.id, session.target)
+  await useSftpStore.getState().navRemote(dir)
 }
 
 function taskPercent(task: TransferTask): number {
@@ -371,6 +402,20 @@ function TransferRow({
             onClick={() => void cancelTask(task.id)}
           >
             <Ban size={10} />
+          </button>
+        )}
+
+        {/*
+         * 结束后能定位就定位：下载给「在文件管理器中显示」，
+         * 上传给「在远端目录打开」。进行中不给 —— 那时文件还没落成成品。
+         */}
+        {!isLive(task) && (
+          <button
+            className="flex h-4 w-4 shrink-0 items-center justify-center rounded text-ink-3 opacity-0 transition-opacity hover:bg-hover hover:text-accent group-hover:opacity-100"
+            title={task.direction === 'download' ? '在文件管理器中显示' : '在远端目录中打开'}
+            onClick={() => void revealTask(task)}
+          >
+            <FolderOpen size={10} />
           </button>
         )}
 

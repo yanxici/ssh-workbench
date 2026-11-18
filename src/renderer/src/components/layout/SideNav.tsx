@@ -89,7 +89,6 @@ export function SideNav({
           'files',
           <FileExplorer
             session={activeSession}
-            onOpenTransfer={() => void 0}
             onBrowseSessions={() => setActivityView('connections')}
           />
         )}

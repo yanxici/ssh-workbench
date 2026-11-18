@@ -49,18 +49,36 @@ import {
   type ZmodemTransfer,
   type ZmodemSubpacket
 } from 'zmodem.js'
+// 相对路径而非 @/ 别名：scripts/verify-zmodem-renderer.cjs 用 esbuild 单独打包
+// 这个文件跑无头回归，那里只配了 @shared 一个别名，@/ 会直接解析失败
+import { uid } from './utils'
+import { reportZmodemRecord } from './zmodemRecord'
 
 /** 传输方向：send = 本机发给远端（对端 rz）；receive = 远端发给本机（对端 sz） */
 export type ZmodemDirection = 'send' | 'receive'
 
 export interface ZmodemProgress {
-  /** 'detected' 待确认，'active' 传输中，'done' 完成，'error' 失败 */
-  phase: 'detected' | 'active' | 'done' | 'error'
+  /**
+   * 'detected' 待确认，'active' 传输中，'done' 完成，'error' 失败，'canceled' 用户主动放弃。
+   *
+   * canceled 与 error 必须分开：用户点了「中断」既不是成功也不是故障，
+   * 记进历史账本时用灰色而不是红色，否则用户会以为是自己网络坏了。
+   */
+  phase: 'detected' | 'active' | 'done' | 'error' | 'canceled'
   direction: ZmodemDirection
   fileName?: string
   bytesDone: number
   bytesTotal: number
   message?: string
+  /**
+   * 本次传输的稳定 id：进度帧每 150ms 换一次对象，历史账本却要靠它
+   * 把「开始 / 收尾」两次写入认成同一条记录。
+   */
+  transferId?: string
+  /** 本机路径：接收方向是落盘文件，发送方向是源文件。拿不到就留空。 */
+  localPath?: string
+  /** 远端路径：ZMODEM 两端都不告诉对端路径，恒为空，保留字段是为了口径统一。 */
+  remotePath?: string
 }
 
 interface SessionState {
@@ -125,6 +143,24 @@ interface SessionState {
   lastResyncAt: number
   /** 本次会话已经发起过多少次断点续传，超过上限就认定这条路救不回来 */
   resyncAttempts: number
+  /**
+   * 最后一次「确实写进文件」的时刻 —— 静默看门狗的真实时钟。
+   *
+   * 不能用 lastDataAt：对端被 kill 后常会反复重发同一段，字节在流但一块都
+   * 落不了盘。以收包为时钟的话计时器永远被推迟，界面就停在某个百分比不动，
+   * 既不报错也不续传。只有落盘推进才算活着。
+   */
+  lastProgressAt: number
+  /** 本轮静默续传已经试了几次（有新进展即清零） */
+  idleResumes: number
+  /** 「一直没等到第一块数据」这条提示是否已经发过：只提示一次，但看门狗要继续跑 */
+  startupNoticed: boolean
+  /** 本次传输的记录 id（历史账本用）；null 表示还没有真正开始 */
+  transferId: string | null
+  /** 本次传输的开始时刻（记录里的 startedAt） */
+  transferStartedAt: number
+  /** 本机落盘路径（接收）或源文件路径（发送），记录里展示用 */
+  transferLocalPath: string
 }
 
 /** 会话结束后等待残渣到齐的窗口（远端常会补发 ZRINIT 等） */
@@ -148,8 +184,28 @@ const RESYNC_MIN_INTERVAL_MS = 150
 /** 单个文件最多续传几次，超过就认定对端链路已经不可用 */
 const RESYNC_MAX_ATTEMPTS = 64
 
+/**
+ * 传输中途静默时，最多主动「叫醒」对端几次。真 sz 收到 ZRPOS 会从该处重发，
+ * 但已经被 kill 掉的 sz 只会让每一轮都白等一个静默窗口 —— 所以这里必须封顶，
+ * 到点如实报错，不能让界面永远停在最后一个百分比。
+ */
+const IDLE_RESUME_MAX = 3
+
+/** 静默看门狗的超时。抽成对象是为了让无头回归能把它调小（真实 15 秒太慢） */
+export const receiveWatchdog = { idleMs: RECEIVE_STALL_MS }
+
 /** 接收时攒够这么多字节就落盘一次，避免整份文件驻留渲染进程内存 */
 const RECEIVE_FLUSH_BYTES = 256 * 1024
+
+/**
+ * 单次喂给 zmodem.js 的字节上限。
+ *
+ * 库用 `push.apply(arr, input)` 摊平输入，实参个数 = 本批字节数，
+ * 几十万就会 RangeError（Maximum call stack size exceeded）。
+ * 16KB 与库自己的 MAX_CHUNK_LENGTH 对齐，切成这样既不会爆栈，
+ * 也保证一个子包不会被切断在两次调用之间（解析器自己会缓存残留）。
+ */
+const FEED_SLICE_BYTES = 16 * 1024
 
 /**
  * 发送方向等对端回应（ZFILE -> ZRPOS、ZEOF -> ZRINIT）的最长时间。
@@ -226,9 +282,65 @@ const watchers = new Map<string, (p: ZmodemProgress) => void>()
  */
 const lastProgress = new Map<string, ZmodemProgress>()
 
+/**
+ * 历史账本：一次传输只在「真正开始」与「终态」各写一条。
+ *
+ * 进度帧一概不落盘 —— 150ms 一条 IPC 加整份 JSON 重写会把磁盘打满，
+ * 而进度本身对事后排查没有价值（要看的是传完了没、失败原因是什么）。
+ */
+const startedRecords = new Set<string>()
+
+function trackRecord(sessionId: string, p: ZmodemProgress): void {
+  if (!p.transferId) return
+  const st = states.get(sessionId)
+  const finished = p.phase === 'done' || p.phase === 'error' || p.phase === 'canceled'
+  if (!finished && p.phase !== 'active') return
+  if (!finished && startedRecords.has(p.transferId)) return
+  /*
+   * 一个字节都没动就取消的，不留记录：用户点「取消」拒绝确认、或在选目录时
+   * 关掉对话框，这类空任务只会把账本刷成一堆 0 字节行，真正传过的反而被挤下去。
+   */
+  if (finished && !startedRecords.has(p.transferId) && p.bytesDone === 0) return
+  startedRecords.add(p.transferId)
+  reportZmodemRecord({
+    id: p.transferId,
+    sessionId,
+    // ZMODEM 的 send 是「本机 -> 远端」，与记录里的 upload 同义
+    direction: p.direction === 'send' ? 'upload' : 'download',
+    status: p.phase === 'active' ? 'running' : p.phase === 'done' ? 'done' : p.phase === 'error' ? 'error' : 'canceled',
+    fileName: p.fileName,
+    localPath: p.localPath,
+    remotePath: p.remotePath,
+    size: p.bytesTotal,
+    transferred: p.bytesDone,
+    startedAt: st?.transferStartedAt || Date.now(),
+    // 只有失败才把文案当错误；完成时的 message 是「已保存到 …」这类说明
+    error: p.phase === 'error' ? p.message : undefined,
+    note: p.phase === 'done' ? p.message : undefined
+  })
+  if (finished) {
+    startedRecords.delete(p.transferId)
+    if (st) {
+      st.transferId = null
+      st.transferStartedAt = 0
+      st.transferLocalPath = ''
+    }
+  }
+}
+
 function emit(sessionId: string, p: ZmodemProgress): void {
-  lastProgress.set(sessionId, p)
-  watchers.get(sessionId)?.(p)
+  // 路径与 id 都由会话状态统一注入：几十处 emit 不用各自拼一遍
+  const st = states.get(sessionId)
+  const full: ZmodemProgress = st
+    ? {
+        ...p,
+        transferId: p.transferId ?? st.transferId ?? undefined,
+        localPath: p.localPath ?? (st.transferLocalPath || undefined)
+      }
+    : p
+  lastProgress.set(sessionId, full)
+  trackRecord(sessionId, full)
+  watchers.get(sessionId)?.(full)
 }
 
 /**
@@ -243,7 +355,7 @@ function emit(sessionId: string, p: ZmodemProgress): void {
 export function getZmodemProgress(sessionId: string): ZmodemProgress | null {
   const snap = lastProgress.get(sessionId)
   if (!snap) return null
-  if (snap.phase === 'done' || snap.phase === 'error') return null
+  if (snap.phase === 'done' || snap.phase === 'error' || snap.phase === 'canceled') return null
   return snap
 }
 
@@ -317,7 +429,13 @@ export function attachZmodem(sessionId: string, hooks: ZmodemHooks): void {
     resyncFrom: -1,
     suppressUntil: 0,
     lastResyncAt: 0,
-    resyncAttempts: 0
+    resyncAttempts: 0,
+    lastProgressAt: 0,
+    idleResumes: 0,
+    startupNoticed: false,
+    transferId: null,
+    transferStartedAt: 0,
+    transferLocalPath: ''
   }
 
   state.sentry = new Sentry({
@@ -434,7 +552,7 @@ async function handleDetect(
       /* 已被推翻则忽略 */
     }
     emit(sessionId, {
-      phase: 'error',
+      phase: 'canceled',
       direction,
       bytesDone: 0,
       bytesTotal: 0,
@@ -459,7 +577,7 @@ async function handleDetect(
         /* 忽略 */
       }
       emit(sessionId, {
-        phase: 'error',
+        phase: 'canceled',
         direction,
         bytesDone: 0,
         bytesTotal: 0,
@@ -530,6 +648,12 @@ function startSession(
     state.receivedBytes = 0
     state.resyncAttempts = 0
     state.lastResyncAt = 0
+    state.lastProgressAt = 0
+    state.idleResumes = 0
+    state.startupNoticed = false
+    state.transferId = null
+    state.transferStartedAt = 0
+    state.transferLocalPath = ''
     clearAutoTimer(state)
     clearStallTimer(state)
     // 会话结束后排一次清理：远端可能还会补发一点残渣，给它一个短暂窗口
@@ -614,22 +738,88 @@ function clearStallTimer(state: SessionState): void {
   }
 }
 
+/**
+ * 静默看门狗。
+ *
+ * 之前这里只管「一个字节都还没收到」的情况，而且收到过数据就直接 return —— 结果是
+ * 大文件传到一半双方互相干等（对端等我方 ZACK/ZRPOS，我方等对端数据），谁都不抛错，
+ * 界面就永远停在最后一个百分比。真实世界里 sz 被 kill、链路丢窗口、SFTP 网关断流
+ * 都会长这个样子，而它们全都不会让解析器抛异常。
+ *
+ * 现在：按「最后一次收到文件数据」计时，超时就用 _accept() 重装解析器并重发 ZRPOS，
+ * 让对端从断点续发；连着 IDLE_RESUME_MAX 轮都还是静默才认定对方已经死了，如实报错。
+ * 计时器只有一个，收到数据时只更新时间戳（每包都 clear/set 会白白抖动几千次）。
+ */
 function armStallTimer(sessionId: string, state: SessionState, fileName?: string): void {
   clearStallTimer(state)
   state.stallTimer = setTimeout(() => {
     state.stallTimer = undefined
     if (!state.active) return
-    if (state.receivedBytes > 0) return
+    // 按「落盘进展」计时，不按收包：对端反复重发被丢弃的区间时字节在流，
+    // 但文件长度不动，那种状态和彻底静默一样需要干预。
+    const idleFor = Date.now() - state.lastProgressAt
+    if (state.lastProgressAt > 0 && idleFor < receiveWatchdog.idleMs) {
+      armStallTimer(sessionId, state, fileName)
+      return
+    }
+    // 判据用 fileOffset（已落盘）而不是 receivedBytes（收到的字节）：
+    // 对端反复重发被丢弃的区间时 receivedBytes 会涨，fileOffset 不动，
+    // 那种情况该走下面的续传/放弃逻辑，不是「远端还没开始发」。
+    if (state.fileOffset === 0) {
+      if (!state.startupNoticed) {
+        state.startupNoticed = true
+        const snap = lastProgress.get(sessionId)
+        emit(sessionId, {
+          phase: 'active',
+          direction: 'receive',
+          fileName: fileName ?? snap?.fileName,
+          bytesDone: 0,
+          bytesTotal: snap?.bytesTotal ?? 0,
+          message:
+            '已等待 15 秒仍未收到数据，远端可能没在发送 —— 可按「中断」退出或重新执行 sz'
+        })
+      }
+      // 提示只发一次，但看门狗必须继续跑：否则这里 return 之后整条传输
+      // 就再没有任何超时保护，对端后面真的卡住也没人管。
+      armStallTimer(sessionId, state, fileName)
+      return
+    }
+
     const snap = lastProgress.get(sessionId)
+    const offset = state.fileOffset
+    if (state.idleResumes >= IDLE_RESUME_MAX) {
+      emit(sessionId, {
+        phase: 'error',
+        direction: 'receive',
+        fileName: fileName ?? snap?.fileName,
+        bytesDone: offset,
+        bytesTotal: snap?.bytesTotal ?? offset,
+        message: `连续 ${IDLE_RESUME_MAX} 次续传都没有新进展，对端疑似已退出（已保留前 ${offset} 字节）`
+      })
+      recoverFromError(state)
+      return
+    }
+
+    state.idleResumes += 1
+    const resumed = resumeFromOffset(
+      sessionId,
+      state,
+      `已 ${Math.round(receiveWatchdog.idleMs / 1000)} 秒没有进展，正在请求对端从 ${offset} 字节处续传（第 ${state.idleResumes} 次）`
+    )
+    if (resumed) {
+      armStallTimer(sessionId, state, fileName)
+      return
+    }
     emit(sessionId, {
-      phase: 'active',
+      phase: 'error',
       direction: 'receive',
       fileName: fileName ?? snap?.fileName,
-      bytesDone: 0,
-      bytesTotal: snap?.bytesTotal ?? 0,
-      message: '已等待 15 秒仍未收到数据，远端可能没在发送 —— 可按「中断」退出或重新执行 sz'
+      bytesDone: offset,
+      bytesTotal: snap?.bytesTotal ?? offset,
+      message: `传输停滞且无法续传（已保留前 ${offset} 字节）`
     })
-  }, RECEIVE_STALL_MS)
+    recoverFromError(state)
+  }, receiveWatchdog.idleMs)
 }
 
 /**
@@ -780,7 +970,7 @@ async function handleOffer(
       /* 忽略 */
     }
     emit(sessionId, {
-      phase: 'error',
+      phase: 'canceled',
       direction: 'receive',
       fileName,
       bytesDone: 0,
@@ -792,6 +982,16 @@ async function handleOffer(
 
   state.fileOffset = 0
   state.resyncFrom = -1
+  state.lastProgressAt = 0
+  state.idleResumes = 0
+  state.startupNoticed = false
+  /*
+   * 每个文件一条记录：多文件 sz 是一个接一个 offer 的，用同一个 id 会把
+   * 三次传输挤成一行，用户看不到到底哪个文件失败。
+   */
+  state.transferId = uid()
+  state.transferStartedAt = Date.now()
+  state.transferLocalPath = target.path
   const chunks: Uint8Array[] = []
   let pending = 0
   let written = 0
@@ -832,6 +1032,14 @@ async function handleOffer(
   try {
     const accepted = offer.accept({
       on_input: (payload: Uint8Array) => {
+        // 数据还在流动：给静默看门狗续命。
+        //
+        // 注意这里**不能**顺手把 idleResumes 清零。对端被 kill 之后常常进入
+        // 「反复重发同一段」的状态：字节在流，但我们一块都落不了盘（下面三条
+        // 早退分支只累加 receivedBytes，不推进 fileOffset）。若在收包处清零，
+        // 计数器永远撞不到上限，resumeFromOffset 会用同一个 fileOffset 无限
+        // 重发 ZRPOS —— 进度条在跳，文件长度不动。清零只放在真正写盘的
+        // fileOffset 推进处。
         // 续传刚落定：对端从这个位置往后发，之前已经认下的那段不能再算一遍
         if (state.resyncFrom >= 0) {
           expected = state.resyncFrom
@@ -865,6 +1073,9 @@ async function handleOffer(
         state.receivedBytes += payload.length
         cursor += piece.length
         state.fileOffset = cursor
+        // 真正落盘了才算「有进展」：看门狗按它计时，续传次数上限按它清零
+        state.lastProgressAt = Date.now()
+        state.idleResumes = 0
         chunks.push(piece)
         pending += piece.length
         if (pending >= RECEIVE_FLUSH_BYTES) flush()
@@ -878,11 +1089,17 @@ async function handleOffer(
       }
     })
 
+    // 数据阶段的看门狗。之前 handleOffer 一进来就 clearStallTimer 却从不重新 arm，
+    // 于是「文件已经开始传」的整个窗口根本没有任何超时保护 —— 这正是大文件卡死的现场。
+    armStallTimer(sessionId, state, fileName)
+
     await Promise.race([accepted.then(() => undefined), completed])
 
     clearStallTimer(state)
     state.resyncAttempts = 0
     state.lastResyncAt = 0
+    state.lastProgressAt = 0
+    state.idleResumes = 0
     flush()
     await queue
 
@@ -919,7 +1136,9 @@ async function handleOffer(
       message: `已保存到 ${fin.data.path}`
     })
   } catch (err) {
-    // 已经收到的字节先落盘，不论后面是续传还是放弃都不能丢
+    // 已经收到的字节先落盘，不论后面是续传还是放弃都不能丢。
+    // 异常本身不代表停滞，所以这里只落盘、不碰 lastProgressAt：
+    // 续传后若对端仍不推进，看门狗会按原有时钟正常升级到报错。
     flush()
     await queue.catch(() => undefined)
 
@@ -1137,7 +1356,9 @@ async function runSend(
       }
     }
     emit(sessionId, {
-      phase: 'error',
+      // 选文件时点「取消」是用户主动放弃，不是故障；
+      // 只有选择器本身报错（pickedRes.ok === false）才算失败
+      phase: pickedRes.ok ? 'canceled' : 'error',
       direction: 'send',
       bytesDone: 0,
       bytesTotal: 0,
@@ -1174,8 +1395,13 @@ async function runSend(
     })
   }
 
+  state.transferStartedAt = Date.now()
+
   for (const file of picked.files) {
     currentFile = file.name
+    // 每个文件一条记录：多文件时只留一行看不出哪个没送到
+    state.transferId = uid()
+    state.transferLocalPath = file.path ?? ''
     // 挑下一个文件的间隙同样没有数据帧，接着按住对端
     keepaliveOn()
 
@@ -1391,7 +1617,21 @@ function resyncReceive(sessionId: string, state: SessionState, err: unknown): bo
 
   state.resyncAttempts += 1
   state.lastResyncAt = now
+  return resumeFromOffset(
+    sessionId,
+    state,
+    `链路抖动，已请求对端从 ${state.fileOffset} 字节处续传（第 ${state.resyncAttempts} 次）`
+  )
+}
 
+/**
+ * 从当前文件偏移重新咬住链路：清掉半帧残留、重装解析器、重发 ZRPOS。
+ * 抛错续传和静默看门狗走的是同一条路 —— 前者有异常可依，后者只能靠猜，
+ * 但两者需要的动作完全一样。
+ */
+function resumeFromOffset(sessionId: string, state: SessionState, message: string): boolean {
+  const session = state.active
+  if (!session) return false
   try {
     const raw = session as unknown as {
       _input_buffer?: number[]
@@ -1406,6 +1646,9 @@ function resyncReceive(sessionId: string, state: SessionState, err: unknown): bo
     const offset = state.fileOffset
     // 对端可能从比 ZRPOS 更早的位置重发一整帧，先记下对账点，收数据时按它去重
     state.resyncFrom = offset
+    // 续传请求就是本轮的新基准：从现在起再等一个完整静默窗，没有新字节才升级。
+    // 不重置的话，连续两次续传会挨着发出去（时钟还停在上一次落盘的时刻）。
+    state.lastProgressAt = Date.now()
     // _accept 内部会重发 ZRPOS，对端据此从 offset 处续传
     void Promise.resolve(session._accept(offset)).catch(() => {
       /* 这条链的成败由 'complete' 事件决定，这里只防止未处理的 rejection */
@@ -1413,12 +1656,14 @@ function resyncReceive(sessionId: string, state: SessionState, err: unknown): bo
     // _accept 装的处理表只有 {ZDATA}：对端若正好发到文件尾会直接给 ZEOF，
     // 那份已经收完的文件就会变成 "Unhandled header: ZEOF" 而作废
     ensureEofHandler(session)
+    const snap = lastProgress.get(sessionId)
     emit(sessionId, {
       phase: 'active',
       direction: 'receive',
+      fileName: snap?.fileName,
       bytesDone: offset,
-      bytesTotal: lastProgress.get(sessionId)?.bytesTotal ?? 0,
-      message: `链路抖动，已请求对端从 ${offset} 字节处续传（第 ${state.resyncAttempts} 次）`
+      bytesTotal: snap?.bytesTotal ?? 0,
+      message
     })
     return true
   } catch {
@@ -1441,7 +1686,14 @@ export function feedZmodem(sessionId: string, rawBase64?: string, fallbackText?:
   }
 
   try {
-    state.sentry.consume(fromBase64(rawBase64))
+    // 必须切片喂：zmodem.js 内部用 `_input_buffer.push.apply(buf, input)` 把整批字节
+    // 摊进数组，参数个数等于这批字节数。一次喂几十万字节就是几十万个实参，
+    // JS 直接抛 RangeError: Maximum call stack size exceeded —— 大文件传到中途
+    // 必然命中（链路越快、合帧越大越早炸），小文件因为每批都很小才侥幸没事。
+    const bytes = fromBase64(rawBase64)
+    for (let i = 0; i < bytes.length; i += FEED_SLICE_BYTES) {
+      state.sentry.consume(bytes.subarray(i, Math.min(bytes.length, i + FEED_SLICE_BYTES)))
+    }
   } catch (err) {
     // sz 在没看到 ZRINIT 之前会每隔几秒重发一次 ZRQINIT。若这份重传正好落进
     // 已经建立好的会话里，库会抛 "Unhandled header: ZRQINIT"。这不是错误，
@@ -1516,7 +1768,7 @@ export function abortZmodem(sessionId: string): void {
 
   if (wasActive) {
     emit(sessionId, {
-      phase: 'error',
+      phase: 'canceled',
       direction,
       bytesDone: 0,
       bytesTotal: 0,

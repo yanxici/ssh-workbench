@@ -1,0 +1,81 @@
+import type * as React from 'react'
+import { useEffect, useState } from 'react'
+import { FolderOpen } from 'lucide-react'
+import { useSettingsStore } from '@/stores/settingsStore'
+import { call } from '@/lib/ipc'
+import { useToastStore } from '@/stores/toastStore'
+import { Row } from './sectionUi'
+
+/**
+ * 设置 → 文件传输。
+ *
+ * 目前只有「默认下载目录」一项，但它值得占一个分组：现场笔记本的系统盘
+ * 往往很小，客户资料必须落到 D 盘或移动硬盘。没有这一项时，用户每下
+ * 一次都要在系统对话框里重新点三次目录；有了一次设置，右键「下载」和
+ * 侧栏「下载到下载文件夹」都直接落到那儿。
+ *
+ * 失效自动回退：路径可能指向已拔掉的移动硬盘。主进程 SFTP_DOWNLOADS_DIR
+ * 会校验并回退系统「下载」，这里只负责展示当前生效值，不重复实现回退。
+ */
+export function TransferSection(): React.JSX.Element {
+  const settings = useSettingsStore((s) => s.settings)
+  const update = useSettingsStore((s) => s.update)
+  const [effective, setEffective] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  useEffect(() => {
+    void call(window.api.sftp.downloadsDir(), { silent: true }).then((d) => {
+      if (d) setEffective(d)
+    })
+  }, [settings.downloadDir])
+
+  const pick = async (): Promise<void> => {
+    setBusy(true)
+    const res = await call(window.api.sftp.pickDownloadDir(), { errorTitle: '选择下载目录失败' })
+    setBusy(false)
+    if (!res || res.canceled) return
+    setEffective(res.dir)
+    useToastStore.getState().push({
+      kind: 'success',
+      title: '下载目录已更改',
+      detail: res.dir
+    })
+  }
+
+  const reset = async (): Promise<void> => {
+    await update({ downloadDir: '' })
+    const d = await call(window.api.sftp.downloadsDir(), { silent: true })
+    if (d) setEffective(d)
+  }
+
+  return (
+    <Row
+      label="默认下载目录"
+      hint={
+        settings.downloadDir
+          ? `自定义：${settings.downloadDir}`
+          : '未设置时用系统「下载」文件夹；侧栏「传输」页里也能直接改'
+      }
+    >
+      <span
+        className="max-w-[180px] truncate text-2xs text-ink-3"
+        title={effective || undefined}
+      >
+        {effective || '读取中…'}
+      </span>
+      <button
+        className="btn btn-ghost h-7 px-2 text-2xs"
+        disabled={busy}
+        onClick={() => void pick()}
+      >
+        <FolderOpen size={12} />
+        选择
+      </button>
+      {settings.downloadDir ? (
+        <button className="btn btn-ghost h-7 px-2 text-2xs" onClick={() => void reset()}>
+          恢复默认
+        </button>
+      ) : null}
+    </Row>
+  )
+}

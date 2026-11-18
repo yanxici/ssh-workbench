@@ -44,6 +44,7 @@ import type {
   ParsedSshCommand,
   ReconnectEvent,
   RemoteFile,
+  RemoteText,
   SerialPortInfo,
   SessionDataEvent,
   SessionInfo,
@@ -53,9 +54,11 @@ import type {
   TaskNotifyPayload,
   TestConnectionInput,
   TestConnectionResult,
+  TextEncoding,
   TftpLogEvent,
   TftpServerState,
   TransferProgressEvent,
+  TransferRecord,
   TrzszTransferState,
   TunnelConfig,
   TunnelInput,
@@ -308,15 +311,19 @@ export const api = {
       invoke(IPC.SFTP_RENAME, sessionId, from, to),
     chmod: (sessionId: string, path: string, mode: number): Promise<IpcResult<void>> =>
       invoke(IPC.SFTP_CHMOD, sessionId, path, mode),
-    readText: (sessionId: string, path: string): Promise<IpcResult<string>> =>
+    readText: (sessionId: string, path: string): Promise<IpcResult<RemoteText>> =>
       invoke(IPC.SFTP_READ, sessionId, path),
-    writeText: (sessionId: string, path: string, content: string): Promise<IpcResult<void>> =>
-      invoke(IPC.SFTP_WRITE, sessionId, path, content),
+    writeText: (
+      sessionId: string,
+      path: string,
+      content: string,
+      encoding?: TextEncoding
+    ): Promise<IpcResult<void>> => invoke(IPC.SFTP_WRITE, sessionId, path, content, encoding),
     upload: (
       sessionId: string,
       localPaths: string[],
       remoteDir: string,
-      options?: { keepRoot?: boolean }
+      options?: { keepRoot?: boolean; force?: boolean }
     ): Promise<IpcResult<string[]>> =>
       invoke(IPC.SFTP_UPLOAD, sessionId, localPaths, remoteDir, options),
     download: (
@@ -324,18 +331,21 @@ export const api = {
       remotePaths: string[],
       localDir: string
     ): Promise<IpcResult<string[]>> => invoke(IPC.SFTP_DOWNLOAD, sessionId, remotePaths, localDir),
+    /** force=true 表示不做「大小+修改时间一致就跳过」，整份重传 */
     uploadDialog: (
       sessionId: string,
-      remoteDir: string
+      remoteDir: string,
+      force?: boolean
     ): Promise<IpcResult<{ canceled: boolean; count: number }>> =>
-      invoke(IPC.SFTP_UPLOAD_DIALOG, sessionId, remoteDir),
+      invoke(IPC.SFTP_UPLOAD_DIALOG, sessionId, remoteDir, force),
     /** 上传文件夹（系统目录对话框；keepRoot 默认 true = 远端保留同名目录） */
     uploadFolderDialog: (
       sessionId: string,
       remoteDir: string,
-      keepRoot?: boolean
+      keepRoot?: boolean,
+      force?: boolean
     ): Promise<IpcResult<{ canceled: boolean; count: number }>> =>
-      invoke(IPC.SFTP_UPLOAD_FOLDER_DIALOG, sessionId, remoteDir, keepRoot),
+      invoke(IPC.SFTP_UPLOAD_FOLDER_DIALOG, sessionId, remoteDir, keepRoot, force),
     /** 扫描本地目录：文件数 / 总字节数（上传前预览用） */
     scanFolders: (localPaths: string[]): Promise<IpcResult<UploadScanResult>> =>
       invoke(IPC.SFTP_SCAN_FOLDERS, localPaths),
@@ -345,6 +355,9 @@ export const api = {
     ): Promise<IpcResult<{ canceled: boolean; count: number }>> =>
       invoke(IPC.SFTP_DOWNLOAD_DIALOG, sessionId, remotePaths),
     downloadsDir: (): Promise<IpcResult<string>> => invoke(IPC.SFTP_DOWNLOADS_DIR),
+    /** 选下载目录并写进设置（canceled 时 dir 为空） */
+    pickDownloadDir: (): Promise<IpcResult<{ canceled: boolean; dir: string }>> =>
+      invoke(IPC.SFTP_PICK_DOWNLOAD_DIR),
     pauseTransfer: (taskId: string): Promise<IpcResult<boolean>> =>
       invoke(IPC.SFTP_TRANSFER_PAUSE, taskId),
     resumeTransfer: (taskId: string): Promise<IpcResult<boolean>> =>
@@ -399,7 +412,10 @@ export const api = {
 
   zmodem: {
     pickFiles: (): Promise<
-      IpcResult<{ canceled: boolean; files: Array<{ name: string; size: number; data: string }> }>
+      IpcResult<{
+        canceled: boolean
+        files: Array<{ name: string; path: string; size: number; data: string }>
+      }>
     > => invoke(IPC.ZM_PICK_FILES),
     /** 选一次保存文件夹（多文件 sz 只问一次） */
     pickDir: (): Promise<IpcResult<{ canceled: boolean; token?: string; dir?: string }>> =>
@@ -429,6 +445,28 @@ export const api = {
     upload: (sessionId: string, paths?: string[]): Promise<IpcResult<void>> =>
       invoke(IPC.TRZSZ_UPLOAD, sessionId, paths),
     cancel: (sessionId: string): Promise<IpcResult<void>> => invoke(IPC.TRZSZ_CANCEL, sessionId)
+  },
+
+  /**
+   * 传输记录（历史账本）。
+   *
+   * 主进程是唯一写者：SFTP 与 trzsz 在引擎里直接落盘，只有 ZMODEM
+   * 跑在渲染进程、经 upsert 回报。面板只读 list，变更靠 on.recordChanged 通知。
+   */
+  transfer: {
+    list: (): Promise<IpcResult<TransferRecord[]>> => invoke(IPC.TRANSFER_RECORD_LIST),
+    /** 渲染层回报一条记录（ZMODEM 用） */
+    upsert: (record: TransferRecord): Promise<IpcResult<void>> =>
+      invoke(IPC.TRANSFER_RECORD_UPSERT, record),
+    /** 旧记录被重试：写 retriedBy 指针，不删旧行 */
+    markRetried: (oldId: string, newId: string): Promise<IpcResult<void>> =>
+      invoke(IPC.TRANSFER_RECORD_RETRIED, oldId, newId),
+    stats: (): Promise<IpcResult<{ total: number; withDetail: number }>> =>
+      invoke(IPC.TRANSFER_RECORD_STATS),
+    sweep: (): Promise<IpcResult<number>> => invoke(IPC.TRANSFER_RECORD_SWEEP),
+    /** 在系统文件管理器中定位文件（不存在会明确报错，不是静默无反应） */
+    reveal: (path: string): Promise<IpcResult<void>> => invoke(IPC.TRANSFER_REVEAL, path),
+    openDir: (path: string): Promise<IpcResult<void>> => invoke(IPC.TRANSFER_OPEN_DIR, path)
   },
 
   diag: {
@@ -639,7 +677,14 @@ export const api = {
      * 所以这里用交叉类型声明，而不是再包一层。
      */
     trzszState: (cb: (e: { sessionId: string } & TrzszTransferState) => void): (() => void) =>
-      subscribe(IPC.EVT_TRZSZ_STATE, cb)
+      subscribe(IPC.EVT_TRZSZ_STATE, cb),
+    /**
+     * 传输记录已变更（只有信号，没有内容）。
+     *
+     * 面板收到就重拉列表 —— 主进程不广播整条记录，否则渲染层要维护
+     * 一份与磁盘可能不同步的镜像。主进程侧 300ms 节流。
+     */
+    recordChanged: (cb: () => void): (() => void) => subscribe(IPC.EVT_TRANSFER_RECORD_CHANGED, cb)
   }
 }
 

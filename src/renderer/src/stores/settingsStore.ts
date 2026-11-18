@@ -18,6 +18,8 @@ const FALLBACK: AppSettings = {
   },
   commandPanelPosition: 'right',
   latencyProbe: true,
+  /* 空串 = 用系统「下载」文件夹（主进程 SFTP_DOWNLOADS_DIR 负责回退） */
+  downloadDir: '',
   autoLog: true,
   logPlainText: true,
   logTimestamp: true,

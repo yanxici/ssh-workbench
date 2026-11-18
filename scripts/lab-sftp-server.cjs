@@ -100,6 +100,159 @@ function newHandle(obj) {
   return Buffer.from(id, 'utf8')
 }
 
+/**
+ * 模拟远端 `sz` 发文件（仅验收脚本用）。
+ *
+ * 为什么不用 zmodem.js 的 Session.Send 当对端：
+ * 它在传输中把收到的 ZRPOS 当成 ping 忽略（zsession.js 里 'Case #2' 那段），
+ * 也只在窗口边界发 ZCRCW —— 「看门狗发 ZRPOS 让对端回退重发」这条根本验不了。
+ * 所以这里自己拼帧：ZDATA 帧尾用 ZCRCW 等 ZACK（真实流控压力），
+ * 收到 ZRPOS(n) 就从 n 续发，内容按绝对偏移生成，重发必然一致。
+ *
+ * 触发：'@@SZ:<name>:<size>:<chunk>[:<pauseMs>]@@'（shell 输入里发即可）
+ */
+function makeSzSender(stream, spec) {
+  const Zmodem = require('zmodem.js')
+  const enc = new Zmodem.ZDLE()
+  enc.set_escape_ctrl_chars(true)
+
+  const hex = (name, args) => Buffer.from(Zmodem.Header.build(name, args || []).to_hex())
+  const sub = (payload, frameEnd) =>
+    Buffer.from(Zmodem.Subpacket.build(Array.from(payload), frameEnd).encode16(enc))
+  const offsetOf = (h) =>
+    typeof h.get_offset === 'function' ? h.get_offset() : Zmodem.ENCODELIB.unpack_u32_le(h._bytes4)
+
+  // 上限 8MB：验收脚本是内存里拼的，别把 lab 自己撑爆
+  const size = Math.max(0, Math.min(8 * 1024 * 1024, spec.size || 0))
+  const chunk = Math.max(1024, Math.min(32768, spec.chunk || 32768))
+  const pauseMs = Math.max(0, spec.pauseMs || 0)
+
+  // 内容按偏移确定，续传时同一区间必然字节一致 —— 否则 md5 对不上
+  const data = Buffer.alloc(size)
+  for (let i = 0; i < size; i++) data[i] = (i * 31 + 7) & 0xff
+  // 顺带落盘：验收脚本拿它和下载回来的文件比 md5
+  fs.writeFileSync(local('/' + spec.name), data)
+
+  const info = Buffer.concat([
+    Buffer.from(spec.name),
+    Buffer.from([0]),
+    Buffer.from(size + ' 0 100644 0')
+  ])
+
+  let buf = Buffer.alloc(0)
+  let offset = 0
+  let phase = 'zrq' // zrq -> wait-zrpos -> data -> zeof -> zfin -> done
+  let paused = false
+  // 真 sz 每进入一次「数据阶段」只发一个 ZDATA 头，后面的帧全是裸子包；
+  // 接收端（zmodem.js）在收到 ZDATA 后就把头处理器换成 ZEOF，再来一个 ZDATA 会报
+  // Unhandled header。所以这里必须按 ZRPOS 打头，而不是每帧都打。
+  let needZdata = true
+
+  // 真 sz 一上来先发 ZRQINIT —— 应用侧就是靠它检测到有传输请求
+  stream.write(hex('ZRQINIT', [0, 0, 0, 0]))
+
+  const sendNext = () => {
+    if (phase !== 'data' || paused) return
+
+    if (offset >= size) {
+      phase = 'zeof'
+      stream.write(hex('ZEOF', [size]))
+      return
+    }
+
+    if (pauseMs > 0 && offset >= (size >> 1)) {
+      paused = true
+      setTimeout(() => {
+        paused = false
+        sendNext()
+      }, pauseMs)
+      return
+    }
+
+    const end = Math.min(size, offset + chunk)
+    if (process.env.SZ_DEBUG === '1') console.log('[sz +' + (Date.now() % 1000000) + '] -> ZDATA ' + offset + '..' + end + ' size=' + size)
+    const parts = needZdata ? [hex('ZDATA', [offset])] : []
+    needZdata = false
+    for (let p = offset; p < end; p += 8192) {
+      const q = Math.min(end, p + 8192)
+      // 帧尾一律不能用「带 ack 的 frame_end」（ZCRCW/end_ack）：
+      // 接收端（zmodem.js）一见到 frame_end 就把子包处理器清空、只留 ZEOF 处理器，
+      // 之后再来的裸子包会被当成头去解析，直接抛 Unhandled header。
+      // 真 sz 之所以能连着发，是因为它整段数据只在开头发一个 ZDATA、中间不结束帧。
+      // 这里用 ZCRCQ（no_end_ack）在每片末尾要一个 ZACK 做流控，但不结束帧。
+      const fin = q >= size ? 'end_no_ack' : 'no_end_ack'
+      parts.push(sub(data.subarray(p, q), fin))
+    }
+    stream.write(Buffer.concat(parts))
+    offset = end
+  }
+
+  const handle = (h) => {
+    if (process.env.SZ_DEBUG === '1') console.log('[sz +' + (Date.now() % 1000000) + '] <- ' + h.NAME + ' phase=' + phase + ' off=' + offset)
+    if (h.NAME === 'ZRINIT') {
+      // 第一个是 start() 发来的；收尾那个是 ZEOF 之后的，用来推 ZFIN
+      if (phase === 'zrq') {
+        phase = 'wait-zrpos'
+        if (process.env.SZ_DEBUG === '1') console.log('[sz] -> ZFILE ' + spec.name + ' size=' + size)
+        stream.write(Buffer.concat([hex('ZFILE', [0]), sub(info, 'end_ack')]))
+      } else if (phase === 'zeof') {
+        phase = 'zfin'
+        stream.write(hex('ZFIN'))
+      }
+      return
+    }
+    if (h.NAME === 'ZRPOS') {
+      offset = Math.min(offsetOf(h), size)
+      phase = 'data'
+      needZdata = true
+      sendNext()
+      return
+    }
+    if (h.NAME === 'ZACK') {
+      if (phase === 'data') sendNext()
+      return
+    }
+    if (h.NAME === 'ZFIN') {
+      if (phase === 'zfin') {
+        phase = 'done'
+        stream.write(Buffer.from([79, 79]))
+      }
+    }
+  }
+
+  return {
+    feed(d) {
+      if (process.env.SZ_DEBUG === '1') console.log('[sz] raw-in ' + d.toString('hex').slice(0, 120))
+      buf = Buffer.concat([buf, d])
+      for (;;) {
+        // 应用侧的 hex 头以 XON 结尾，上一轮容易漏下一个 0x11；先把它剥掉再找行尾，
+        // 否则下一次解析会把这颗 XON 一起吞进去，头就废了（ZRPOS 收不到 → 一直 0%）。
+        while (buf.length && (buf[0] === 0x11 || buf[0] === 0x0d || buf[0] === 0x0a || buf[0] === 0x00)) {
+          buf = buf.subarray(1)
+        }
+        if (!buf.length) return
+        let lf = buf.indexOf(0x8a)
+        if (lf < 0) lf = buf.indexOf(0x0a)
+        if (lf < 0) {
+          // 攒不出完整头就别一直攒，hex 头不会超过 20 字节
+          if (buf.length > 256) buf = Buffer.alloc(0)
+          return
+        }
+        const head = Array.from(buf.subarray(0, lf + 1))
+        buf = buf.subarray(lf + 1)
+        let h = null
+        try {
+          h = Zmodem.Header.parse_hex(head)
+        } catch {
+          h = null
+        }
+        if (h) handle(h)
+        if (phase === 'done') return
+      }
+    }
+  }
+}
+
 const server = new Server({ hostKeys: [privateKey] }, (client) => {
   client.on('authentication', (ctx) => {
     if (ctx.method === 'password' && ctx.username === USER && ctx.password === PASS) return ctx.accept()
@@ -158,6 +311,7 @@ const server = new Server({ hostKeys: [privateKey] }, (client) => {
          */
         let trzszMode = false
         let seq = 0
+        let szSender = null
         stream.on('data', (d) => {
           const s = d.toString('utf8')
           /*
@@ -180,6 +334,30 @@ const server = new Server({ hostKeys: [privateKey] }, (client) => {
            */
           if (s.includes('#ACT:')) {
             stream.write('\r\nlab-saw-act\r\n')
+            return
+          }
+          /*
+           * '@@SZ:<name>:<size>:<chunk>[:<pauseMs>]@@' —— 起一次远端 sz 发文件。
+           * 之后的字节全部喂给发送状态机（协议帧不是可打印文本，不能再按行解析）。
+           */
+          const sz = /@@SZ:([^:@]+):(\d+):(\d+)(?::(\d+))?@@/.exec(s)
+          if (sz) {
+            try {
+              // 先回一行命令回显，再起协议 —— 顺序反过来终端里会看到协议帧被当成文本
+              stream.write('\r\nsz ' + sz[1] + ' ' + sz[2] + ' bytes\r\n')
+              szSender = makeSzSender(stream, {
+                name: sz[1],
+                size: Number(sz[2]),
+                chunk: Number(sz[3]),
+                pauseMs: Number(sz[4] || 0)
+              })
+            } catch (e) {
+              stream.write('\r\nsz failed: ' + (e && e.message) + '\r\n')
+            }
+            return
+          }
+          if (szSender) {
+            szSender.feed(d)
             return
           }
           if (process.env.LAB_SHELL_TRZSZ === '1') {

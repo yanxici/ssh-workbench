@@ -43,8 +43,8 @@ export async function createBackup(
     if (files.length >= MAX_FILES || total >= MAX_TOTAL_BYTES || visited.has(path)) return
     visited.add(path)
     try {
-      const content = await sftpManager.readText(sessionId, path)
-      const size = Buffer.byteLength(content, 'utf-8')
+      const read = await sftpManager.readText(sessionId, path)
+      const size = Buffer.byteLength(read.content, 'utf-8')
       if (size > MAX_FILE_BYTES) {
         files.push({ path, size, error: `文件过大（${(size / 1024).toFixed(0)} KB），已跳过` })
         return
@@ -54,7 +54,7 @@ export async function createBackup(
         return
       }
       total += size
-      files.push({ path, size, content })
+      files.push({ path, size, content: read.content, encoding: read.encoding })
     } catch (err) {
       files.push({ path, size: 0, error: err instanceof Error ? err.message : String(err) })
     }
@@ -120,7 +120,7 @@ export async function diffBackup(
   let current: string
   try {
     await sessionManager.waitUntilReady(sessionId)
-    current = await sftpManager.readText(sessionId, path)
+    current = (await sftpManager.readText(sessionId, path)).content
   } catch (err) {
     return {
       status: 'remote-missing',
@@ -159,7 +159,7 @@ export async function restoreBackup(
       continue
     }
     try {
-      await sftpManager.writeText(sessionId, path, entry.content)
+      await sftpManager.writeText(sessionId, path, entry.content, entry.encoding)
       restored += 1
     } catch (err) {
       failed.push({ path, error: err instanceof Error ? err.message : String(err) })

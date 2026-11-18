@@ -181,7 +181,26 @@ window.__e2e = {
   sidebarOpen(){ return Array.from(document.querySelectorAll('button')).some(b => /^上传文件/.test(b.getAttribute('title') || '')) },
   openSidebar(){ if (this.sidebarOpen()) return 'already'; const b = Array.from(document.querySelectorAll('button')).find(x => x.getAttribute('title') === '文件'); if(!b) return 'no-btn'; b.click(); return 'clicked' },
   sessionReady(){ return document.querySelectorAll('.xterm').length > 0 },
-  openSession(){ const r = document.querySelector('[data-conn-id]'); if(!r) return 'no-conn'; const f = this.find(r, ['onDoubleClick','onDblClick']); if(!f) return 'no-handler'; f(this.ev()); return 'ok' }
+  openSession(){ const r = document.querySelector('[data-conn-id]'); if(!r) return 'no-conn'; const f = this.find(r, ['onDoubleClick','onDblClick']); if(!f) return 'no-handler'; f(this.ev()); return 'ok' },
+  /* 刷新按钮的在途态可能只存在一两帧，用 MutationObserver 蹲它，别靠事后采样 */
+  watchRefresh(){
+    this.refreshSeen = { busy: false, disabled: false, spin: false }
+    const look = () => {
+      const b = Array.from(document.querySelectorAll('button')).find(x => (x.getAttribute('title') || '') === '正在刷新…')
+      if (!b) return
+      this.refreshSeen.busy = true
+      if (b.disabled) this.refreshSeen.disabled = true
+      if (b.querySelector('.animate-spin')) this.refreshSeen.spin = true
+    }
+    look()
+    this.refreshObs = new MutationObserver(look)
+    this.refreshObs.observe(document.body, { attributes: true, childList: true, subtree: true, attributeFilter: ['title', 'disabled', 'class'] })
+    return 'watching'
+  },
+  refreshBusy(){ return this.refreshSeen || null },
+  unwatchRefresh(){ if (this.refreshObs) { this.refreshObs.disconnect(); this.refreshObs = null } return 'stopped' },
+  zmodemAccept(){ const b = Array.from(document.querySelectorAll('.modal button.btn-primary')).find(x => (x.textContent || '').trim() === '接收'); if (!b) return 'no-btn'; b.click(); return 'ok' },
+  zmodemPanel(){ const els = Array.from(document.querySelectorAll('div')).filter(e => /(接收中|传输完成|传输失败|%$)/.test((e.textContent || '').trim()) && e.children.length <= 3); const t = els.length ? (els[els.length - 1].textContent || '').trim() : ''; return t.slice(0, 120) }
 }
 'sdk-ready'
 `
@@ -545,10 +564,72 @@ async function main() {
   await refresh()
   check('右键删除目录（递归）', delDirItem === '删除目录' && delDirOk, `item=${delDirItem}`)
 
-  /* S14 刷新不炸 */
-  await refresh()
+  /* S14 刷新：远端新增文件后点刷新，必须真的重拉一次（而不是吃 30 秒目录缓存），
+     并且点击瞬间按钮要进入「正在刷新…」的在途态 —— 之前按钮既不发请求也没有任何反馈，
+     用户看到的就只是「按不下去」。 */
+  const probeFile = path.join(LAB_ROOT, 'e2e', 'fresh-probe.txt')
+  fs.writeFileSync(probeFile, 'fresh\n')
+  const probeBefore = await page.evalJs("!!window.__e2e.row('fresh-probe.txt')")
+  await page.evalJs('window.__e2e.watchRefresh()')
+  const refreshClicked = await page.evalJs("window.__e2e.btn('^刷新当前目录$')")
+  const probeUp = await waitFor(() => page.evalJs("!!window.__e2e.row('fresh-probe.txt')"), 15000, 200)
+  await sleep(400)
+  const refreshBusy = await page.evalJs('window.__e2e.refreshBusy()')
+  await page.evalJs('window.__e2e.unwatchRefresh()')
   const rowCount = await rows()
-  check('刷新后列表可用', rowCount >= 0, `行数=${rowCount}`)
+  check(
+    '刷新真的重拉目录（远端新文件立刻出现）',
+    refreshClicked === true && probeBefore === false && probeUp,
+    '点中=' + refreshClicked + ' 刷新前可见=' + probeBefore + ' 刷新后可见=' + probeUp + ' 行数=' + rowCount
+  )
+  check(
+    '刷新期间按钮进入在途态（disabled + 转圈）',
+    !!refreshBusy && refreshBusy.busy && refreshBusy.disabled && refreshBusy.spin,
+    JSON.stringify(refreshBusy)
+  )
+
+  /* S15 sz 接收：远端 sz 发 1MB，本地必须完整落盘（md5 一致）。
+     走的是 lab 里新加的 @@SZ: 钩子 —— 它是按真 sz 的行为写的发送端：发 ZRQINIT、
+     每帧 ZCRCW 等 ZACK、收到 ZRPOS 会回退到该偏移续发。 */
+  const szSize = 1024 * 1024
+  fs.rmSync(DL_DIR, { recursive: true, force: true })
+  fs.mkdirSync(DL_DIR, { recursive: true })
+  await setDialog('dirs', [DL_DIR])
+  const sessionId = await page.evalJs(
+    "window.api.session.list().then(r => (r && r.ok && r.data && r.data[0] ? r.data[0].id : null))"
+  )
+  const szSrc = path.join(LAB_ROOT, 'big.bin')
+  fs.rmSync(szSrc, { force: true })
+  const szCmd = '@@SZ:big.bin:' + szSize + ':16384@@'
+  const szWrote = await page.evalJs(
+    'window.api.session.write(' + JSON.stringify(sessionId) + ', ' + JSON.stringify(szCmd) + ').then(r => !!(r && r.ok))'
+  )
+  const szPrompt = await waitFor(
+    () => page.evalJs("window.__e2e.modalTitleHas('接收远端文件')"),
+    25000,
+    200
+  )
+  const szAccept = await page.evalJs('window.__e2e.zmodemAccept()')
+  const szPath = path.join(DL_DIR, 'big.bin')
+  const szTrace = []
+  const szDone = await waitFor(
+    async () => {
+      const panel = await page.evalJs('window.__e2e.zmodemPanel()').catch(() => '')
+      const size = fs.existsSync(szPath) ? fs.statSync(szPath).size : -1
+      szTrace.push((Date.now() % 1000000) + ' size=' + size + ' ' + String(panel).slice(0, 60))
+      return size === szSize
+    },
+    90000,
+    1000
+  )
+  const szMd5Ok = szDone && md5Local(szPath) === md5Local(szSrc)
+  const szPanel = await page.evalJs('window.__e2e.zmodemPanel()')
+  if (!szDone) console.log('[sz-trace]\n' + szTrace.slice(0, 60).join('\n'))
+  check(
+    'sz 接收大文件（1MB，md5 一致）',
+    szWrote && !!szPrompt && szAccept === 'ok' && szDone && szMd5Ok,
+    'write=' + szWrote + ' 确认弹窗=' + szPrompt + ' 接收=' + szAccept + ' 落盘=' + szDone + ' md5=' + szMd5Ok + ' 面板=' + String(szPanel).slice(0, 60)
+  )
 
   /* ---------------- 压测 ---------------- */
   if (STRESS) {

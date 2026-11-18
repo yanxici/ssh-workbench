@@ -21,7 +21,8 @@ export interface UploadTargetDialogProps {
   /** 确认后执行哪条链路：选本地文件 / 选本地文件夹 */
   kind?: 'file' | 'folder'
   onCancel: () => void
-  onConfirm: (dir: string) => void
+  /** force=true 表示整个目录强制重传，不跳过未变化的文件 */
+  onConfirm: (dir: string, force: boolean) => void
 }
 
 export function useUploadTarget(
@@ -59,12 +60,15 @@ export function useUploadTarget(
   const cancel = useCallback(() => setOpen(false), [])
 
   const confirm = useCallback(
-    (dir: string): void => {
+    (dir: string, force = false): void => {
       if (!sessionId) return
       const target = normalizeRemoteDir(dir)
       if (!target) return
       setBusy(true)
-      const run = kind === 'folder' ? uploadFolder(sessionId, target) : uploadFileDialog(sessionId, target)
+      const run =
+        kind === 'folder'
+          ? uploadFolder(sessionId, target, force)
+          : uploadFileDialog(sessionId, target, force)
       void run
         .then((res) => {
           if (res) onUploaded?.()

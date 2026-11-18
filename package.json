@@ -1,6 +1,6 @@
 {
   "name": "ssh-workbench",
-  "version": "2.2.0",
+  "version": "2.2.1",
   "private": true,
   "description": "轻量级 SSH 客户端 + 嵌入式技术支持工作台",
   "author": "ssh-workbench",
@@ -28,6 +28,7 @@
     "test:hostkey": "node scripts/verify-hostkey.cjs",
     "test:uploadfolder": "node scripts/verify-upload-folder.cjs",
     "test:uploadsession": "node scripts/verify-upload-session.cjs",
+    "test:filesrefresh": "node scripts/verify-files-refresh.cjs",
     "test:ipc": "electron scripts/verify-ipc-registration.cjs",
     "test:repository": "node scripts/verify-repository-split.cjs",
     "test:docs": "node scripts/verify-docs-sync.cjs",

@@ -170,7 +170,7 @@ function makeSentry() {
   })
 
   const src = fs.readFileSync(path.join(ROOT, 'src/main/ssh/sessionManager.ts'), 'utf8')
-  check('flush 使用 Buffer.concat 汇总原始字节', /Buffer\.concat\(record\.pending\)/.test(src))
+  check('flush 使用 Buffer.concat 汇总原始字节', /Buffer\.concat\(record\.pendingRaw\)/.test(src))
   check('onData 回调携带 raw 参数', /onData:\s*\(sessionId: string, data: string, raw: Buffer\)/.test(src))
   check('原始字节存在时才上报（text || raw.length）', /if \(text \|\| raw\.length\)/.test(src))
   check('录制只写文本，避免二进制污染日志', /if \(text\) recorder\.appendOutput/.test(src))
@@ -227,7 +227,9 @@ function makeSentry() {
   check('无确认处理器时默认拒绝', /if \(!confirmHandler\) return Promise\.resolve\(false\)/.test(zm))
   check('记录 session_end 清理 active', /session\.on\('session_end'/.test(zm))
   check('提供 detach 清理', /export function detachZmodem/.test(zm))
-  check('原始字节经 consume 喂入', /sentry\.consume\(fromBase64\(rawBase64\)\)/.test(zm))
+  // 必须切片喂：库用 push.apply 摊平输入，一次喂几十万字节会爆栈（大文件必中）
+  check('原始字节经 consume 喂入', /sentry\.consume\(bytes\.subarray\(/.test(zm))
+  check('喂入前按 FEED_SLICE_BYTES 切片', /const FEED_SLICE_BYTES = 16 \* 1024/.test(zm))
 
   const tv = fs.readFileSync(
     path.join(ROOT, 'src/renderer/src/components/terminal/TerminalView.tsx'),

@@ -20,6 +20,7 @@ import { sftpManager } from './ssh/sftpManager'
 import { tunnelManager } from './ssh/portForward'
 import { getMainWindow, setMainWindow } from './windowRef'
 import { runSmoke } from './smoke'
+import { setRecordChangeHandler, sweepStale } from './store/transferRecord'
 import { onTransferProgress } from './window/taskbar'
 import { pickIconPath } from './window/icon'
 
@@ -308,6 +309,28 @@ if (!gotLock) {
       sftpManager.clearSession(sessionId)
       tunnelManager.onSessionClosed(sessionId)
       metricsSampler.onSessionClosed(sessionId)
+    })
+
+    /*
+     * 传输记录变更信号。
+     *
+     * 主进程落盘后只发一条「变了」的信号（300ms 节流在 store 里做），
+     * 面板收到就重拉列表 —— 不广播内容，避免渲染层维护一份
+     * 与磁盘可能不同步的镜像。
+     */
+    setRecordChangeHandler(() => {
+      getMainWindow()?.webContents.send(IPC.EVT_TRANSFER_RECORD_CHANGED)
+    })
+
+    /*
+     * 清理上一次运行遗留的僵尸记录。
+     *
+     * 入队时写一条 running，只在状态跃迁时更新。进程被强杀/崩溃时那条记录
+     * 就永远停在 running —— 面板上会显示成「还在传」，实际什么都没在传。
+     * 启动时统一改判为 interrupted（可重试），是唯一一个「事后可确定」的时刻。
+     */
+    void sweepStale().catch((e) => {
+      console.error('[main] sweep transfer records failed:', e)
     })
 
     registerAllIpc()

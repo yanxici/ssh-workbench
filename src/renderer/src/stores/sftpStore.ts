@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import type {
   LocalFile,
   RemoteFile,
+  TextEncoding,
   TransferProgressEvent,
   TransferTask
 } from '@shared/types'
@@ -50,7 +51,12 @@ async function pickAndUpload(
    */
   sessionId: string | null,
   remoteDir: string | undefined,
-  kind: 'file' | 'folder'
+  kind: 'file' | 'folder',
+  /**
+   * 目录上传默认会跳过「大小与修改时间都一致」的文件（见 sftpManager.isUpToDate）。
+   * 用户怀疑跳过判断出错时，用这个开关强制全量重传。
+   */
+  force = false
 ): Promise<UploadResult | null> {
   if (!sessionId) return null
 
@@ -73,10 +79,10 @@ async function pickAndUpload(
   const label = kind === 'folder' ? '上传文件夹' : '上传文件'
   const res =
     kind === 'folder'
-      ? await call(window.api.sftp.uploadFolderDialog(sessionId, target, true), {
+      ? await call(window.api.sftp.uploadFolderDialog(sessionId, target, true, force), {
           errorTitle: `${label}失败`
         })
-      : await call(window.api.sftp.uploadDialog(sessionId, target), {
+      : await call(window.api.sftp.uploadDialog(sessionId, target, force), {
           errorTitle: `${label}失败`
         })
   if (!res || res.canceled) return null
@@ -124,7 +130,7 @@ interface SftpState {
 
   /** 远程编辑器 */
   /** 远程编辑器：sessionId 跟着一起存，保存时不必再让面板补上下文 */
-  editing: { sessionId: string; path: string; content: string } | null
+  editing: { sessionId: string; path: string; content: string; encoding: TextEncoding } | null
 
   /** 文件树刷新版本号（bump 后所有已挂载的树层级重新加载自身目录） */
   treeVersion: number
@@ -134,7 +140,11 @@ interface SftpState {
   close: () => void
 
   navLocal: (dir: string) => Promise<void>
-  navRemote: (dir: string) => Promise<void>
+  /**
+   * 切到某个远端目录。
+   * @param options.force true = 忽略 30 秒新鲜缓存，强制重拉（刷新按钮用）
+   */
+  navRemote: (dir: string, options?: { force?: boolean }) => Promise<void>
   refreshLocal: () => Promise<void>
   refreshRemote: () => Promise<void>
   setLocalSel: (paths: string[]) => void
@@ -161,9 +171,17 @@ interface SftpState {
    * @param sessionId 目标会话（会话内文件树必须传自己的；不能依赖 store.sessionId）
    * @returns 实际入队的任务数；用户取消或没有可用目录时返回 null
    */
-  uploadFileDialog: (sessionId: string | null, remoteDir?: string) => Promise<UploadResult | null>
+  uploadFileDialog: (
+    sessionId: string | null,
+    remoteDir?: string,
+    force?: boolean
+  ) => Promise<UploadResult | null>
   /** 弹系统目录对话框上传文件夹（可多选，远端保留同名目录） */
-  uploadFolder: (sessionId: string | null, remoteDir?: string) => Promise<UploadResult | null>
+  uploadFolder: (
+    sessionId: string | null,
+    remoteDir?: string,
+    force?: boolean
+  ) => Promise<UploadResult | null>
   /**
    * 请求上传：先解析默认目标目录并挂起一个待确认请求，
    * 由 FileManagerPanel 渲染目标目录选择框，用户确认后才真正开始传输。
@@ -276,30 +294,41 @@ export const useSftpStore = create<SftpState>()((set, get) => ({
     set({ localLoading: false })
   },
 
-  navRemote: async (dir) => {
+  navRemote: async (dir, options) => {
     const sessionId = get().sessionId
     if (!sessionId) return
+    // force：绕过 30 秒新鲜期，用户点了刷新就必须真发一次请求
+    const force = options?.force === true
 
     /*
      * 先看缓存：有就直接上屏，不让界面空着等往返。
      * 过期缓存也先用（stale-while-revalidate），随后后台补新数据。
+     * force 时不走「新鲜就直接返回」那条捷径，但仍先把旧内容留在屏上。
      */
     const { cached, fresh } = peekDir(sessionId, dir)
     if (cached) {
-      set({ remoteDir: dir, remoteFiles: cached.files, remoteSel: [], remoteLoading: !fresh })
-      if (fresh) return
+      set({ remoteDir: dir, remoteFiles: cached.files, remoteSel: [], remoteLoading: !fresh || force })
+      if (fresh && !force) return
     } else {
       set({ remoteLoading: true })
     }
 
-    const files = await loadDir(sessionId, dir, () =>
-      call(window.api.sftp.list(sessionId, dir), { errorTitle: '读取远程目录失败' })
+    const files = await loadDir(
+      sessionId,
+      dir,
+      () => call(window.api.sftp.list(sessionId, dir), { errorTitle: '读取远程目录失败' }),
+      force
     )
-    // 后台刷新返回时用户可能已经切到别的目录，只认当前目录的结果
-    if (files && get().sessionId === sessionId && (get().remoteDir === dir || !cached)) {
-      set({ remoteDir: dir, remoteFiles: files, remoteSel: get().remoteSel })
+    /*
+     * 后台刷新返回时用户可能已经切到别的目录，只认当前目录的结果。
+     * 旧实现的条件是 (remoteDir === dir || !cached)：从有缓存的 A 跳到
+     * 从没进过的 B 时，A 的迟到响应会把界面拽回 A —— 与「用户刚点的 B」相反。
+     * 现在只在「还是同一个目录」时接受结果；!cached 那条只对首屏兜底。
+     */
+    if (files && get().sessionId === sessionId && get().remoteDir === dir) {
+      set({ remoteFiles: files, remoteSel: get().remoteSel })
     }
-    set({ remoteLoading: false })
+    if (get().remoteDir === dir) set({ remoteLoading: false })
   },
 
   refreshLocal: async () => {
@@ -307,9 +336,15 @@ export const useSftpStore = create<SftpState>()((set, get) => ({
     if (localDir) await get().navLocal(localDir)
   },
 
+  /**
+   * 刷新当前远端目录。
+   *
+   * 必须带 force：navRemote 命中 30 秒内的缓存会直接 return，
+   * 于是「点刷新按钮没反应」—— 用户唯一能确认列表是最新的手段失效了。
+   */
   refreshRemote: async () => {
     const { remoteDir } = get()
-    if (remoteDir) await get().navRemote(remoteDir)
+    if (remoteDir) await get().navRemote(remoteDir, { force: true })
   },
 
   setLocalSel: (paths) => set({ localSel: paths }),
@@ -345,10 +380,10 @@ export const useSftpStore = create<SftpState>()((set, get) => ({
     }
   },
 
-  uploadFileDialog: async (sessionId, remoteDir) =>
-    pickAndUpload(get, sessionId, remoteDir, 'file'),
-  uploadFolder: async (sessionId, remoteDir) =>
-    pickAndUpload(get, sessionId, remoteDir, 'folder'),
+  uploadFileDialog: async (sessionId, remoteDir, force) =>
+    pickAndUpload(get, sessionId, remoteDir, 'file', force),
+  uploadFolder: async (sessionId, remoteDir, force) =>
+    pickAndUpload(get, sessionId, remoteDir, 'folder', force),
 
   requestUpload: async (sessionId, localPaths, preferredDir) => {
     if (!sessionId || localPaths.length === 0) return
@@ -446,8 +481,13 @@ export const useSftpStore = create<SftpState>()((set, get) => ({
       return { transfers: next, dockClosed: idx >= 0 ? s.dockClosed : false }
     })
 
-    // 传输完成后刷新对应侧的列表，让新文件马上可见
+    /*
+     * 传输完成后刷新对应侧的列表，让新文件马上可见。
+     * 除了目录列表还要 bumpTree：侧栏的文件树是另一份数据，
+     * 只刷目录列表的话，左侧树里看不到刚传上去的文件。
+     */
     if (e.status === 'done') {
+      get().bumpTree()
       if (e.direction === 'upload') void get().refreshRemote()
       else void get().refreshLocal()
     }
@@ -532,10 +572,12 @@ export const useSftpStore = create<SftpState>()((set, get) => ({
 
   openEditor: async (sessionId, path) => {
     if (!sessionId) return
-    const content = await call(window.api.sftp.readText(sessionId, path), {
+    const read = await call(window.api.sftp.readText(sessionId, path), {
       errorTitle: '无法打开文件'
     })
-    if (content !== null) set({ editing: { sessionId, path, content } })
+    if (read !== null) {
+      set({ editing: { sessionId, path, content: read.content, encoding: read.encoding } })
+    }
   },
 
   closeEditor: () => set({ editing: null }),
@@ -544,9 +586,10 @@ export const useSftpStore = create<SftpState>()((set, get) => ({
     const { editing } = get()
     const sessionId = editing?.sessionId
     if (!sessionId || !editing) return
-    const done = await call(window.api.sftp.writeText(sessionId, editing.path, content), {
-      errorTitle: '保存失败'
-    })
+    const done = await call(
+      window.api.sftp.writeText(sessionId, editing.path, content, editing.encoding),
+      { errorTitle: '保存失败' }
+    )
     if (done !== null) {
       useToastStore.getState().push({
         kind: 'success',
@@ -554,6 +597,9 @@ export const useSftpStore = create<SftpState>()((set, get) => ({
         detail: `原文件已自动备份为 ${editing.path}.bak`
       })
       set({ editing: null })
+      // 保存后大小与修改时间都变了：旧缓存必须作废，侧栏文件树也要重挂
+      invalidateDir(sessionId, editing.path)
+      get().bumpTree()
       await get().refreshRemote()
     }
   },

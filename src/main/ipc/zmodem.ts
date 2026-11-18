@@ -28,7 +28,8 @@ export function registerZmodemIpc(): void {
     rememberDialogPick('file', res.filePaths[0], false)
     const files = res.filePaths.map((p) => {
       const buf = readFileSync(p)
-      return { name: basename(p), size: buf.length, data: buf.toString('base64') }
+      // path 一并返回：传输记录要能回答「这个文件原本在哪」，而记录只认绝对路径
+      return { name: basename(p), path: p, size: buf.length, data: buf.toString('base64') }
     })
     return { canceled: false, files }
   })

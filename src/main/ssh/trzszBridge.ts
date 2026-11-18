@@ -1,5 +1,6 @@
+import { randomUUID } from 'node:crypto'
 import { TrzszFilter } from 'trzsz'
-import type { TrzszTransferState } from '@shared/types'
+import type { TransferRecord, TrzszTransferState } from '@shared/types'
 
 /**
  * trzsz（trz / tsz）文件传输的主进程桥接。
@@ -49,6 +50,14 @@ export interface TrzszBridgeHooks {
   pickSaveDirectory: () => Promise<string | undefined>
   /** 上传时选文件 / 目录（原生对话框） */
   pickSendFiles: (directory: boolean) => Promise<string[] | undefined>
+  /**
+   * 落一条传输记录。
+   *
+   * 身份字段（connectionId / connectionName / target）由 sessionManager 补齐后
+   * 交给 transferRecord 落盘 —— 桥接层不认识会话表（反过来才是依赖方向）。
+   * 记录只在开始/结束时各写一次，进度不落盘。
+   */
+  recordTransfer: (rec: Omit<TransferRecord, 'connectionId' | 'connectionName' | 'target'>) => void
 }
 
 /** 判断一段输出是否含 trzsz 握手 —— 只有这一步命中才值得为会话创建过滤器 */
@@ -88,8 +97,25 @@ class TrzszSession {
   private transferring = false
   private disposed = false
   private lastEmitAt = 0
-  private current: { file?: string; percent?: number } = {}
+  private current: { file?: string; percent?: number; files?: { index: number; total: number } } = {}
   private idleTimer: NodeJS.Timeout | null = null
+  /**
+   * 本轮传输的记录上下文。
+   *
+   * 为什么单独存：进度条文本只能告诉我们「第几个文件、百分之几」，
+   * 方向和落盘目录只有我们自己知道（上传是按路径推的，下载是先选目录）。
+   * 等 isTransferringFiles() 翻转时再回头问库已经问不出来了。
+   */
+  private pending: {
+    direction: 'upload' | 'download'
+    localPath: string
+    fileName: string
+    size: number
+  } | null = null
+  private recId: string | null = null
+  private recStartedAt = 0
+  /** 用户主动中断：收尾时记录成 canceled 而不是 done */
+  private recCanceled = false
 
   constructor(
     private readonly hooks: TrzszBridgeHooks,
@@ -102,7 +128,24 @@ class TrzszSession {
       // Node 环境下这两个回调是构造函数的硬性要求（否则直接 throw），
       // 即便我们上传时总是自己传 paths，也必须给出来。
       chooseSendFiles: (directory) => this.hooks.pickSendFiles(Boolean(directory)),
-      chooseSaveDirectory: () => this.hooks.pickSaveDirectory(),
+      /*
+       * 下载目录顺手记下来：trzsz 库自己拿着这个目录去落盘，
+       * 我们只有在这一刻才知道文件最终会写到哪里 ——
+       * 记录里的「打开所在文件夹」全靠它。
+       */
+      chooseSaveDirectory: () => {
+        const picked = this.hooks.pickSaveDirectory()
+        this.pending = {
+          direction: 'download',
+          localPath: '',
+          fileName: '',
+          size: 0
+        }
+        return picked.then((dir) => {
+          if (this.pending) this.pending.localPath = dir ?? ''
+          return dir
+        })
+      },
       terminalColumns: columns,
       isWindowsShell: process.platform === 'win32'
     })
@@ -149,6 +192,17 @@ class TrzszSession {
     let list = paths
     if (!list || list.length === 0) list = await this.hooks.pickSendFiles(false)
     if (!list || list.length === 0) return
+    /*
+     * 上传方向是我们自己发起的，方向和路径只有这里知道；
+     * 多文件时用第一个文件做展示名，总数由进度条文本里的 (i/n) 补。
+     */
+    this.pending = {
+      direction: 'upload',
+      localPath: list[0],
+      fileName: list[0].split(/[\\/]/).pop() ?? '',
+      size: list.length
+    }
+    this.recCanceled = false
     try {
       await this.filter.uploadFiles(list)
     } catch (err) {
@@ -165,7 +219,11 @@ class TrzszSession {
 
   cancel(): void {
     if (this.disposed) return
-    if (this.filter.isTransferringFiles()) this.filter.stopTransferringFiles()
+    if (this.filter.isTransferringFiles()) {
+      // 先打标记再停：syncState 会在同一帧里收尾并落记录，晚一步就记成 done 了
+      this.recCanceled = true
+      this.filter.stopTransferringFiles()
+    }
     this.syncState()
   }
 
@@ -179,7 +237,67 @@ class TrzszSession {
     } catch {
       /* 关会话时远端可能已经不在了，停不下来也不影响清理 */
     }
+    // 会话被关掉时传输也随之中断：写 interrupted，与「用户主动取消」区分开
+    if (this.transferring || this.recId) {
+      this.transferring = false
+      this.finishRecord('interrupted')
+    }
     this.capture = null
+  }
+
+  /**
+   * 传输真正开始（isTransferringFiles 翻转）时落一条 running 记录。
+   *
+   * 入队就写的原因和 SFTP 侧一致：进程被强杀时这条记录会停在 running，
+   * 下次启动被 sweepStale 改成 interrupted —— 那是唯一事后可确定的事实。
+   */
+  private beginRecord(): void {
+    const p = this.pending
+    if (!p) return
+    this.recId = randomUUID()
+    this.recStartedAt = Date.now()
+    this.hooks.recordTransfer({
+      id: this.recId,
+      direction: p.direction,
+      via: 'trzsz',
+      localPath: p.localPath,
+      remotePath: '',
+      fileName: p.fileName,
+      size: p.size,
+      transferred: 0,
+      /*
+       * trzsz 的进度只存在于远端重绘的进度条文本里，拿不到总字节数，
+       * 所以按「文件个数」记账（多文件时 (i/n) 前缀能给出总数）。
+       */
+      unit: 'files',
+      status: 'running',
+      startedAt: this.recStartedAt
+    })
+  }
+
+  private finishRecord(status: 'done' | 'canceled' | 'interrupted'): void {
+    const p = this.pending
+    const id = this.recId
+    this.recId = null
+    this.recCanceled = false
+    this.pending = null
+    if (!id) return
+    const files = this.current.files
+    this.hooks.recordTransfer({
+      id,
+      direction: p?.direction ?? 'upload',
+      via: 'trzsz',
+      localPath: p?.localPath ?? '',
+      remotePath: '',
+      fileName: p?.fileName ?? '',
+      size: p?.size ?? 0,
+      // 多文件时 (i/n) 的 i 就是已完成个数（当前文件也算进去，粗略但不会倒退）
+      transferred: files ? files.index : 0,
+      unit: 'files',
+      status,
+      startedAt: this.recStartedAt || Date.now(),
+      finishedAt: Date.now()
+    })
   }
 
   private onWrite(text: string): void {
@@ -199,6 +317,17 @@ class TrzszSession {
     const percents = [...text.matchAll(/(\d{1,3})%/g)]
     if (percents.length === 0) return
     const percent = Math.max(0, Math.min(100, Number(percents[percents.length - 1][1])))
+    /*
+     * 进度条前缀里还藏着「(2/5) 文件名」—— 多文件传输时 trzsz 只在 fileCount > 1
+     * 才输出这段。旧实现把这段连同文件名一起当文件名存了，
+     * 于是面板上出现「(2/5) a.txt」这种拿不出去用的名字。
+     */
+    const pair = /\((\d+)\/(\d+)\)/.exec(text)
+    if (pair) {
+      const index = Number(pair[1])
+      const total = Number(pair[2])
+      if (index > 0 && total > 0) this.current.files = { index, total }
+    }
     const bar = text.indexOf('[')
     if (bar > 0) {
       const name = text.slice(0, bar).trim()
@@ -208,7 +337,11 @@ class TrzszSession {
     const now = Date.now()
     if (now - this.lastEmitAt < STATE_EMIT_MS) return
     this.lastEmitAt = now
-    this.hooks.emitState({ active: this.transferring || this.filter.isTransferringFiles(), ...this.current })
+    this.hooks.emitState({
+      active: this.transferring || this.filter.isTransferringFiles(),
+      direction: this.pending?.direction,
+      ...this.current
+    })
   }
 
   /** 传输开始 / 结束只在 isTransferringFiles() 翻转时广播，避免每帧都发 */
@@ -227,12 +360,14 @@ class TrzszSession {
           clearTimeout(this.idleTimer)
           this.idleTimer = null
         }
-        this.hooks.emitState({ active: true, ...this.current })
+        this.beginRecord()
+        this.hooks.emitState({ active: true, direction: this.pending?.direction, ...this.current })
       }
       return
     }
     if (!this.transferring) return
     this.transferring = false
+    this.finishRecord(this.recCanceled ? 'canceled' : 'done')
     this.hooks.emitState({ active: false, ...this.current })
     this.current = {}
     this.lastEmitAt = 0

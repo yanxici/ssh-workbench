@@ -36,7 +36,8 @@ export function UploadTargetDialog({
   /** 确认后弹的是本地文件选择框还是文件夹选择框 */
   kind?: 'file' | 'folder'
   onCancel: () => void
-  onConfirm: (dir: string) => void
+  /** force=true 表示不跳过「大小与修改时间都一致」的文件，整份重传 */
+  onConfirm: (dir: string, force: boolean) => void
 }): React.JSX.Element | null {
   const [dir, setDir] = useState(defaultDir)
   const [input, setInput] = useState(defaultDir)
@@ -44,6 +45,12 @@ export function UploadTargetDialog({
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [mkdirOpen, setMkdirOpen] = useState(false)
+  /*
+   * 目录上传默认跳过「远端已有且大小/修改时间都一致」的文件 —— 这是省时间的关键，
+   * 但它同时也意味着「用户以为自己传了、远端还是老内容」。留一个明确的开关，
+   * 怀疑跳过判断出错时能整份重传，不必去删远端文件。
+   */
+  const [force, setForce] = useState(false)
 
   /* 每次打开都用最新的默认值重置（同一个组件实例会反复用） */
   useEffect(() => {
@@ -91,7 +98,7 @@ export function UploadTargetDialog({
       return
     }
     rememberUploadDir(sessionId, normalized)
-    onConfirm(normalized)
+    onConfirm(normalized, force)
   }
 
   const goInput = (): void => {
@@ -176,6 +183,23 @@ export function UploadTargetDialog({
             </div>
             {hint && <div className="mt-1 text-3xs text-ink-3">{hint}</div>}
           </div>
+
+          {kind === 'folder' && (
+            <label className="flex items-start gap-1.5 text-2xs leading-4 text-ink-2">
+              <input
+                type="checkbox"
+                className="mt-0.5"
+                checked={force}
+                onChange={(e) => setForce(e.target.checked)}
+              />
+              <span>
+                强制全量重传
+                <span className="ml-1 text-3xs text-ink-3">
+                  （默认跳过远端已有且大小、修改时间都一致的文件）
+                </span>
+              </span>
+            </label>
+          )}
 
           <div className="rounded-md border border-edge bg-app/60">
             <div className="flex h-7 items-center gap-1.5 border-b border-edge px-2">

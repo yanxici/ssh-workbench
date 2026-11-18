@@ -504,6 +504,81 @@ function nameOf(buf) {
   }
 }
 
+/**
+ * 传输中途「纯静默」场景的公共脚手架：
+ * 真 sz 被 kill / 链路丢窗口 / 网关断流时，双方都不抛错、也不发 ZEOF，
+ * 修复前界面就永远停在最后一个百分比。这里只搭台子，断言交给调用方。
+ */
+function silenceBench(opts = {}) {
+  const { lib, state } = loadLib()
+  // 真实 15 秒太慢，压到调用方给的值
+  lib.receiveWatchdog.idleMs = opts.idleMs || 120
+  const sessionId = 's-idle-' + Math.random().toString(36).slice(2)
+  const sent = []
+  const events = []
+  lib.ensureZmodem(sessionId, {
+    write: () => {},
+    send: (bytes) => sent.push(Buffer.from(bytes)),
+    confirm: async () => true,
+    afterTransfer: () => {}
+  })
+  lib.watchZmodem(sessionId, (p) => events.push(p))
+
+  const enc = new Zmodem.ZDLE()
+  enc.set_escape_ctrl_chars(true)
+  const hex = (name, args) => Buffer.from(Zmodem.Header.build(name, args || []).to_hex())
+  const sub = (payload, fe) =>
+    Buffer.from(Zmodem.Subpacket.build(Array.from(payload), fe).encode16(enc))
+  const info = (name, size) =>
+    Buffer.concat([Buffer.from(name), Buffer.from([0]), Buffer.from(size + ' 0 100644 0')])
+  const feed = (buf) => lib.feedZmodem(sessionId, buf.toString('base64'), buf.toString('latin1'))
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms))
+  const names = () =>
+    sent
+      .map((b) => {
+        try {
+          return Zmodem.Header.parse_hex(Array.from(b)).NAME
+        } catch {
+          return null
+        }
+      })
+      .filter(Boolean)
+  const offsets = (name) =>
+    sent
+      .map((b) => {
+        try {
+          return Zmodem.Header.parse_hex(Array.from(b))
+        } catch {
+          return null
+        }
+      })
+      .filter((h) => h && h.NAME === name)
+      .map((h) => h.get_offset())
+
+  // 起手：ZRQINIT -> ZFILE -> 一小段真实数据，之后由调用方决定是否静默
+  const start = async (total, firstBytes) => {
+    feed(hex('ZRQINIT', [0, 0, 0, 0]))
+    await wait(20)
+    feed(Buffer.concat([hex('ZFILE', [0]), sub(info('idle.bin', total), 'end_ack')]))
+    await wait(20)
+    if (firstBytes > 0) {
+      feed(Buffer.concat([hex('ZDATA', [0]), sub(Buffer.alloc(firstBytes, 0x41), 'end_ack')]))
+      await wait(30)
+    }
+  }
+
+  const finish = (total) => {
+    feed(hex('ZEOF', [total]))
+  }
+
+  const teardown = () => {
+    lib.detachZmodem(sessionId)
+    lib.receiveWatchdog.idleMs = 15000
+  }
+
+  return { lib, state, sessionId, sent, events, hex, sub, info, feed, wait, names, offsets, start, finish, teardown }
+}
+
 ;(async () => {
   /* ---------- 1 + 2：正常接收一个文件，逐字节一致 ---------- */
   {
@@ -589,7 +664,8 @@ function nameOf(buf) {
 
     const ctx = { lib, payload, abortMid: true }
     const { events } = await runSz(ctx)
-    const errs = events.filter((e) => e.phase === 'error')
+    // 用户主动中断算 canceled 不算 error：账本上要能和真正的失败区分开
+    const errs = events.filter((e) => e.phase === 'error' || e.phase === 'canceled')
     check('中断后给出「已中断传输」提示',
       errs.some((e) => (e.message || '').includes('已中断')),
       JSON.stringify(errs))
@@ -602,7 +678,7 @@ function nameOf(buf) {
     const { lib, state } = loadLib()
     state.pickDirCanceled = true
     const { events } = await runSz({ lib, payload: new Uint8Array(10) })
-    const errs = events.filter((e) => e.phase === 'error')
+    const errs = events.filter((e) => e.phase === 'error' || e.phase === 'canceled')
     check('取消选目录时明确报错，不静默挂起',
       errs.some((e) => (e.message || '').includes('保存文件夹')),
       JSON.stringify(errs))
@@ -837,7 +913,8 @@ function nameOf(buf) {
     const r = await runRz({ lib, payload: new Uint8Array(0), timeoutMs: 16000 })
     const elapsed = Date.now() - t0
     const zsinits = r.sentNames.filter((n) => n === 'ZSINIT').length
-    const err = r.events.filter((e) => e.phase === 'error').pop()
+    // 取消选了不算 error，账本上要能和真正的失败区分
+    const err = r.events.filter((e) => e.phase === 'error' || e.phase === 'canceled').pop()
 
     check('上传：选文件期间持续给远端补 ZSINIT（≥2 帧）', zsinits >= 2, 'zsinits=' + zsinits)
     check('上传：取消选文件后走 abort，不留下活动会话', r.active === false, String(r.active))
@@ -906,6 +983,125 @@ function nameOf(buf) {
     check('中断后的 error 快照同样不恢复', afterAbort === null, JSON.stringify(afterAbort))
 
     lib.detachZmodem(sessionId)
+  }
+
+
+  /* ---------- 18：传输中途纯静默（对端不发也不报错）必须被看门狗救回来 ---------- */
+  {
+    const b = silenceBench({ idleMs: 120 })
+    const total = 1600
+    await b.start(total, 800)
+    const beforeZrp = b.offsets('ZRPOS').length
+    await b.wait(500) // 远超 120ms 看门狗，对端一直哑着
+    const resumeZrp = b.offsets('ZRPOS').slice(beforeZrp)
+    // 文案不再固定为「没有收到数据」：对端反复重发被丢弃的区间时字节在流，
+    // 但没有新进展，此时的准确说法是「没有进展」。断言只认「说明 + 续传位置」。
+    const note = b.events
+      .filter((e) => (e.message || '').includes('续传') && (e.message || '').includes('800'))
+      .pop()
+
+    check('静默超时后看门狗主动重发 ZRPOS 叫醒对端',
+      resumeZrp.length >= 1, 'sent=' + b.names().join(','))
+    check('续传位置就是已收下的字节数（不从头再来）',
+      resumeZrp[0] === 800, 'resume=' + resumeZrp[0] + ' all=' + b.offsets('ZRPOS').join(','))
+    check('看门狗续传时给出可读提示', !!note, JSON.stringify(b.events.map((e) => e.message)))
+    check('看门狗续传不把会话判死（没有 error）',
+      !b.events.some((e) => e.phase === 'error'),
+      JSON.stringify(b.events.filter((e) => e.phase === 'error')))
+
+    // 对端「活过来」，从 800 处续发后半程
+    b.feed(Buffer.concat([b.hex('ZDATA', [800]), b.sub(Buffer.alloc(800, 0x42), 'end_ack')]))
+    await b.wait(30)
+    b.finish(total)
+    await b.wait(80)
+
+    const doneEv = b.events.filter((e) => e.phase === 'done').pop()
+    check('被看门狗救回后文件仍完整收完', !!doneEv && doneEv.bytesDone === total,
+      JSON.stringify(doneEv))
+    const saved = b.state.files.get('save-1')
+    check('救回后落盘内容完整且没有重复段',
+      !!saved && saved.length === total && saved[0] === 0x41 && saved[total - 1] === 0x42,
+      saved ? 'len=' + saved.length : 'no file')
+    check('救回后不再出现 error', !b.events.some((e) => e.phase === 'error'),
+      JSON.stringify(b.events.filter((e) => e.phase === 'error')))
+    b.teardown()
+  }
+
+  /* ---------- 19：数据一直在流时看门狗不能误触发 ---------- */
+  {
+    const b = silenceBench({ idleMs: 120 })
+    const total = 800
+    await b.start(total, 0)
+    const before = b.offsets('ZRPOS').length
+    // 真 sz 只在帧首发一个 ZDATA 头，之后靠 ZCRCG/ZCRCW 子包连着发；
+    // 每包再发一个 ZDATA 头会被库判成 Unhandled header（那是另一条续传路径）。
+    // 这里照抄真实的流：包间 40ms，整段跨度远超阈值，但任意两包之间都不超。
+    b.feed(Buffer.concat([
+      b.hex('ZDATA', [0]),
+      b.sub(Buffer.alloc(100, 0x43), 'no_end_no_ack')
+    ]))
+    await b.wait(40)
+    for (let off = 100; off < total; off += 100) {
+      const fe = off + 100 >= total ? 'end_ack' : 'no_end_no_ack'
+      b.feed(b.sub(Buffer.alloc(100, 0x43), fe))
+      await b.wait(40)
+    }
+    check('持续有数据时不误发 ZRPOS', b.offsets('ZRPOS').length === before,
+      'zrp=' + b.offsets('ZRPOS').length + ' before=' + before)
+    b.finish(total)
+    await b.wait(80)
+    const doneEv = b.events.filter((e) => e.phase === 'done').pop()
+    check('持续数据流场景照常收完', !!doneEv && doneEv.bytesDone === total, JSON.stringify(doneEv))
+    b.teardown()
+  }
+
+  /* ---------- 20：对端真死了，连续续传无果要如实报错，不能永远转圈 ---------- */
+  {
+    const b = silenceBench({ idleMs: 60 })
+    const total = 1600
+    await b.start(total, 600)
+    // accept 本身就会发一次 ZRPOS(0)，只数静默之后的
+    const baseZrp = b.offsets('ZRPOS').length
+    await b.wait(900) // 3 轮续传 + 报错
+    const err = b.events.filter((e) => e.phase === 'error').pop()
+    check('连续续传无果后如实报错（不再永远转圈）', !!err,
+      JSON.stringify(b.events.map((e) => e.phase)))
+    check('报错文案说明已保留的部分', !!err && /已保留前 600 字节/.test(err.message),
+      JSON.stringify(err))
+    check('报错后会话被释放（不残留活动传输）', b.lib.isZmodemActive(b.sessionId) === false,
+      String(b.lib.isZmodemActive(b.sessionId)))
+    const zrpCount = b.offsets('ZRPOS').length - baseZrp
+    check('续传次数封顶（不会无限重试）', zrpCount <= 3, 'zrp=' + zrpCount)
+    b.teardown()
+  }
+  /* ---------- 21：对端反复重发同一段（字节在流、文件不涨）也必须被看门狗救回 ---------- */
+  {
+    const b = silenceBench({ idleMs: 80 })
+    const total = 1600
+    await b.start(total, 800)
+    const baseZrp = b.offsets('ZRPOS').length
+    // 复刻「sz 被 kill 后的假活」：对端无视 ZRPOS，继续从文件尾之后推字节。
+    // 这些包命中 on_input 的 start >= total 早退分支，只累加 receivedBytes，
+    // fileOffset 一动不动 —— 链路看着很忙，文件一个字节没长。
+    // 修复前看门狗按「收到字节」计时，每包都给它续命，于是永远等不到干预；
+    // 修复后按「落盘进展」计时，这种假活会被正常判定为停滞并封顶报错。
+    b.feed(Buffer.concat([b.hex('ZDATA', [total]), b.sub(Buffer.alloc(100, 0x41), 'no_end_no_ack')]))
+    for (let i = 0; i < 20; i++) {
+      b.feed(b.sub(Buffer.alloc(100, 0x41), 'no_end_no_ack'))
+      await b.wait(20)
+    }
+    await b.wait(400)
+    const err = b.events.filter((e) => e.phase === 'error').pop()
+    check('重发假活场景最终如实报错（不会无限重发 ZRPOS）', !!err,
+      JSON.stringify(b.events.map((e) => e.phase + ':' + (e.message || ''))))
+    // 上限 3 次静默续传；乱帧路径（resyncReceive）自己还会再发一次 ZRPOS，
+    // 所以这里留一格余量。真 bug 是「无限重发」，不是 3 还是 4。
+    check('重发假活场景的续传次数同样封顶', b.offsets('ZRPOS').length - baseZrp <= 4,
+      'zrp=' + (b.offsets('ZRPOS').length - baseZrp))
+    check('重发假活场景不会把文件写脏（长度不超过已收下的部分）',
+      (b.state.files.get('save-1') || Buffer.alloc(0)).length <= 800,
+      'len=' + (b.state.files.get('save-1') || Buffer.alloc(0)).length)
+    b.teardown()
   }
 
   console.log('')

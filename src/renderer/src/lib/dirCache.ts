@@ -45,6 +45,9 @@ const cache = new Map<string, CachedDir>()
 /** 在途请求去重：同一目录并发展开只发一次 */
 const inflight = new Map<string, Promise<RemoteFile[] | null>>()
 
+/** 每个目录的请求世代号：只有最后一次发出的请求能写缓存（见 loadDir） */
+const gen = new Map<string, number>()
+
 function keyOf(sessionId: string, path: string): string {
   return sessionId + '\u0000' + path
 }
@@ -95,6 +98,9 @@ export function invalidateDir(sessionId: string, path?: string): void {
     for (const k of [...inflight.keys()]) {
       if (k.startsWith(prefix)) inflight.delete(k)
     }
+    for (const k of [...gen.keys()]) {
+      if (k.startsWith(prefix)) gen.delete(k)
+    }
     return
   }
   cache.delete(keyOf(sessionId, path))
@@ -104,6 +110,7 @@ export function invalidateDir(sessionId: string, path?: string): void {
 export function clearDirCache(): void {
   cache.clear()
   inflight.clear()
+  gen.clear()
 }
 
 /**
@@ -125,17 +132,33 @@ export async function loadDir(
     if (cached && fresh) return cached.files
   }
 
-  // 同一目录已有请求在飞：搭车，别再发一条
+  /*
+   * 同一目录已有请求在飞：
+   * - 普通读取照旧搭车，省一条 IPC；
+   * - force=true **不能搭车**。那次在飞请求可能是刷新前就发出去的，
+   *   搭上去拿回来的是刷新前的旧列表 —— 用户点两次刷新、第二次转完圈
+   *   还是旧数据，就是这么来的（「刷新按钮很慢」的一部分）。
+   */
   const existing = inflight.get(k)
-  if (existing) return existing
+  if (existing && !force) return existing
+
+  /*
+   * 世代号：只让最后一次请求的结果写进缓存。
+   * 强制刷新期间连点两次会有两条在飞，先回来的那条是旧的，
+   * 不拦它就会把新结果盖掉。读请求没有代价，直接放过期结果即可。
+   */
+  const myGen = (gen.get(k) ?? 0) + 1
+  gen.set(k, myGen)
 
   const p = (async () => {
     try {
       const files = await fetcher()
-      if (files) writeDir(sessionId, path, files)
+      if (files && gen.get(k) === myGen) writeDir(sessionId, path, files)
       return files
     } finally {
-      inflight.delete(k)
+      // 自己还挂在 inflight 上才删：世代号变了说明已有更新的请求接管，
+      // 那条请求的 finally 会负责收尾（用 p 自己比较会撞 TDZ，见 tsc）。
+      if (gen.get(k) === myGen) inflight.delete(k)
     }
   })()
 

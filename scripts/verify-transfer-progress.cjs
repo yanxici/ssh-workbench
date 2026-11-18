@@ -41,6 +41,7 @@ fs.writeFileSync(
   stub,
   `exports.sessionManager = {
     waitUntilReady: async () => {},
+    list: () => [],
     statusOf: () => 'connected',
     isReconnecting: () => false,
     getClient: () => ({ sftp: (cb) => cb(null, globalThis.__FAKE_SFTP__) })
@@ -115,6 +116,7 @@ function makeSftp(opts) {
   const statsOf = (size, isDir) => ({
     isFile: () => !isDir,
     isDirectory: () => isDir,
+    isSymbolicLink: () => false,
     size,
     mode: isDir ? 0o040755 : 0o100644,
     mtime: 0,
@@ -136,6 +138,26 @@ function makeSftp(opts) {
       if (files.has(p)) return cb(null, statsOf(files.get(p).length, false))
       if (dirs.has(p)) return cb(null, statsOf(0, true))
       cb(new Error(`no such file: ${p}`))
+    },
+    // 引擎判型走 lstat（stat 会跟随符号链接），假对象必须同款
+    lstat(p, cb) {
+      if (files.has(p)) return cb(null, statsOf(files.get(p).length, false))
+      if (dirs.has(p)) return cb(null, statsOf(0, true))
+      cb(new Error(`no such file: ${p}`))
+    },
+    // 下载 .part 提交、上传 .part 提交都靠 rename 落地
+    rename(from, to, cb) {
+      if (files.has(from)) {
+        files.set(to, files.get(from))
+        files.delete(from)
+        return cb && cb(null)
+      }
+      if (dirs.has(from)) {
+        dirs.add(to)
+        dirs.delete(from)
+        return cb && cb(null)
+      }
+      cb && cb(new Error(`no such file: ${from}`))
     },
     readdir(p, cb) {
       const names = dirs.get(p)

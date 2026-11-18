@@ -471,6 +471,15 @@ export interface AppSettings {
    * 在文件面板头部一键关掉，也可以到设置里关。
    */
   filesFollowTerminalCwd?: boolean
+  /**
+   * 下载落点目录。
+   *
+   * 缺省（undefined）用系统「下载」文件夹。存下来是因为现场笔记本上
+   * 「下载」往往在小容量系统盘，而客户资料得落在 D 盘或移动硬盘上 ——
+   * 每次下载都手动选一遍目录，等于每次多点三次。
+   * 目录失效（U 盘拔了）时主进程回退到系统下载目录，不会把下载弄失败。
+   */
+  downloadDir?: string
   /** 应用内自动更新的偏好（检查频率 / 自动下载 / 更新专用代理） */
   update?: UpdatePrefs
   /**
@@ -913,6 +922,15 @@ export interface LocalFile {
   mtime: number
 }
 
+/** 文本文件编码（写回时必须与读入一致，否则中文内容会变成乱码） */
+export type TextEncoding = 'utf-8' | 'utf-16le' | 'utf-16be' | 'gb18030'
+
+/** 读取远程文本的结果：内容 + 探测出的编码 */
+export interface RemoteText {
+  content: string
+  encoding: TextEncoding
+}
+
 /** 传输进度推送（主进程 -> 渲染进程，节流发送） */
 export interface TransferProgressEvent {
   taskId: string
@@ -932,6 +950,82 @@ export interface TransferProgressEvent {
    * 与 error 分开，避免把「部分跳过」渲染成红色失败。
    */
   note?: string
+  /**
+   * 目录任务里逐文件的失败清单（可能上千条）。
+   *
+   * error 只有一句人读的摘要（前 3 条样例），这里给全量结构化数据，
+   * 由主进程按错误原因聚合后落盘到传输记录 —— 界面才能回答
+   * 「这 300 个失败是不是全都是 Permission denied」。
+   */
+  failures?: Array<{ path: string; message: string }>
+}
+
+/* ------------------------------------------------------------------ *
+ *  传输记录（跨会话、跨重启的历史账本）
+ * ------------------------------------------------------------------ */
+
+/** 传输记录状态：比 TransferTask 多一个 interrupted（上次未收尾就退出） */
+export type TransferRecordStatus =
+  | 'pending'
+  | 'running'
+  | 'done'
+  | 'error'
+  | 'canceled'
+  | 'interrupted'
+
+/** 按错误原因聚合后的失败明细（一组 = 一个原因） */
+export interface TransferFailureGroup {
+  message: string
+  /** 该原因下失败的文件总数（可能远大于 sample 长度） */
+  count: number
+  /** 样例路径（最多 50 条，超出部分只体现在 count 里） */
+  sample: string[]
+}
+
+/**
+ * 一次传输的持久记录。
+ *
+ * 与 TransferTask 的区别：这是「发生过什么」的账本，不是「现在怎么样」的视图。
+ * 身份全部用**写入时快照**（connectionName / target），不靠 sessionId join ——
+ * sessionId 每次启动新生成（见 SessionInfo 的注释），重启后必然全部失配。
+ */
+export interface TransferRecord {
+  id: string
+  /** 排错时用来定位连接；会话已关也能显示是人类可读的 host */
+  connectionId?: string
+  connectionName?: string
+  /** user@host 或 COM3 · 115200 8N1（主进程算好的展示串） */
+  target?: string
+  direction: 'upload' | 'download'
+  /** 走哪条链路：SFTP 文件管理 / trzsz / ZMODEM（sz、rz） */
+  via: 'sftp' | 'trzsz' | 'zmodem'
+  /** 本机路径（下载落点；上传时是本地源；拿不到就留空） */
+  localPath: string
+  /** 远端路径（上传目标；下载时是远端源；ZMODEM 发送拿不到远端路径） */
+  remotePath: string
+  /** 列表里显示的名字（不带目录） */
+  fileName: string
+  /** 总字节数；unit=files 时是总文件数 */
+  size: number
+  transferred: number
+  unit?: 'bytes' | 'files'
+  status: TransferRecordStatus
+  error?: string
+  note?: string
+  /** 失败明细（按原因聚合，只有 error / interrupted 才可能有） */
+  failures?: TransferFailureGroup[]
+  failureCount?: number
+  startedAt: number
+  finishedAt?: number
+  /** 被哪条新记录重试过（旧记录保留，行上显示「已被重试」） */
+  retriedBy?: string
+  /**
+   * 本次运行内的会话 id，**只用于回查实时进度**，不作为身份。
+   *
+   * 重启后它一定失配 —— 那时 panel 显示「进度未知」正好是对的，
+   * 不要用它 join 出连接信息（那要用上面快照的三个字段）。
+   */
+  sessionId?: string
 }
 
 /* ------------------------------------------------------------------ *
@@ -1227,6 +1321,11 @@ export interface BackupFileEntry {
   size: number
   mtime?: number
   content?: string
+  /**
+   * 原文件编码。回写时必须用同一种，否则一份 GBK 的配置备份还原回去
+   * 就变成满屏乱码 —— 备份等于把配置毁了。
+   */
+  encoding?: TextEncoding
   /** 备份时读取失败的原因 */
   error?: string
 }
@@ -1324,6 +1423,15 @@ export interface TrzszTransferState {
   file?: string
   /** 0~100，拿不到具体进度条时缺省 */
   percent?: number
+  /**
+   * 多文件进度：「第 index 个 / 共 total 个」。
+   *
+   * 取自进度条前缀 (2/5) —— trzsz 只在 fileCount > 1 时才输出这段，
+   * 单文件传输下拿不到，所以是可选的。
+   */
+  files?: { index: number; total: number }
+  /** 方向：upload 是我们推过去，download 是远端 sz 推过来 */
+  direction?: 'upload' | 'download'
   /** 非进度类的提示 */
   notice?: 'no-remote-trz'
 }

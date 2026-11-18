@@ -107,6 +107,7 @@ async function connect() {
 globalThis.__LAB__ = { state, connect }
 exports.sessionManager = {
   waitUntilReady: async () => {},
+  list: () => [],
   statusOf: () => {
     if (state.status === 'connected' && !state.client) state.status = 'disconnected'
     return state.status

@@ -14,6 +14,13 @@
  * - 序号前进但面板不可见时，目标仍然要落下去（用户切回来就该在那儿）。
  */
 
+/**
+ * 文件面板的三栏。这里只关心「是不是目录树那一栏」，
+ * 但要把 transfer 也收进来：用户在传输记录页切会话时，
+ * 不该被拽回目录树（那会打断他正在查的那条记录）。
+ */
+export type ExplorerTabKey = 'workspace' | 'fs' | 'transfer'
+
 /** 一次跟随判定的输入 */
 export interface FollowInput {
   /** 终端 cwd 的当前事件序号 */
@@ -81,7 +88,7 @@ export interface InitialInput {
   /** 用户是否开着跟随 */
   follow: boolean
   /** 当前所在 Tab */
-  tab: 'workspace' | 'fs'
+  tab: ExplorerTabKey
 }
 
 /**
@@ -95,7 +102,7 @@ export interface InitialInput {
  */
 export function decideInitial(input: InitialInput): {
   dir: string
-  tab: 'workspace' | 'fs'
+  tab: ExplorerTabKey
 } {
   const dir = norm(input.knownCwd)
   if (!dir) return { dir: '', tab: input.tab }

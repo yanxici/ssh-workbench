@@ -1,5 +1,5 @@
 import type * as React from 'react'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   ChevronRight,
   Download,
@@ -29,13 +29,14 @@ import { useToastStore } from '@/stores/toastStore'
 import { call } from '@/lib/ipc'
 import { cn, formatBytes, remoteDirname, remoteJoin } from '@/lib/utils'
 import { normalizeRemoteDir } from '@/lib/uploadDir'
-import { invalidateDir, loadDir as loadDirCached, loadDirs, peekDir, writeDir } from '@/lib/dirCache'
+import { invalidateDir, loadDirs, peekDir, writeDir } from '@/lib/dirCache'
 import { requestDirs } from '@/lib/dirLoader'
 import { cachedHome, rememberHome } from '@/lib/remoteHome'
 import { useCwdStore, seedCwdFromHome } from '@/stores/cwdStore'
-import { decideFollow, decideInitial } from '@/lib/cwdFollow'
+import { decideFollow, decideInitial, type ExplorerTabKey } from '@/lib/cwdFollow'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { UploadTargetDialog } from './UploadTargetDialog'
+import { TransferTab } from './TransferTab'
 import { useUploadTarget } from './useUploadTarget'
 import {
   ConfirmDialog,
@@ -94,10 +95,9 @@ export function FileExplorer({
 }: {
   /** 当前活动会话；未连接时展示引导 */
   session: SessionUi | null
-  onOpenTransfer: () => void
   onBrowseSessions: () => void
 }): React.JSX.Element {
-  const [tab, setTab] = useState<'workspace' | 'fs'>('workspace')
+  const [tab, setTab] = useState<ExplorerTabKey>('workspace')
   const [home, setHome] = useState<string>('')
   const [currentDir, setCurrentDir] = useState<string>('')
   const [openDirs, setOpenDirs] = useState<Set<string>>(new Set())
@@ -283,19 +283,7 @@ export function FileExplorer({
     setTab('fs')
   }, [follow, connected, cwdPath])
 
-  /* ---------- 拉取某个目录的直接子项（带缓存 + 在途去重） ---------- */
-  const fetchDir = useCallback(
-    async (dir: string, force = false): Promise<RemoteFile[] | null> => {
-      if (!sessionId) return null
-      return loadDirCached(
-        sessionId,
-        dir,
-        () => call(window.api.sftp.list(sessionId, dir), { silent: true }),
-        force
-      )
-    },
-    [sessionId]
-  )
+  /* ---------- 拉取目录：统一走下面的 loadDirs 批次（根 + 已展开一条 IPC） ---------- */
 
   /* ---------- 目录树数据：根目录一份 + 每个展开目录一份，按需加载 ---------- */
   /**
@@ -343,11 +331,20 @@ export function FileExplorer({
       setSubDirs((prev) => (prev.size === 0 ? prev : new Map()))
       setDirErrors((prev) => (prev.size === 0 ? prev : new Map()))
     }
+    /*
+     * 刷新（forced）：只让缓存失效，**不清空 subDirs**。
+     *
+     * 原来这里 setSubDirs(new Map()) —— 展开树的数据被抹掉，第二个 effect 于是
+     * 把每个已展开目录都当成「待补」，整棵树重拉一遍；而且清空那一刻整棵树
+     * 先塌成「加载中」，等数据回来再长回去。用户看到的就是「点刷新，慢慢转，
+     * 树还闪一下」。
+     *
+     * 现在保留旧数据（先上屏不闪），缓存失效后再用**一次批量请求**把
+     * 这批目录重新验证一遍（见下面 refetchOpen）。
+     */
+    const openNow = [...openDirsRef.current]
     if (forced) {
-      for (const d of openDirsRef.current) invalidateDir(sessionId, d)
-      pendingRef.current.clear()
-      setSubDirs((prev) => (prev.size === 0 ? prev : new Map()))
-      setDirErrors((prev) => (prev.size === 0 ? prev : new Map()))
+      for (const d of openNow) invalidateDir(sessionId, d)
     }
 
     const hit = peekDir(sessionId, currentDir)
@@ -358,27 +355,80 @@ export function FileExplorer({
       if (!forced && hit.fresh) return
     }
 
-    setLoading(!hit.cached)
-    void fetchDir(currentDir, forced)
-      .then((files) => {
+    /*
+     * forced（点刷新 / 写操作后）即使有缓存也要进 loading：
+     * 否则按钮点下去毫无反馈 —— 用户看到的就是「按不动」。
+     */
+    setLoading(!hit.cached || forced)
+
+    /*
+     * 根目录单独 await —— 转圈只等这一个 readdir。
+     *
+     * 换目录（非 forced）时 openNow 里的目录属于上一棵树，只拉根目录，
+     * 展开层级由下面的「批量补齐」effect 接手。
+     */
+    void loadDirs(sessionId, [currentDir], (missing) => requestDirs(sessionId, missing), forced)
+      .then((res) => {
         if (cancelled || sessionRef.current !== sessionId) return
-        setRoots({ dir: currentDir, files: files ?? [] })
+        setRoots({ dir: currentDir, files: res.files[currentDir] ?? [] })
+        setRootError(res.errors[currentDir] ? '读取目录失败' : null)
       })
       .catch(() => {
         if (cancelled || sessionRef.current !== sessionId) return
-        setRoots({ dir: currentDir, files: [] })
         setRootError('读取目录失败')
       })
       .finally(() => {
         if (!cancelled) setLoading(false)
       })
 
+    /*
+     * 已展开的子目录：**后台重验**，不参与转圈。
+     *
+     * 要重验的目录数是 1 + 已展开层数，主进程并发上限 8，超过就排队，
+     * 转圈时长等于「最慢那一批」。而用户点的是「刷新当前目录」，要看的是根目录的
+     * 新内容 —— 让子目录拖住转圈，观感就是「点一下，等半天」。所以根目录 await
+     * （转圈随它结束），子目录另发一批，回来静默替换。
+     *
+     * 必须落到下一个 tick：`requestDirs` 按「同一帧内的调用」合批，同步发的话根目录
+     * 和子目录又被合并成一条 listMany，等于没拆。
+     */
+    const childTimer =
+      forced && openNow.length > 0
+        ? setTimeout(() => {
+            for (const d of openNow) pendingRef.current.add(d)
+            void loadDirs(sessionId, openNow, (m) => requestDirs(sessionId, m), true)
+              .then((res) => {
+                for (const d of openNow) pendingRef.current.delete(d)
+                if (cancelled || sessionRef.current !== sessionId) return
+                setSubDirs((prev) => {
+                  const next = new Map(prev)
+                  for (const d of openNow) next.set(d, res.files[d] ?? [])
+                  return next
+                })
+                setDirErrors((prev) => {
+                  const failed = openNow.filter((d) => res.errors[d])
+                  if (failed.length === 0 && openNow.every((d) => !prev.has(d))) return prev
+                  const next = new Map(prev)
+                  for (const d of openNow) {
+                    if (res.errors[d]) next.set(d, res.errors[d])
+                    else next.delete(d)
+                  }
+                  return next
+                })
+              })
+              .catch(() => {
+                for (const d of openNow) pendingRef.current.delete(d)
+              })
+          }, 0)
+        : null
+
     return () => {
       cancelled = true
+      if (childTimer !== null) clearTimeout(childTimer)
     }
     // openDirs 不进依赖：展开/折叠不该触发根目录重拉。
     // （openDirs 只在下面的「批量补齐」effect 里被读，这里不引用它——所以不需要 disable 注释。）
-  }, [sessionId, connected, currentDir, version, fetchDir])
+  }, [sessionId, connected, currentDir, version])
 
   /**
    * 已展开但还没数据的目录：**一轮批量补齐**。
@@ -664,6 +714,9 @@ export function FileExplorer({
           <span className="flex-1" />
         </div>
         <ExplorerTabs tab={tab} onChange={setTab} />
+        {/* 传输记录不依赖会话：没连设备时照样能查上一批文件落在哪儿 */}
+        {tab === 'transfer' && <TransferTab />}
+        {tab !== 'transfer' && (
         <div className="flex flex-1 flex-col items-center justify-center gap-2 px-5 text-center">
           <FolderOpen size={26} className="text-ink-3/60" />
           <div className="text-xs font-medium text-ink-2">
@@ -679,6 +732,7 @@ export function FileExplorer({
             {serialOnly ? '切换到 SSH 会话' : '去连接设备'}
           </button>
         </div>
+        )}
       </div>
     )
   }
@@ -698,6 +752,11 @@ export function FileExplorer({
         >
           {session.title}
         </span>
+        {/* 文件操作按钮组只在「工作区 / 文件系统」两栏出现：
+            「传输」栏里没有当前目录可刷新、可上传，摆着一排点了会作用到
+            上一个目录的按钮比没有更糟。 */}
+        {tab !== 'transfer' && (
+          <>
         <button
           className="btn-icon h-6 w-6"
           title={
@@ -713,8 +772,13 @@ export function FileExplorer({
             <Link2Off size={13} className="text-ink-3" />
           )}
         </button>
-        <button className="btn-icon h-6 w-6" title="刷新当前目录" onClick={() => bumpTree()}>
-          <RefreshCw size={13} />
+        <button
+          className="btn-icon h-6 w-6"
+          title={loading ? '正在刷新…' : '刷新当前目录'}
+          disabled={loading}
+          onClick={() => bumpTree()}
+        >
+          <RefreshCw size={13} className={cn(loading && 'animate-spin')} />
         </button>
         <button
           className="btn-icon h-6 w-6"
@@ -747,10 +811,19 @@ export function FileExplorer({
         >
           <Plus size={14} />
         </button>
+          </>
+        )}
       </div>
 
       {/* Tab 行：跟命令面板的「全部/收藏/最近」用同一套分段控件外观 */}
       <ExplorerTabs tab={tab} onChange={setTab} />
+
+      {/*
+       * 传输记录贴在文件树旁边而不是只留全屏面板：
+       * 用户最常问的是「我刚下的文件跑哪去了」，这一步不该迫使他关掉
+       * 文件面板再开一个全屏面板。两者读同一份记录、共用同一套定位按钮。
+       */}
+      {tab === 'transfer' && <TransferTab />}
 
       {/* 面包屑：只在「文件系统」Tab 出现 —— 工作区是快捷位置列表，
           顶上再放一条路径等于同一信息重复两次 */}
@@ -804,7 +877,11 @@ export function FileExplorer({
 
       {/* 目录树：空白处右键也出菜单（目标=当前目录），这样侧栏任何位置都能直接下载整目录 */}
       <div
-        className="scroll-thin min-h-0 flex-1 overflow-auto py-1"
+        className={cn(
+          'scroll-thin min-h-0 flex-1 overflow-auto py-1',
+          // 传输入口占同一块版面，树留着但收起来：卸载它会连展开状态一起丢
+          tab === 'transfer' && 'hidden'
+        )}
         onContextMenu={(e) => {
           // 行自己会 stopPropagation，走到这里的都是空白区域
           setMenuTarget(null)
@@ -945,7 +1022,12 @@ export function FileExplorer({
       </div>
 
       {/* 底：当前目录 + 上级 */}
-      <div className="flex h-7 shrink-0 items-center gap-1 border-t border-edge px-1.5 text-2xs text-ink-3">
+      <div
+        className={cn(
+          'flex h-7 shrink-0 items-center gap-1 border-t border-edge px-1.5 text-2xs text-ink-3',
+          tab === 'transfer' && 'hidden'
+        )}
+      >
         <span className="min-w-0 flex-1 truncate font-mono" title={currentDir || undefined}>
           {currentDir || '未选择目录'}
         </span>
@@ -1028,12 +1110,13 @@ function ExplorerTabs({
   tab,
   onChange
 }: {
-  tab: 'workspace' | 'fs'
-  onChange: (t: 'workspace' | 'fs') => void
+  tab: ExplorerTabKey
+  onChange: (t: ExplorerTabKey) => void
 }): React.JSX.Element {
-  const items: Array<{ key: 'workspace' | 'fs'; label: string }> = [
+  const items: Array<{ key: ExplorerTabKey; label: string }> = [
     { key: 'workspace', label: '工作区' },
-    { key: 'fs', label: '文件系统' }
+    { key: 'fs', label: '文件系统' },
+    { key: 'transfer', label: '传输' }
   ]
   return (
     <div className="flex shrink-0 items-center gap-1 px-2 pb-1.5 pt-1.5">

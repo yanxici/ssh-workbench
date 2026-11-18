@@ -46,6 +46,7 @@ fs.writeFileSync(
     'let n = 0',
     'exports.sessionManager = {',
     '  waitUntilReady: async () => {},',
+    '  list: () => [],',
     "  statusOf: () => 'connected',",
     '  isReconnecting: () => false,',
     '  getClient: () => ({ sftp: (cb) => { n += 1; cb(null, globalThis.__NEXT_SFTP__(n)) } })',
@@ -239,11 +240,15 @@ function makeChannel(opt) {
           stats.drops += 1
           stats.partialAtRecover.push(
             (() => {
-              try {
-                return fs.statSync(globalThis.__RESUME_LOCAL__).size
-              } catch {
-                return -1
+              // 下载改成先写 <名字>.part、完成才改名，所以断线瞬间半截内容在 .part 里
+              for (const p of [`${globalThis.__RESUME_LOCAL__}.part`, globalThis.__RESUME_LOCAL__]) {
+                try {
+                  return fs.statSync(p).size
+                } catch {
+                  // 试下一个
+                }
               }
+              return -1
             })()
           )
           w.dead = true

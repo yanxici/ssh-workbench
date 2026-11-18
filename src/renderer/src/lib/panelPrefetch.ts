@@ -26,6 +26,7 @@ export type PanelId =
   | 'firmware'
   | 'discovery'
   | 'backup'
+  | 'transfer'
 
 /** 每个面板的 loader。与 App.tsx 里的 lazy() 指向同一模块，避免两处漂移。 */
 const LOADERS: Record<PanelId, () => Promise<unknown>> = {
@@ -36,7 +37,8 @@ const LOADERS: Record<PanelId, () => Promise<unknown>> = {
   metrics: () => import('@/components/metrics/MetricsPanel'),
   firmware: () => import('@/components/firmware/FirmwarePanel'),
   discovery: () => import('@/components/discovery/DiscoveryPanel'),
-  backup: () => import('@/components/backup/BackupPanel')
+  backup: () => import('@/components/backup/BackupPanel'),
+  transfer: () => import('@/components/transfer/TransferPanel')
 }
 
 /** 已完成的 id：同步可读，供 Suspense 的 fallback 判断要不要起骨架 */

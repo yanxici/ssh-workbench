@@ -29,6 +29,7 @@ import {
   type TrzszSession,
   type TrzszState
 } from './trzszBridge'
+import { upsertRecord } from '../store/transferRecord'
 import { pickTrzszSaveDirectory, pickTrzszSendFiles } from './trzszDialogs'
 import { getSecret } from '../store/vault'
 import {
@@ -1323,6 +1324,21 @@ class SessionManager {
         recorder.appendOutput(record.id, text)
       },
       emitState: (state: TrzszState) => this.handlers?.onTrzszState?.(record.id, state),
+      /*
+       * 记录身份在这里补齐：桥接层不认识会话表（依赖方向反过来才是错），
+       * 而 connectionId / connectionName / target 只有 SessionRecord 有。
+       * 与 SFTP 侧一致：快照下来，之后会话关掉也不会变成「未知连接」。
+       */
+      recordTransfer: (rec) => {
+        void upsertRecord({
+          ...rec,
+          connectionId: record.connectionId,
+          connectionName: record.connectionName,
+          target: record.target,
+          // 回查实时进度用；身份仍是上面三个快照字段
+          sessionId: record.id
+        })
+      },
       pickSaveDirectory: pickTrzszSaveDirectory,
       pickSendFiles: pickTrzszSendFiles
     }

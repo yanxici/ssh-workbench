@@ -52,10 +52,32 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      # 门禁第一步：类型检查 + 全部 verify 脚本（41 项，含 ssh2 lab server 用例）。
+      # 门禁第一步：类型检查 + 全部 verify 脚本，含 ssh2 lab server 用例。
       # 单独成步而不是塞进 verify:prepackage：串在一个 command 里时，
-      # 失败只看到整条命令红了，不知道是类型错、还是某个 verify 挂了；
-      # 而且这一步不需要 Electron 窗口，比 e2e 快得多，单独失败时能少等很久。
+      # 失败只看到整条命令红了，不知道是类型错、还是某个 verify 挂了。
+      #
+      # 顺序硬要求：必须先 build，再跑 run-all-verify。
+      #
+      # run-all-verify 里有 16 个脚本会真起 Electron 走 CDP —— verify-xterm6、
+      # verify-webgl、verify-split-e2e、verify-tabmenu-e2e、verify-conn-phase、
+      # verify-design-tokens、verify-panel-switch、verify-resume-ui、
+      # verify-highlight-e2e、verify-notify-e2e、verify-trzsz-e2e、
+      # verify-theme-tw4、verify-experimental-flags、verify-tabbar-os、
+      # verify-tabmenu-os，以及读 out/renderer/assets 的 verify-icon-bundle。
+      # 它们加载的是 out/main/index.js；没有 out/ 时 electron 起一个空进程，
+      # 一律报 `FATAL Error: CDP 无可用页面目标`。
+      #
+      # 历史：build 原来排在 Verify 之后（为了让 e2e 有 out/），于是上面这 16 个
+      # 脚本在 CI 里从来没有一次通过过 —— v2.1.3 到 v2.1.8 六次 tag 推送全部
+      # 红在这一步，被读成「CI 环境跑不了 e2e」，实际只是顺序反了。
+      # 本地一直是绿的，因为本地工作区里早就有 out/。
+      #
+      # 编译产物后面 electron-builder 直接复用（yml 里 files 只收 out/**，
+      # 没有 beforeBuild 钩子），不会重复编译。
+      - name: Build (for CDP scripts)
+        shell: bash
+        run: npm run build
+
       - name: Verify (typecheck + all unit checks)
         shell: bash
         run: |
@@ -75,15 +97,8 @@ jobs:
         run: node scripts/verify-docs-sync.cjs
 
       # 门禁第二步：真起 Electron 走 CDP 的 UI 级 SFTP e2e（含上传文件夹/空目录/链接）。
-      #
-      # build 单独成步、不进重试：electron-builder 不会自己编译（yml 里没有
-      # beforeBuild 钩子，files 只收 out/**），所以 e2e 之前必须有一个 out/。
-      # 但把 build 放进 retry 的 command 里，第二次尝试会把编译整个重跑一遍 ——
-      # 编译是确定性的，重跑没有意义，只烧时间。
-      # 产物留在工作区，后面的 electron-builder 直接复用它，不会重复编译。
-      - name: Build (for e2e)
-        shell: bash
-        run: npm run build
+      # 复用上面那一步已经编好的 out/，这里不再重复 build。
+      # 放进 retry 只是因为 e2e 偶发抢不到窗口，不是因为编译不稳定。
 
       - name: Verify (UI e2e)
         uses: nick-fields/retry@v3
@@ -156,20 +171,16 @@ jobs:
             Write-Host "缺少发布产物，实际找到：$($assets -join ', ')" -ForegroundColor Red
             exit 1
           }
-          # Release 日志：从 CHANGELOG 现抽，抽不到直接失败。
+          # Release 日志：必须是仓库里的 release-notes-<tag>.md，缺了直接失败。
           # 历史问题：这里原本写的是 --notes "Release $tag"，CI 自动建 Release 时
           # 正文就一行 "Release v1.8.0"，完整日志没有出口 —— 用户装到新版，
           # Release 页面只有一行标题，等于没有更新说明。
           #
           # 不做「找不到就拿别的版本日志顶上」的回退：v1.7 的日志挂到 v1.8 的
           # Release 上，比空日志更误导。宁可红在这里，让人去补文件。
-          # 正文从 CHANGELOG.md 的 [<tag 去 v>] 段现抽（scripts/release-notes.cjs）。
-          # 仓库里不再有 release-notes-<tag>.md：一版一个文件堆在根目录，
-          # 内容与 CHANGELOG 重复，维护两份必然漂移。
-          $notesFile = "release-notes-$tag.generated.md"
-          node scripts/release-notes.cjs --version $($tag -replace '^v', '') --out $notesFile
+          $notesFile = "release-notes-$tag.md"
           if (-not (Test-Path $notesFile)) {
-            Write-Host "无法生成 $notesFile —— CHANGELOG 里没有这一版的条目，先写 CHANGELOG 再打 tag" -ForegroundColor Red
+            Write-Host "缺少 $notesFile —— 发版必须带日志，先写这个文件再打 tag" -ForegroundColor Red
             exit 1
           }
           $notesLen = (Get-Content $notesFile -Raw).Length

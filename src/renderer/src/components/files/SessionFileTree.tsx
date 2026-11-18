@@ -1,6 +1,7 @@
 import type * as React from 'react'
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { loadDir, peekDir } from '@/lib/dirCache'
+import { requestDirs } from '@/lib/dirLoader'
 import {
   ChevronDown,
   ChevronRight,
@@ -98,6 +99,8 @@ export function SessionFileTree({
   const [selected, setSelected] = useState<RemoteFile | null>(null)
   /** 手动重试计数（失败后点「重试」触发） */
   const [attempt, setAttempt] = useState(0)
+  /** 正在读目录的层级数：>0 时工具栏的刷新图标转起来（点击有反馈） */
+  const [loadingLevels, setLoadingLevels] = useState(0)
   /** 当前目录（顶部路径栏显示；双击目录时更新并同步终端 cd） */
   const [currentDir, setCurrentDir] = useState<string | null>(null)
   /** 上传前的目标目录确认框 */
@@ -127,6 +130,11 @@ export function SessionFileTree({
       cancelled = true
     }
   }, [sessionId, sessionStatus, attempt])
+
+  /** 层级上报的加载状态：计数而不是布尔，多层并发时不会被先返回的那层清掉 */
+  const bumpBusy = useCallback((busy: boolean): void => {
+    setLoadingLevels((n) => Math.max(0, n + (busy ? 1 : -1)))
+  }, [])
 
   /** 刷新：未就绪/出错时重跑初始化，否则整体重列目录 */
   const refresh = (): void => {
@@ -223,8 +231,13 @@ export function SessionFileTree({
         >
           <Download size={12} />
         </button>
-        <button className="btn-icon h-6 w-6" title="刷新" onClick={refresh}>
-          <RefreshCw size={12} />
+        <button
+          className="btn-icon h-6 w-6"
+          title={loadingLevels > 0 ? '正在刷新…' : '刷新'}
+          disabled={loadingLevels > 0}
+          onClick={refresh}
+        >
+          <RefreshCw size={12} className={cn(loadingLevels > 0 && 'animate-spin')} />
         </button>
         <button
           className="btn-icon h-6 w-6"
@@ -286,6 +299,7 @@ export function SessionFileTree({
             onOpenFile={(f) => void openEditor(sessionId, f.path)}
             onEnterDir={enterDir}
             onRefresh={bumpTree}
+            onBusy={bumpBusy}
             onUploadTo={(dir) => void beginUpload(dir)}
           />
         ) : (
@@ -317,6 +331,7 @@ function TreeLevel({
   onOpenFile,
   onEnterDir,
   onRefresh,
+  onBusy,
   onUploadTo
 }: {
   sessionId: string
@@ -330,6 +345,8 @@ function TreeLevel({
   onOpenFile: (f: RemoteFile) => void
   onEnterDir: (dir: string) => void
   onRefresh: () => void
+  /** 本层是否正在读目录（上层据此决定刷新图标转不转） */
+  onBusy: (busy: boolean) => void
   /** 打开上传目标目录确认框（dir 为该行的落点） */
   onUploadTo: (dir: string) => void
 }): React.JSX.Element {
@@ -343,6 +360,9 @@ function TreeLevel({
    * 用它和「普通挂载」区分：普通挂载吃缓存，写操作后必须绕过缓存。
    */
   const lastVersionRef = useRef(version)
+  /* 走 ref 而不是放进依赖：onBusy 每次渲染都是新函数，进依赖会让 effect 反复重跑 */
+  const onBusyRef = useRef(onBusy)
+  onBusyRef.current = onBusy
   // 初始展开状态：自动展开链中属于本层子目录的项
   const [openDirs, setOpenDirs] = useState<Set<string>>(
     () => new Set(autoExpand.filter((p) => remoteDirname(p) === path))
@@ -366,23 +386,43 @@ function TreeLevel({
     const { cached, fresh } = peekDir(sessionId, path)
     if (cached) {
       setFiles(cached.files)
-      setRefreshing(!fresh)
-      if (fresh) return
+      /*
+       * forceRefresh 必须无视新鲜期。
+       * 新鲜期是 30 秒，之前这里只看 fresh：刚展开过的目录点刷新，
+       * effect 什么都不做就 return —— 用户看到的就是「按钮按不下去」。
+       */
+      if (fresh && !forceRefresh) {
+        setRefreshing(false)
+        return
+      }
+      setRefreshing(true)
     } else {
       setRefreshing(true)
     }
 
+    // 让工具栏的刷新图标转起来：把本层的加载状态回报给上层
+    onBusyRef.current(true)
     void loadDir(
       sessionId,
       path,
-      () => call(window.api.sftp.list(sessionId, path), { silent: true }),
+      /*
+       * 走合批器而不是直接 list：一次刷新会把「根 + 所有已展开层级」
+       * 同时点着，各层直接 list 就是 N 条独立 IPC、N 次调度往返；
+       * requestDirs 在同一帧内把它们压成一条 listMany（主进程内并发 8 路）。
+       */
+      () =>
+        requestDirs(sessionId, [path]).then((r) => r.dirs[path] ?? null),
       // version 变化 = 外部要求强制刷新（上传、删除等写操作后）
       forceRefresh
-    ).then((list) => {
-      if (cancelled) return
-      if (list) setFiles(list)
-      setRefreshing(false)
-    })
+    )
+      .then((list) => {
+        if (cancelled) return
+        if (list) setFiles(list)
+      })
+      .finally(() => {
+        onBusyRef.current(false)
+        if (!cancelled) setRefreshing(false)
+      })
 
     return () => {
       cancelled = true
@@ -465,6 +505,7 @@ function TreeLevel({
               onOpenFile={onOpenFile}
               onEnterDir={onEnterDir}
               onRefresh={onRefresh}
+              onBusy={onBusy}
               onUploadTo={onUploadTo}
             />
           )}

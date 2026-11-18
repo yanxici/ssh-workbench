@@ -124,11 +124,29 @@ export const IPC = {
   /** 扫描待上传目录：文件数 / 总字节数 / 一级条目预览 */
   SFTP_SCAN_FOLDERS: 'sftp:scan-folders',
   SFTP_DOWNLOAD_DIALOG: 'sftp:download-dialog',
-  /** 本机「下载」文件夹路径（一键下载的落点） */
+  /** 当前下载落点（设置里的下载目录，失效时回退系统「下载」） */
   SFTP_DOWNLOADS_DIR: 'sftp:downloads-dir',
+  /** 选择下载目录（写进设置） */
+  SFTP_PICK_DOWNLOAD_DIR: 'sftp:pick-download-dir',
   SFTP_TRANSFER_PAUSE: 'sftp:transfer-pause',
   SFTP_TRANSFER_RESUME: 'sftp:transfer-resume',
   SFTP_TRANSFER_CANCEL: 'sftp:transfer-cancel',
+
+  /* ---------------- 传输记录（历史账本） ---------------- */
+  /** 列出全部传输记录（新的在前） */
+  TRANSFER_RECORD_LIST: 'transfer:record-list',
+  /** 渲染层回报一条记录（ZMODEM 跑在渲染进程，走这条通道） */
+  TRANSFER_RECORD_UPSERT: 'transfer:record-upsert',
+  /** 标记旧记录已被某条新记录重试过 */
+  TRANSFER_RECORD_RETRIED: 'transfer:record-retried',
+  /** 记录规模统计（总条数 / 带明细条数） */
+  TRANSFER_RECORD_STATS: 'transfer:record-stats',
+  /** 启动时清理僵尸 running 记录（也可以手动触发） */
+  TRANSFER_RECORD_SWEEP: 'transfer:record-sweep',
+  /** 在系统文件管理器中定位本机文件 */
+  TRANSFER_REVEAL: 'transfer:reveal',
+  /** 打开某个本机目录 */
+  TRANSFER_OPEN_DIR: 'transfer:open-dir',
 
   /* ---------------- ZMODEM 文件传输（sz / rz） ---------------- */
   ZM_PICK_FILES: 'zm:pick-files',
@@ -309,7 +327,15 @@ export const IPC = {
    * 进度条本身不走这条：它是普通终端文本（\r 原地重绘），
    * 混在会话数据里下发，回滚和搜索才有内容。这条只喂状态条。
    */
-  EVT_TRZSZ_STATE: 'evt:trzsz-state'
+  EVT_TRZSZ_STATE: 'evt:trzsz-state',
+  /**
+   * 传输记录已变更。
+   *
+   * 只发信号不发内容：面板收到就重拉列表。若广播整条记录，
+   * 渲染层就要维护一份与磁盘可能不同步的镜像，两套更新路径迟早打架。
+   * 主进程侧节流 300ms（见 transferRecord.RECORD_EMIT_MS）。
+   */
+  EVT_TRANSFER_RECORD_CHANGED: 'evt:transfer-record-changed'
 } as const
 
 export type IpcChannel = (typeof IPC)[keyof typeof IPC]

@@ -5,7 +5,76 @@ All notable changes to SSH Workbench will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [2.2.1] - 2026-11-17
+## [2.2.1] - 2026-11-18
+
+### Fixed（ZMODEM 传大文件时静默卡死）
+
+**问题**：sz 传 1MB 以上的文件，进度条走到某个位置就不动了，终端没有任何输出。根因在 `zmodem.js` 内部：收数据时 `this._input_buffer.push.apply(this._input_buffer, input)`，实参个数等于这一批的字节数；主进程按 8ms 合帧，一批几十万字节，`apply` 把调用栈撑爆成 `RangeError: Maximum call stack size exceeded`，而抛出点在事件回调里被吞掉，表现就是「安静地不动了」。修前实测 1MB 文件 122 秒，修后 33 秒。
+
+**做法**：喂给 sentry 之前按 `FEED_SLICE_BYTES = 16 * 1024` 切片（与库自己的 `MAX_CHUNK_LENGTH` 对齐），字节序列不变。
+
+另一条独立路径是静默超时：对端丢窗口、sz 被 kill、网关断流都不抛错，只表现为没有数据；而看门狗原来的时钟是「最后一次收到字节」，任何乱序帧、重复帧都能刷新它 —— 对端重发同一段、我们一个字节都没落盘，看门狗照样认为传输活着。改法：时钟改成「最后一次真正写进文件」（`lastProgressAt` 只在 `fileOffset` 推进时更新），静默超过阈值按 `fileOffset` 发 ZRPOS 续传，连续 3 次（`IDLE_RESUME_MAX`）没有新进展才判定对端退出。两处刻意的选择：`on_input` 里不再顺手清零计数（收到帧和落盘是两件事）；一个字节都没收到时仍然继续 arm（原实现在「等第一块数据」分支直接 return，此后这条传输再无超时保护）。
+
+**新增验证**：`scripts/verify-zmodem-renderer.cjs` 新增「重发假活」段 —— 喂只推进 tail 不推进 `fileOffset` 的帧，断言看门狗最终必须报错、ZRPOS 增量不超过 4 次、落盘长度不增长；旧实现下这一段会一直重发下去。89 + 88 项全绿。
+
+### Fixed（上传下载会静默留下不完整的文件）
+
+**问题**：三处。①直接用最终文件名写，传到一半断线、取消、进程被杀，远端留一个尺寸不对但名字正确的文件。②续传判据是「本地尺寸 ≤ 远端尺寸 + 尾部 64KB 指纹」，等长时 `while` 一次都不跑直接标 done —— 本地那份旧文件被当成已经下完。③上传侧 `pOpen(remotePath, pos > 0 ? 'r+' : 'w')` 静默覆盖已存在的目标，而下载侧早就有 `uniqueLocalPath` 生成「名字 (1).ext」。
+
+**做法**：本地与远端双向都先写 `<目标>.part`，写完整了再 rename；rename 撞到已存在路径时先 unlink 目标再 rename 一次，两次都失败就中止并保留 .part，不做原地写回退。三处细节：commit 之前必须显式关句柄（Windows 上句柄未释放时 rename 报 EBUSY）；取消时删 .part 而不是删目标名（目标名可能是上一次成功的结果）；放弃重试时保留 .part（那是唯一还能续的进度）。
+
+**新增验证**：`scripts/verify-sftp-resume.cjs` 的断线探测改为先看 `.part` 再回退最终名，`scripts/verify-transfer-progress.cjs` 的假 attrs 补 `isSymbolicLink`；两个脚本全绿，`verify-sftp-resume-e2e.cjs` 走真实 ssh2 链路重新验证续传（上传 5.3 MB/s、下载 5.4 MB/s）。
+
+### Fixed（打开再保存就把远端文件弄坏）
+
+**问题**：三处都会静默破坏文件。①`writeText`（编辑器保存、配置备份回写）原来是 `rename(path, path.bak)` 再 `writeFile(path)` 新建：rename 走的是链接本身，写回时新文件落到链接位置，符号链接变成普通文件、指向的目标一个字节都没变；同时 owner、`0600`、SELinux 上下文全部丢失。②`readText` 用 `buf.includes(0)` 判二进制后无条件 `toString('utf-8')`：GBK/GB18030 的中文配置文件读进来是一串替换字符，改一个字保存回去，中文注释全毁。③删目录用 `pStat` 判型，而 `stat` 跟随符号链接 —— 远端一个 `html -> /` 的链接，删 `~/html` 的结果是递归清空整站。
+
+**做法**：①改成复制备份 —— 原文件读出来存成 `.bak`，然后原地打开截断写，失败时用内存里那份原内容回写；代价是多一次完整读写（2MB 上限），换 inode 不变、权限不变、链接还是链接。②探测链 BOM（UTF-8 / UTF-16LE / UTF-16BE）→ 严格 UTF-8（`TextDecoder` + `fatal: true`）→ GB18030，编码随内容返回到编辑器并在保存时按同一编码写回，`iconv-lite` 本来就在依赖里。③改用 `lstat`，链接一律只 unlink、绝不进入。
+
+**新增验证**：`readText` 返回 `RemoteText { content, encoding }`，五个调用点（`ipc/sftp.ts`、`configBackup.ts` 三处、`sftpStore.openEditor/saveEditor`）跟着改，`tsc` node + web 双双 0 错误。
+
+### Fixed（文件面板刷新点了没反应）
+
+**问题**：树节点缓存 30 秒且 `if (fresh) return`，点刷新按钮命中缓存直接返回什么都不发；`list()` 里任何一次 readdir 失败都 `invalidate(sessionId)`，一个权限不足的子目录能让整个会话的缓存全部作废；`pReaddir` 没有超时，回调永不触发时列表永远转圈，看不出是慢还是死了。
+
+**做法**：刷新按钮绕过新鲜期强制重发并在途期间 disabled + `animate-spin`；`list()` 只在错误不是 SFTP 状态码（链路级错误）时才作废通道；`pReaddir` / `pStat` / `pLstat` / `pUnlink` / `pRename` / `pOpen` 六个原语统一套 15 秒 `META_TIMEOUT_MS`，超时文案刻意带「链路中断」四个字 —— `isRetryable` 认这个词，超时才能落进断线续传路径而不是判整条任务失败。
+
+**做法（第二轮，解决「有反应但慢」）**：三条根因叠在一起 —— ①刷新时 `setSubDirs(new Map())` 让第二个 effect 把所有已展开目录当成「待补」，一次刷新等于重拉整棵树，画面还先塌成加载中；②根目录走单独的 `sftp.list()`、已展开目录走合批 `requestDirs`，两套通道；③`loadDir` 的 force 分支跳过新鲜缓存却仍复用 `inflight` 里的旧 Promise，刷新期间再点一次转完圈显示旧数据。改法是：刷新只让缓存失效、保留旧数据先上屏；根目录与已展开目录合并成一条 `listMany`；`inflight` 加世代号，force 不搭旧请求且只让最后一次结果写缓存。最后再拆一层 —— 转圈时长等于「最慢那一批 readdir」（并发上限 8，超过就排队），所以根目录单独 await、已展开目录另发一批后台重验（必须落到下一个 tick，否则又被 `requestDirs` 合回同一条）。
+
+**新增验证**：新增 `scripts/verify-files-refresh.cjs`（20 项，逐条判「修复没落地时会红」）；`scripts/e2e-ui-sftp.cjs` 把原来那条恒真的「刷新后列表可用」换成两条真断言（远端造文件 → 点刷新 → 行出现；点击瞬间按钮 disabled 且带 spin），并新增 S15 sz 大文件接收，实测 20/20 PASS、用时 32.8s。刷新耗时用临时探针量过（lab SFTP + 双向 TCP 延迟代理 + CDP 点真按钮）：模拟 60ms RTT 下根目录刷新 561ms、已展开 12 层 578ms，差 <10ms；改造前同一套探针在 80ms 延迟下，已展开 3 层就超时 60 秒。
+
+### Added（传输记录面板）
+
+**问题**：传输状态只活在渲染进程内存里，关窗口即丢；目录任务失败时引擎把失败清单拼成一个字符串只取前三条，传 300 个文件失败 17 个，剩下 14 个永远查不到。
+
+**做法**：主进程做唯一写者，落 `transfer-records.json`（`src/main/store/transferRecord.ts` + `src/main/ipc/transferRecord.ts`）。六处刻意的取舍：
+
+- **只在入队与状态跃迁时写盘**，进度事件一律不落盘 —— 否则每 150ms 一次进度 tick 都要整份重写 JSON。
+- **崩溃留下的 running 记录在启动时改判 `interrupted`**（`sweepStale()`），面板上是黄色「已中断」、可重试；否则一条永远停在 40% 的记录会让人以为还在传。
+- **失败明细按错误消息聚合再存**：`Permission denied × 302` 一行，展开只列前 50 条路径，截断处写「还有 N 个未列出」；明细只保留在最近 200 条记录上，任务总数封顶 500 条 —— 行数挂钩的是「不同错误原因数」而不是文件数。为此引擎里 `failed` 从扁平字符串数组改成 `Array<{ path, message }>`，收尾抛新的 `TransferPartialError`，由 `enqueue` 的 catch 把全量明细挂到 `TransferProgressEvent.failures`。
+- **身份是快照，不 join 会话**：写入时把 connectionId / connectionName / target / 绝对路径一起存下来。sessionId 每次启动都是新的，用它 join 的结果是重启后所有记录都显示「未知会话」。
+- **三种定位按钮**按记录能不能定位分：有本机绝对路径（下载、ZMODEM 接收）直接在资源管理器里显示；只有远端路径（上传）→「在远端定位」，点开文件面板跳到那个目录，连接不在线则禁用；拿不到路径（trzsz 下载、ZMODEM 发送）→ 灰字「原始位置未记录」。
+- **行级订阅活任务**：进行中的行按 id 去 `sftpStore.transfers` 找活数字，但只让那一行订阅 —— 500 行整表订阅一个每 150ms 换引用的数组，等于让面板每秒重渲几十次；找不到（重启后、渲染层重载）显示「进行中 · 进度未知」。
+
+写入层收口在主进程：`TRANSFER_RECORD_LIST / UPSERT / RETRIED / STATS / SWEEP`、`TRANSFER_REVEAL`、`TRANSFER_OPEN_DIR` 七条 IPC，广播只发节流后的 `EVT_TRANSFER_RECORD_CHANGED` 信号（`RECORD_EMIT_MS = 300`）不发内容，面板收到即重拉列表。ZMODEM 侧把 `phase` 扩成 `canceled` 以区分「用户按停」与「真失败」，`ZM_PICK_FILES` 补返回原始路径；trzsz 侧在 `beginRecord` / `finishRecord` 记账并补 `unit: files`，面板按 unit 分叉渲染（字节型显示速度与 ETA，文件型显示「2 / 5 个文件」）。重试只复用已连接的会话、不自动重连，trzsz 与 ZMODEM 的重试按钮直接禁用（由对端发起，用 SFTP 参数重放只会把「协议不对」变成一条新的失败记录）。
+
+两个入口共用同一份数据：全宽面板从活动栏工具菜单进，日常更高频的位置是文件面板新增的第三个 Tab「传输」（`TransferTab.tsx`），两处用 `attachView()` 计数共享状态 —— 只要有一处开着，收到变更信号就重拉，都不开才停。另外补了「默认下载目录」设置项（`AppSettings.downloadDir` + `SFTP_PICK_DOWNLOAD_DIR`），空值回退系统「下载」，主进程在用时才校验绝对路径 + 存在 + 是目录，路径失效自动回退而不是让下载失败。
+
+**新增验证**：`tsc` node + web 0 错误、`eslint src` 0 问题；面板与侧栏两处 UI 已在真实 Electron 窗口里截图目视确认（运输记录列表、失败明细展开、下载目录行、设置分组）。
+
+### Added（远端路径校验）
+
+**问题**：本地有 `assertSafeName`，远端一个都没有 —— `remoteJoin` 只做字符串拼接，`..` 一路上去能走到根。
+
+**做法**：新增 `src/shared/remotePath.ts`：`assertSafeRemoteName` 拦空 / `/` / 控制字符，`assertRemotePath` 要求绝对路径并逐段拒 `..`；`MKDIR / DELETE / RENAME / CHMOD / READ / WRITE / UPLOAD / DOWNLOAD` 八个通道全部过一遍。刻意不复用 `pathGuard.ts`：那套按 Windows 规则写，会把 Linux 上完全合法的 `:` `?` `*` 一起拦掉。
+
+### Changed（重传跳过未变化文件 / 遍历上限 / 暂停让出并发位）
+
+- **目录重传跳过未变化文件**：大小相等且修改时间（秒级 `Math.floor`）相等就跳过，note 报「跳过 N 个未变化的文件」。默认开，上传目标对话框里有「强制全量重传」勾选框，`force` 从对话框一路透传到 `enqueue`。刻意不做 sha256 比对 —— 那比重新上传还慢。
+- **远端遍历加边界**：`walkRemote` 补 `visited` 集合、`MAX_WALK_DEPTH = 64`、`DOWNLOAD_FILE_LIMIT = 20000`（与上传侧 `UPLOAD_FILE_LIMIT` 共用）；符号链接默认跳过并报数。改前远端一个 bind mount 自引用或 `ln -s` 循环就能把本地进程走到内存耗尽。
+- **暂停让出并发位**：`MAX_CONCURRENT_TRANSFERS = 3`，而 `acquire` / `release` 原来只在 `enqueue` 时配对 —— 三个任务同时暂停，`checkpoint` 死等却仍占着槽位，队列永久卡死。改成 `ctl.holding` 记账，暂停时 `release()`、继续时经 `checkpoint` 里的 `ctl.acquire()` 重新排队。
+- **`scanFolders` 改工作池**：原来逐文件串行 `fs.stat`，2 万文件就是 2 万次磁盘往返；改成 `LIST_MANY_CONCURRENCY` 并发池。
+- **编辑器保存后刷新目录与文件树**：`saveEditor` 成功后补 `invalidateDir` + `bumpTree`（保存后大小与 mtime 都变了），`applyProgress` 的 done 分支补 `bumpTree`（否则侧栏文件树看不到新文件）。
 
 ### Changed（发版日志：仓库里那 20 个 `release-notes-v*.md` 全删）
 

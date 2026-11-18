@@ -10,6 +10,7 @@ import { registerSerialIpc } from './serial'
 import { registerSftpIpc } from './sftp'
 import { registerSettingsIpc } from './settings'
 import { registerTftpIpc } from './tftp'
+import { registerTransferRecordIpc } from './transferRecord'
 import { registerTrzszIpc } from './trzsz'
 import { registerWindowUpdateIpc } from './windowUpdate'
 import { registerZmodemIpc } from './zmodem'
@@ -35,6 +36,7 @@ export function registerAllIpc(): void {
   registerSftpIpc()
   registerZmodemIpc()
   registerTrzszIpc()
+  registerTransferRecordIpc()
   registerLocalFsIpc()
   registerDiagnosticsIpc()
   registerDeviceIpc()
