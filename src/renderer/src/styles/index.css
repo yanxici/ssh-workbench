@@ -34,6 +34,9 @@
      暗色主题反过来需要更深的投影才有层次，所以投影也走变量。 */
   --shadow-pop: 0 8px 24px -8px rgb(15 23 42 / 0.16), 0 2px 6px -2px rgb(15 23 42 / 0.1);
   --shadow-pop-lg: 0 16px 48px -12px rgb(15 23 42 / 0.2), 0 4px 10px -4px rgb(15 23 42 / 0.12);
+  /* 抬升投影：卡片悬停轻抬 1px 时用。比 --shadow-pop 更薄更近 ——
+     浮层是「弹出来盖住内容」，抬升只是「被指尖顶起」，投影重了就成了浮层。 */
+  --shadow-lift: 0 1px 2px rgb(15 23 42 / 0.06), 0 6px 16px -8px rgb(15 23 42 / 0.12);
 
   /* 设计 token（阶段 1）：动效时长 / 主缓动 / 语义尺寸。
      面板外壳（panel-shell）、左轨（rail-w）与行 token 都消费这几个变量，
@@ -70,6 +73,7 @@
 
   --shadow-pop: 0 8px 24px -8px rgb(15 23 42 / 0.16), 0 2px 6px -2px rgb(15 23 42 / 0.1);
   --shadow-pop-lg: 0 16px 48px -12px rgb(15 23 42 / 0.2), 0 4px 10px -4px rgb(15 23 42 / 0.12);
+  --shadow-lift: 0 1px 2px rgb(15 23 42 / 0.06), 0 6px 16px -8px rgb(15 23 42 / 0.12);
 
   color-scheme: light;
 }
@@ -96,6 +100,7 @@
 
   --shadow-pop: 0 10px 38px -10px rgb(0 0 0 / 0.55), 0 10px 20px -15px rgb(0 0 0 / 0.4);
   --shadow-pop-lg: 0 24px 64px -16px rgb(0 0 0 / 0.7), 0 8px 24px -12px rgb(0 0 0 / 0.5);
+  --shadow-lift: 0 1px 2px rgb(0 0 0 / 0.4), 0 8px 20px -10px rgb(0 0 0 / 0.6);
 
   color-scheme: dark;
 }
@@ -156,8 +161,10 @@
   /* ---------- 按钮 ---------- */
   .btn {
     @apply inline-flex h-7 shrink-0 items-center justify-center gap-1.5 rounded-md border border-edge
-      bg-raised px-2.5 text-xs font-medium text-ink-2 transition-colors duration-150
+      bg-raised px-2.5 text-xs font-medium text-ink-2
+      transition-[color,background-color,border-color,transform] duration-150
       hover:bg-hover hover:text-ink
+      active:scale-[0.97]
       disabled:pointer-events-none disabled:opacity-45;
   }
 
@@ -175,7 +182,8 @@
 
   .btn-icon {
     @apply inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-ink-3
-      transition-colors duration-150 hover:bg-hover hover:text-ink
+      transition-[color,background-color,transform] duration-150 hover:bg-hover hover:text-ink
+      active:scale-[0.94]
       disabled:pointer-events-none disabled:opacity-45;
   }
 
@@ -511,6 +519,115 @@
       background-color var(--duration-fast) var(--ease-out-expo),
       color var(--duration-fast) var(--ease-out-expo);
   }
+}
+
+/* ================================================================== *
+ *  动效
+ *
+ *  三条约束（踩过才知道）：
+ *   1. 抬升（位移 + 投影）只给「大片可点区域」：命令墙卡片、命令面板卡片。
+ *      全局按钮只做按压缩放 —— 一屏几十个按钮同时位移，整块界面都在抖。
+ *   2. 活动栏 / 标签栏有既成的几何禁令（见 ActivityBar.tsx、TabBar.tsx 注释），
+ *      那里只走颜色与透明度通道，不碰 transform / box-shadow。
+ *   3. 全部走加性通道（opacity / transform / 颜色）：不改宽高与定位，
+ *      不触发布局回流，也不跟虚拟滚动抢帧。
+ *
+ *  Tailwind 3 注记：按下缩放走的是 --tw-scale-* 合成的 transform，
+ *  所以按钮的过渡列只列 transform，没有 v4 那个独立的 scale 属性。
+ * ================================================================== */
+
+@keyframes wall-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* 卡片：悬停轻抬 1px + 小投影；按下回落并微缩（60ms 比抬升快，手感才「脆」） */
+.motion-lift {
+  transition:
+    transform 120ms cubic-bezier(0.16, 1, 0.3, 1),
+    box-shadow 120ms cubic-bezier(0.16, 1, 0.3, 1),
+    background-color 150ms linear,
+    border-color 150ms linear;
+}
+
+/* 选中卡不抬升：它已经靠底色 + 描边「贴住」了，再抬会和选中反馈互相抵消 */
+@media (hover: hover) {
+  .motion-lift:hover:not([data-active='true']) {
+    transform: translateY(-1px);
+    box-shadow: var(--shadow-lift);
+  }
+}
+
+.motion-lift:active {
+  transform: translateY(0) scale(0.98);
+  box-shadow: none;
+  transition-duration: 60ms;
+}
+
+/* 入场：整墙一次性淡入像「闪一下」，前 12 张错峰 12ms，之后同步收尾 */
+.motion-in {
+  animation: wall-in 180ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+/* 连接行 hover：左侧 2px 品牌条淡入。伪元素 + 绝对定位，零布局占用 */
+.conn-hint::before {
+  content: '';
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  left: 0;
+  width: 2px;
+  border-radius: 0 2px 2px 0;
+  background: rgb(var(--c-brand));
+  opacity: 0;
+  transition: opacity 120ms linear;
+  pointer-events: none;
+}
+
+.conn-hint:hover::before,
+.conn-hint:focus-visible::before {
+  opacity: 1;
+}
+
+/* chevron：同一个图标旋转，替代两个图标互切 —— 互切没有中间态，看起来是跳变。
+   Tailwind 3 的 rotate-90 是 --tw-rotate 合成出来的 transform，所以过渡列写 transform。 */
+.chev-rot {
+  transition: transform 150ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* 活动栏 hover：只淡入底色（组件注释明令不改 box-shadow、不做缩放）。
+   排除激活项：激活项底色是 bg-hover，再叠一层浅底会把它冲淡。 */
+.activity-item:not(.activity-item-active):hover {
+  background-color: rgb(var(--c-hover) / 0.6);
+}
+
+/* 关掉动效只有这一份规则：设置开关把 .motion-off 挂到 html 上，
+   系统「减少动态效果」也由 settingsStore 折算成同一个 class ——
+   两处各写一份 CSS，迟早只改到一边。
+
+   用通配而不是逐个类名：漏一个类就是「关掉之后还有个地方在动」，
+   而这种漏在验收时几乎看不出来（要逐屏逐交互去试）。
+   代价是连颜色过渡也一起停 —— 那正是「完全静止」该有的样子。 */
+.motion-off *,
+.motion-off *::before,
+.motion-off *::after {
+  transition: none !important;
+  animation: none !important;
+}
+
+/* 位移与投影必须显式归零：transition 关掉后，:hover / :active 里的
+   transform 与 box-shadow **仍然会瞬移到位**，等于把动画换成了跳变。 */
+.motion-off .motion-lift,
+.motion-off .motion-lift:hover,
+.motion-off .motion-lift:active {
+  transform: none !important;
+  box-shadow: none !important;
 }
 
 /* ================================================================== *

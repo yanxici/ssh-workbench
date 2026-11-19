@@ -25,8 +25,8 @@ const FALLBACK: AppSettings = {
   logTimestamp: true,
   dangerPatterns: ['rm -rf', 'mkfs', 'dd if=', 'shutdown', 'reboot', 'poweroff'],
   strictHostKey: true,
-  /* 与主进程 DEFAULT_SETTINGS 对齐：缺省全部关闭（旧视觉），终端用 DOM 渲染器 */
-  experimental: { tokens: {}, terminalRenderer: 'dom' }
+  /* 与主进程 DEFAULT_SETTINGS 对齐：缺省全部关闭（旧视觉），终端用 DOM 渲染器；动效缺省开启 */
+  experimental: { tokens: {}, terminalRenderer: 'dom', motion: true }
 }
 
 /** 按主题模式解析当前是否为暗色 */
@@ -63,6 +63,24 @@ function applyTheme(mode: ThemeMode, colorTheme: string | undefined): void {
   applyThemeVars(getThemeVariant(colorTheme, dark).vars)
 }
 
+/** 系统级「减少动态效果」偏好 */
+function prefersReducedMotion(): boolean {
+  return window.matchMedia('(prefers-reduced-motion: reduce)').matches
+}
+
+/**
+ * 动效总开关 → html 上的 .motion-off。
+ *
+ * 两个输入（应用内开关、系统偏好）折算成同一个类，而不是两套规则：
+ * 关动效只有一份 CSS（见 index.css 的 .motion-off），类在就全停。
+ * 系统偏好优先：它说减少，就减少，不管设置里勾了什么 —— 那是无障碍诉求，
+ * 不是审美偏好；反过来系统关掉后要能恢复，所以这里是「重算」而不是「只关」。
+ */
+function applyMotion(enabled: boolean | undefined): void {
+  const off = enabled === false || prefersReducedMotion()
+  document.documentElement.classList.toggle('motion-off', off)
+}
+
 let mediaBound = false
 
 interface SettingsState {
@@ -81,6 +99,7 @@ export const useSettingsStore = create<SettingsState>()((set) => ({
     const settings = s ?? FALLBACK
     set({ settings, loaded: true })
     applyTheme(settings.theme, settings.colorTheme)
+    applyMotion(settings.experimental?.motion)
     /*
      * 高亮规则在这里落地，而不是等到终端创建时再读：
      * 设置是全局的，规则变化必须对**已存在的**终端也立刻生效 ——
@@ -95,6 +114,10 @@ export const useSettingsStore = create<SettingsState>()((set) => ({
         const current = useSettingsStore.getState().settings
         if (current.theme === 'system') applyTheme('system', current.colorTheme)
       })
+      // 系统偏好变化时重算（不是只关）：用户可能在系统里关掉「减少动态效果」，此时要恢复
+      window.matchMedia('(prefers-reduced-motion: reduce)').addEventListener('change', () => {
+        applyMotion(useSettingsStore.getState().settings.experimental?.motion)
+      })
     }
   },
 
@@ -104,6 +127,7 @@ export const useSettingsStore = create<SettingsState>()((set) => ({
     if (next) {
       set({ settings: next })
       applyTheme(next.theme, next.colorTheme)
+      applyMotion(next.experimental?.motion)
       applyHighlightPrefs(next.outputHighlight)
     }
   }

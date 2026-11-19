@@ -70,5 +70,10 @@ botlog/
 robotlog-archive/
 boot-timing/
 
+# 压测/比对用的一次性产物（connections.json 快照、临时目录）
+.tmp-*/
+.tmp-*
+conn-before*.txt
+
 # git 拉取时 CRT/凭据助手留在仓库根的提示文件（内容是账号提示，绝不能入库）
 CON

@@ -65,6 +65,7 @@ export function CommandCard({
         draggable
         data-cmd-id={c.id}
         data-tone={tone}
+        data-active={active}
         onClick={onActivate}
         onContextMenu={onContextMenu}
         onMouseEnter={(e) => {
@@ -82,7 +83,7 @@ export function CommandCard({
            * 固定 40px 高：旧卡片是「图标行 + 命令行」上下两段，高 47~51px 且随名字长短跳动。
            * 两行 11px/1.3 的名字刚好 29px，加内边距 10 和边框 2 = 41，取整 40。
            */
-          'group relative flex h-10 min-w-0 flex-col items-stretch justify-center overflow-hidden rounded-md border border-l-2 px-2 py-1 text-left transition-colors duration-150',
+          'group relative flex h-10 min-w-0 flex-col items-stretch justify-center overflow-hidden rounded-md border border-l-2 px-2 py-1 text-left motion-lift motion-in',
           accentClass(tone),
           active ? 'border-accent/50 border-l-accent bg-select' : 'border-edge bg-app hover:bg-hover',
           dropTarget && 'border-accent/60',

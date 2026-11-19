@@ -1,6 +1,6 @@
 import type * as React from 'react'
 import { useState, type ReactNode } from 'react'
-import { ChevronDown, ChevronRight } from 'lucide-react'
+import { ChevronRight } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 /**
@@ -62,11 +62,8 @@ export function Section({
         onClick={toggle}
         title={open ? '收起该分组' : '展开该分组'}
       >
-        {open ? (
-          <ChevronDown size={12} className="shrink-0 text-ink-3" />
-        ) : (
-          <ChevronRight size={12} className="shrink-0 text-ink-3" />
-        )}
+        {/* 同一个图标旋转：两个图标互切没有中间态，展开/收起看起来是跳变 */}
+        <ChevronRight size={12} className={cn('chev-rot shrink-0 text-ink-3', open && 'rotate-90')} />
         <span className="text-2xs font-semibold uppercase tracking-wider text-ink-2">{title}</span>
         {hint && <span className="ml-1 truncate text-2xs text-ink-3/80">{hint}</span>}
       </button>

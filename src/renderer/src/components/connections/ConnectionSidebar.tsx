@@ -613,7 +613,10 @@ export function ConnectionSidebar({
                     style={{ background: groupColors[group] }}
                   />
                 )}
-                {isCollapsed ? <ChevronRight size={11} /> : <ChevronDown size={11} />}
+                <ChevronRight
+                  size={11}
+                  className={cn('chev-rot shrink-0', !isCollapsed && 'rotate-90')}
+                />
                 <span className="truncate">{group}</span>
                 <span className="font-mono font-normal text-ink-3/60">{items.length}</span>
               </button>
@@ -640,7 +643,7 @@ export function ConnectionSidebar({
                         tokensOn
                           ? 'conn-row-token group relative cursor-default rounded-md py-1 pl-2 pr-1'
                           : 'conn-row-cv group relative cursor-default rounded-md py-1.5 pl-2 pr-1 transition-colors duration-150',
-                        'focus-visible:bg-hover focus-visible:outline-none',
+                        'conn-hint focus-visible:bg-hover focus-visible:outline-none',
                         /*
                          * 选中态刻意做得很轻：只留一层浅描边 + 左侧细色条。
                          * 整块 bg-select 太抢眼，扫视列表时会被一块亮色一直牵着走，

@@ -5,7 +5,71 @@ All notable changes to SSH Workbench will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.3.0] - 2026-11-19
+
+<!-- release-notes:start -->
+### 这一版更新了什么
+
+- **按钮终于像按钮了**：命令中心的卡片悬停会轻抬 1px、浮起一层小投影，按下回落并微收 0.98（60ms，比抬起更快，手感才脆）；全站按钮按下统一压到 0.97。
+- **命令墙不再「闪一下」就位**：打开时前 12 张按 12ms 错峰淡入，第 13 张起同步收尾，总时长封顶 144ms。
+- **连接列表悬停有指向**：鼠标扫过时左侧淡入一条 2px 品牌色竖条，用绝对定位伪元素，虚拟行不会被挤动。
+- **分组箭头会转了**：折叠/展开从「两个图标互切」换成同一个图标旋转 90°。互切没有中间态，看起来就是跳变。
+- **设置里能一键静止**：设置 → 实验性 → 「界面动效」；系统开了「减少动态效果」时自动跟随，不用手动关第二次。
+- **界面语言留了口子**：外壳文案抽成一份字典（缺省仍是中文），以后加语言只动字典，不动组件。
+<!-- release-notes:end -->
+
+### Added（界面动效层 + 单一开关）
+
+**问题**：命令中心是 130 张等高卡片铺成的一片墙，悬停、按下全无反馈 —— 鼠标移上去没有任何变化，点下去也没有「被按到」的感觉。问题不在缺某一个动画，而在整站没有一层交互反馈：活动栏、标签页、连接行、分组箭头都只靠换颜色，跳变本身就让人怀疑点击有没有生效。
+
+**为什么只给这些地方加**：抬升只给「大片可点区域」（命令卡片、连接行）—— 全站按钮也给位移的话，屏幕上同时有十来个东西在动，反而更吵；按钮只给按下反馈，因为按下才是「我收到了」的确认。所以按钮系只有 `:active` 的缩放，不加 hover 位移。
+
+**做法**：`src/renderer/src/styles/index.css` 加三个共享类 —— `.motion-lift`（transform / box-shadow 120ms `cubic-bezier(0.16,1,0.3,1)`，底色与边框单独 150ms，`:active` 换成 `translateY(0) scale(0.98)` 并把 transition-duration 压到 60ms）、`.motion-in`（入场 `wall-in` 180ms `both`）、`.conn-hint::before`（左侧 2px 品牌条，`position:absolute` 零布局占用）。投影走新加的 `--shadow-lift`，三套主题各一份：默认与 `.light` 是 `0 1px 2px rgb(15 23 42 / 0.06), 0 6px 16px -8px rgb(15 23 42 / 0.12)`，`.dark` 换成深投影片 `0 1px 2px rgb(0 0 0 / 0.4), 0 8px 20px -10px rgb(0 0 0 / 0.6)`（浅色投影落在深底上等于没有）。
+
+**Tailwind 3 上必须用 transform 通道**：本项目仍是 Tailwind 3.4，`rotate-90`、`scale-[0.98]` 都是往 `transform` 里合成（v4 才有独立的 `rotate` / `scale` 属性）。所以 `.chev-rot` 的过渡写的是 `transition: transform 150ms`，写成 `transition: rotate` 的话过渡根本不会触发，箭头照样跳变 —— 这条差异在 `verify-motion.cjs` 里也是按 transform 断言的。同理 `.btn` 的 `@apply` 从 `transition-colors` 改成 `transition-[color,background-color,border-color,transform]` 才有按下缩放（`.btn-icon` 是 `transition-[color,background-color,transform]`），缩放档位分别是 `active:scale-[0.97]` 与 `active:scale-[0.94]`。
+
+**卡片错峰**：`CommandCenter.tsx` 按索引算 `animationDelay`：前 12 张 ×12ms，第 13 张起封顶 144ms。130 张全错峰会拖到 1.5 秒，还会撞 Ctrl+K 的耗时压测。分组 chevron 在 `ConnectionSidebar.tsx` 与 `sectionUi.tsx` 换成同一个 `ChevronRight` 加 `rotate-90`。
+
+**守住既有几何禁令**：`ActivityBar.tsx` 与 `TabBar.tsx` 里各有一段注释明确禁掉 box-shadow / transform（活动栏缩放会让 44px 图标跳动，标签栏位移会带着关闭按钮一起抖）。这两处换通道实现 —— 活动栏只淡入底色且排除激活项（`.activity-item:not(.activity-item-active):hover`，再叠一层浅底会把选中态冲淡），标签页关闭按钮未激活时 `opacity-0` + `group-hover:opacity-100`。
+
+**关停只有一条规则**：设置开关与系统「减少动态效果」都折算成 html 上的 `.motion-off` 一个 class（`settingsStore.ts` 的 `applyMotion` 在 load / 媒体查询变化 / 用户改设置三处调用）。`.motion-off *` 用通配关掉 transition 与 animation —— 逐个类名写清单，漏一个类就是「关掉之后还有个地方在动」，而这种漏在验收时几乎看不出来。位移与投影另外显式归零：transition 关掉后 `:hover` / `:active` 里的 transform 仍会瞬移到位，等于把动画换成跳变。
+
+**新增验证**：`scripts/verify-motion.cjs` 45 项，四层 —— 样式表 19 条（类是否存在、过渡通道、暗色档、通配关停）、组件 13 条（卡片是否带 `.motion-lift`、错峰上限、chevron 是否单图标旋转）、开关链路 6 条（settings 类型 → 主进程默认 → store 折算 → html class），最后 7 条走真实 Electron + CDP 读计算值。反证：`git stash` 掉改动重跑必红（`hasOffClass=false` 而 `mediaReduce=true`、`liftTransition='all'`、`--shadow-lift` 为空）。
+
+### Added（界面语言的基座）
+
+**问题**：外壳文案（设置面板、标题栏、对话框）全写死在组件里。等到真要加语言时，改动面是「所有组件」，不是「一份字典」—— 那时候翻译的人拿不到可审的清单，改的人也不知道漏了哪几处。
+
+**做法**：先只把结构立起来，不动任何组件的行为 —— `src/shared/types.ts` 加 `export type UiLanguage = 'zh-CN' | 'en'` 与 `AppSettings.language`（缺省中文：这工具主要用在现场，默认英文才是意外行为），`src/renderer/src/i18n/index.ts` 收一份只读字典与 `t()`，缺词时回退键名而不是抛错（少一句翻译不该让界面白屏）。组件接不接是下一版的事，这一版只保证「有地方放、有校验守住不倒退」。
+
+**新增验证**：`scripts/verify-i18n.cjs` 扫 `src/renderer/src` 下所有 `.ts/.tsx`，按「行含汉字且不以 `//`、`*`、`/*` 开头」计数，与本仓的 `scripts/i18n-baseline.json` 比：增了就该是「接入字典时把硬编码换成 key」，减了随便。基线 2111 行，`--update` 可重写。这条门禁只防「文案越加越散」，不假装能代替翻译。
+
+### Changed（隐私断言认得 Gitee 镜像）
+
+**问题**：`scripts/verify-privacy.cjs` 的出站主机白名单只有 `github.com` / `ghfast.top` / `gh-proxy.com`，而 `src/main/updater.ts` 里 `MIRROR_PAGE` 指向 `gitee.com`——断言会红，红得像「应用偷偷连了第三方」。
+
+**做法**：把 `gitee.com` 加进白名单并写清理由：它只是「打不开 GitHub？用镜像」按钮背后的地址，由系统浏览器打开，应用自身不发起请求。白名单是「允许出现的字面量清单」，不是「应用会连的主机清单」，两者的差别得在注释里说死。
+
+### Changed（Release 正文改成现抽短摘要块）
+
+**问题**：Release 页面原来直接从 CHANGELOG 抽整段 —— 那是工程记录（根因、文件路径、验证项），用户点开看到的第一屏是排查过程。
+
+**做法**：`scripts/release-notes.cjs` 优先取 `<!-- release-notes:start -->` / `end` 之间的短摘要，没有标记块时退回整段（旧版本条目没写标记，也不能因此发不出 Release）；配对缺失直接 exit 1。顺带给 2.2.1 补了短摘要块，口径与后续版本一致。
+
+---
+
 ## [2.2.1] - 2026-11-18
+
+<!-- release-notes:start -->
+### 这一版更新了什么
+
+- **传大文件不再半路卡死**：ZMODEM 传 1MB 以上文件时进度条停住不动的问题已修复，实测 1MB 从 122 秒降到 33 秒。
+- **不会再留下半截文件**：上传下载改成先写临时文件、传完才落到正式名字；断线、取消、进程被杀都不会再出现「名字对、内容不全」的文件。
+- **打开再保存不会弄坏远端文件**：符号链接还是链接、权限不变，GBK/GB18030 中文文件不再变乱码，删目录也不会被符号链接带进整站。
+- **文件面板的刷新真的刷新了**：命中缓存也会强制重发，链路慢或断了会在 15 秒内给可读提示，不再无限转圈。
+- **新增「传输记录」面板**：每个文件的进度和失败原因都能看到，不再只有一句「例如前三条」的摘要；下载目录可以自己设。
+- **远端路径加了安全校验**：带 `..` 之类的路径会被拒绝。
+<!-- release-notes:end -->
 
 ### Fixed（ZMODEM 传大文件时静默卡死）
 

@@ -454,10 +454,16 @@ export function TabBar(): React.JSX.Element {
 
               <button
                 className={cn(
-                  'flex h-4 w-4 shrink-0 items-center justify-center rounded transition-colors duration-150',
+                  'flex h-4 w-4 shrink-0 items-center justify-center rounded transition-[color,background-color,opacity] duration-150',
                   isActive
                     ? 'text-ink-3 hover:bg-hover hover:text-ink'
-                    : 'text-on-brand/70 hover:bg-on-brand/20 hover:text-on-brand'
+                    : /*
+                       * 未激活标签的关闭按钮常驻会把整条标签栏点亮成一排 ×。
+                       * 靠透明度淡入而不是挂载/卸载：hover 穿进穿出时不会闪，
+                       * 也保留了 focus-visible 路径（键盘用户不需要 hover 也能看到它）。
+                       * 只用 opacity，不用 transform —— TabBar 有几何禁令（见文件头注释）。
+                       */
+                      'text-on-brand/70 opacity-0 group-hover:opacity-100 hover:bg-on-brand/20 hover:text-on-brand focus-visible:opacity-100'
                 )}
                 title={paneCount(s.id) > 1 ? '关闭此分屏' : '关闭标签'}
                 onClick={(e) => {

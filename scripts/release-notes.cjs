@@ -46,15 +46,41 @@ if (start < 0) {
 
 let end = lines.length
 for (let i = start + 1; i < lines.length; i++) {
-  if (/^##\s/.test(lines[i])) {
+  // 段落到下一个 ## 标题、或文末的链接定义块（[x]: url）为止
+  if (/^##\s/.test(lines[i]) || /^\[[^\]]+\]:\s/.test(lines[i])) {
     end = i
     break
   }
 }
 
+const section = lines.slice(start + 1, end)
+
+/**
+ * 短摘要块：发版页面上用户真正要看的那几句。
+ *
+ * CHANGELOG 的详细条目是工程记录（根因、文件路径、验证项），一屏读不完；Release
+ * 页面拿整段的话，用户看到的第一屏是排查过程。所以两者分开放：正文留在仓库，
+ * 标记块进 Release。没有标记块时退回整段 —— 旧版本条目没写标记，也不能因此
+ * 发不出 Release。
+ */
+const MARK_START = '<!-- release-notes:start -->'
+const MARK_END = '<!-- release-notes:end -->'
+const markAt = section.findIndex((l) => l.trim() === MARK_START)
+let marked = false
+let body = section.join('\n').trim()
+if (markAt >= 0) {
+  const markEnd = section.findIndex((l, i) => i > markAt && l.trim() === MARK_END)
+  if (markEnd < 0) {
+    console.error('CHANGELOG.md [' + version + '] 的 release-notes:start 没有配对的 end')
+    process.exit(1)
+  }
+  body = section.slice(markAt + 1, markEnd).join('\n').trim()
+  marked = true
+}
+
 const dateMatch = /-\s*(\d{4}-\d{2}-\d{2})/.exec(lines[start])
 const header = '# SSH Workbench v' + version + (dateMatch ? '（' + dateMatch[1] + '）' : '')
-const text = header + '\n\n' + lines.slice(start + 1, end).join('\n').trim() + '\n'
+const text = header + '\n\n' + body + '\n'
 
 const chars = [...text].length
 if (chars < MIN_CHARS) {
@@ -64,7 +90,10 @@ if (chars < MIN_CHARS) {
 
 if (args.out) {
   fs.writeFileSync(args.out, text, 'utf8')
-  console.log('Release 正文已生成：' + args.out + '（' + chars + ' 字符，取自 CHANGELOG [' + version + ']）')
+  console.log(
+    'Release 正文已生成：' + args.out + '（' + chars + ' 字符，取自 CHANGELOG [' + version + ']' +
+      (marked ? ' 的短摘要块）' : ' 的整段 —— 本版没有 release-notes 标记块）')
+  )
 } else {
   process.stdout.write(text)
 }

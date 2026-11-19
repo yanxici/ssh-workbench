@@ -380,7 +380,7 @@ export function CommandCenter({
                     {showSep && <div className="my-1 h-px bg-edge-soft" />}
                     <button
                       className={cn(
-                        'group relative flex w-full items-center gap-1.5 rounded-md px-1.5 py-1 text-left text-xs transition-colors duration-150',
+                        'group relative flex w-full items-center gap-1.5 rounded-md px-1.5 py-1 text-left text-xs transition-[color,background-color,transform] duration-150 active:scale-[0.98]',
                         selected ? 'bg-hover text-ink' : 'text-ink-2 hover:bg-hover hover:text-ink',
                         // 层级分组缩进
                         entry.depth > 0 && 'pl-4'
@@ -415,7 +415,7 @@ export function CommandCenter({
               })}
               <div className="mt-auto pt-1.5">
                 <button
-                  className="flex w-full items-center gap-1.5 rounded-md px-1.5 py-1 text-xs text-ink-3 transition-colors duration-150 hover:bg-hover hover:text-ink"
+                  className="flex w-full items-center gap-1.5 rounded-md px-1.5 py-1 text-xs text-ink-3 transition-[color,background-color,transform] duration-150 hover:bg-hover hover:text-ink active:scale-[0.98]"
                   onClick={() => {
                     onEdit(null, scope.kind === 'group' ? scope.group : undefined)
                     close()
@@ -464,12 +464,18 @@ export function CommandCenter({
                           const i = resultIndexById.get(c.id) ?? -1
                           const selected = i === cursor
                           const pinned = pinnedIds.includes(c.id)
+                          /*
+                           * 错峰只在头 12 张上撒，之后统一 144ms。
+                           * 一屏 126 个卡片逐个错峰会让「入场」拖到两秒多，像卡了；
+                           * 而完全同帧出现又像整块闪一下。前一行先起，其余跟上即可。
+                           */
+                          const delay = i >= 0 && i < 12 ? i * 12 : 144
                           return (
                             <div
                               key={c.id}
                               data-active={selected}
                               className={cn(
-                                'group relative flex min-w-0 cursor-default flex-col gap-1 rounded-lg border px-2 py-1.5 transition-colors duration-150',
+                                'group relative flex min-w-0 cursor-default flex-col gap-1 rounded-lg border px-2 py-1.5 motion-lift motion-in',
                                 /*
                                  * 浅色外壳里卡片要「白底 + 实边框」才浮得起来。
                                  * 之前是 bg-raised（#fafafa）压在 bg-panel（#f8f9fa）上，
@@ -480,6 +486,7 @@ export function CommandCenter({
                                   ? 'border-accent/50 bg-select'
                                   : 'border-edge bg-app hover:bg-hover'
                               )}
+                              style={{ animationDelay: `${delay}ms` }}
                               onMouseEnter={() => i >= 0 && setCursor(i)}
                               onClick={() => {
                                 runCommand(c)

@@ -86,7 +86,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
    * 缺省值写在这里而不是渲染层 FALLBACK：主进程是 settings.json 的唯一写入方，
    * 两边各写一份必然漂移（阶段 0 审计里就有 FALLBACK 与 DEFAULT_SETTINGS 不一致的先例）。
    */
-  experimental: { tokens: {}, terminalRenderer: 'dom' },
+  experimental: { tokens: {}, terminalRenderer: 'dom', motion: true },
   commandPanelPosition: 'right',
   latencyProbe: true,
   autoLog: true,

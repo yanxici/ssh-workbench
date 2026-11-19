@@ -406,7 +406,18 @@ export interface OutputHighlightPrefs {
   rules: HighlightRule[]
 }
 
+/**
+ * 界面语言。新增语言时同步 src/renderer/src/i18n/index.ts 的 DICTS。
+ *
+ * 只覆盖**外壳文案**（设置面板、标题栏、对话框标题）；终端里的内容永远是
+ * 远端程序的输出，与这里无关。缺省中文 —— 这个工具的主要使用场景是
+ * 国内现场，默认英文才是意外行为。
+ */
+export type UiLanguage = 'zh-CN' | 'en'
+
 export interface AppSettings {
+  /** 界面语言，缺省 zh-CN */
+  language?: UiLanguage
   theme: ThemeMode
   /** 配色主题（缺省为 vscode，即浅色 VS Code 规范配色） */
   colorTheme?: ColorThemeId
@@ -526,6 +537,15 @@ export interface AppSettings {
 export interface ExperimentalFlags {
   /** 各面板的设计 token 灰度开关；true 表示该面板使用新 token */
   tokens?: Partial<Record<TokenPanel, boolean>>
+  /**
+   * 界面动效总开关（缺省视为开）。
+   *
+   * 为什么是一个总开关、而不是按面板拆：动效只有一套 CSS（index.css 的
+   * .motion-lift / .motion-in / .chev-rot），拆成面板级会变成「某几处还在动、
+   * 某几处不动」的拼贴感；而用户关它的动机通常是「机器卡」或「看着晃眼」，
+   * 那是全局判断，不是逐面板判断。系统级 prefers-reduced-motion 折算到同一个类上。
+   */
+  motion?: boolean
   /**
    * 强制软件渲染（关闭 GPU 加速）。
    *

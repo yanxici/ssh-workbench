@@ -136,7 +136,9 @@ async function main() {
    * 本仓 Tailwind 3 按需生成不会产出这两条规则，拿它们当探针只会测到空气。
    */
   const rowOff = await p.evaluate(`(() => { const el = document.createElement('div'); el.className = 'file-row-cv group flex cursor-default items-center gap-1 py-[3px] pr-2 text-xs transition-colors duration-150'; el.textContent = 'file.txt'; document.body.appendChild(el); const cs = getComputedStyle(el); const r = { pad: cs.paddingTop, h: +el.getBoundingClientRect().height.toFixed(2) }; el.remove(); return r })()`)
-  const rowOn = await p.evaluate(`(() => { const wrap = document.createElement('div'); wrap.style.height = '24px'; const el = document.createElement('div'); el.className = 'flex h-full cursor-default items-center gap-2 rounded px-2 text-xs file-row-token-inner'; el.textContent = 'file.txt'; wrap.appendChild(el); document.body.appendChild(wrap); const cs = getComputedStyle(el); const r = { pad: cs.paddingTop, h: +wrap.getBoundingClientRect().height.toFixed(2), innerH: +el.getBoundingClientRect().height.toFixed(2), dur: cs.transitionDuration }; wrap.remove(); return r })()`)
+  /* 探针前先摘掉 .motion-off：本机开了「减少动态效果」时这条通配规则会把所有过渡
+     归零，读回的 0s 就成了「动效被关掉」而不是「token 没接上」，断言也就失去区分度。 */
+  const rowOn = await p.evaluate(`(() => { const html = document.documentElement; const off = html.classList.contains('motion-off'); if (off) html.classList.remove('motion-off'); const wrap = document.createElement('div'); wrap.style.height = '24px'; const el = document.createElement('div'); el.className = 'flex h-full cursor-default items-center gap-2 rounded px-2 text-xs file-row-token-inner'; el.textContent = 'file.txt'; wrap.appendChild(el); document.body.appendChild(wrap); const cs = getComputedStyle(el); const r = { pad: cs.paddingTop, h: +wrap.getBoundingClientRect().height.toFixed(2), innerH: +el.getBoundingClientRect().height.toFixed(2), dur: cs.transitionDuration }; wrap.remove(); if (off) html.classList.add('motion-off'); return r })()`)
   console.log('  文件行实测: 旧 ' + JSON.stringify(rowOff) + '  新 ' + JSON.stringify(rowOn))
   check('flag 关闭：文件行是旧口径（py-[3px]，盒高 28px）', rowOff.pad === '3px' && rowOff.h === 28, rowOff)
   check('flag 开启：文件行交给虚拟化 24px，行内不再有纵向内距', rowOn.h === 24 && rowOn.innerH === 24 && rowOn.pad === '0px', rowOn)
@@ -146,8 +148,13 @@ async function main() {
   check('文件行 token 类的过渡吃到 --duration-fast（0.12s）', rowOn.dur === '0.12s', rowOn.dur)
 
   const conn = await p.evaluate(`(() => {
+    const html = document.documentElement
+    const off = html.classList.contains('motion-off')
+    if (off) html.classList.remove('motion-off')
     const probe = (cls) => { const el = document.createElement('div'); el.className = cls; el.textContent = 'conn'; document.body.appendChild(el); const cs = getComputedStyle(el); const r = { pad: cs.paddingTop, dur: cs.transitionDuration, ease: cs.transitionTimingFunction }; el.remove(); return r }
-    return { on: probe('conn-row-token group relative cursor-default rounded-md py-1 pl-2 pr-1'), off: probe('conn-row-cv group relative cursor-default rounded-md py-1.5 pl-2 pr-1') }
+    const out = { on: probe('conn-row-token group relative cursor-default rounded-md py-1 pl-2 pr-1'), off: probe('conn-row-cv group relative cursor-default rounded-md py-1.5 pl-2 pr-1') }
+    if (off) html.classList.add('motion-off')
+    return out
   })()`)
   console.log('  连接行实测: ' + JSON.stringify(conn))
   check('连接行 token 内距 4px（旧 6px）', conn.on.pad === '4px' && conn.off.pad === '6px', conn)

@@ -28,6 +28,9 @@ export function ExperimentalSection(): React.JSX.Element {
     void update({ experimental: { tokens: { ...tokens, [id]: on } } })
   }
   const anyOn = PANELS.some((p) => tokens[p.id] === true)
+  // 系统「减少动态效果」优先于应用开关（settingsStore.applyMotion 用同一判据）。
+  // 把生效状态摆到界面上，避免开关看着是开、界面却完全静止时被当成坏了。
+  const systemReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches
 
   return (
     <>
@@ -36,6 +39,15 @@ export function ExperimentalSection(): React.JSX.Element {
           <Toggle checked={tokens[p.id] === true} onChange={(on) => setOne(p.id, on)} />
         </Row>
       ))}
+      <Row
+        label="界面动效"
+        hint={`卡片悬停抬升、按钮按下回弹、折叠箭头旋转。关闭后过渡与动画立即停用；系统开启「减少动态效果」时同样会关闭${systemReduced ? '（当前系统已开启「减少动态效果」，动效实际处于关闭状态）' : ''}`}
+      >
+        <Toggle
+          checked={settings.experimental?.motion !== false}
+          onChange={(on) => void update({ experimental: { ...settings.experimental, motion: on } })}
+        />
+      </Row>
       <Row
         label="终端渲染后端"
         hint="DOM 为默认（字形与旧版一致）。WebGL 更省 CPU；挂载前会自检字形是否按配置光栅化，不成立自动回落 DOM"
