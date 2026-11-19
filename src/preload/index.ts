@@ -288,6 +288,13 @@ export const api = {
       invoke(IPC.ERR_REPORT, input)
   },
 
+  /** 一键诊断包：应用信息 + 错误日志 + 设置 + 启动日志打成 zip（给研发排障） */
+  support: {
+    exportBundle: (): Promise<
+      IpcResult<{ canceled: true } | { canceled: false; path: string; bytes: number }>
+    > => invoke(IPC.SUPPORT_BUNDLE)
+  },
+
   sftp: {
     list: (sessionId: string, path: string): Promise<IpcResult<RemoteFile[]>> =>
       invoke(IPC.SFTP_LIST, sessionId, path),
@@ -636,7 +643,8 @@ export const api = {
     /** 「稍后」：本会话内收起提示，不安装 */
     later: (): Promise<IpcResult<UpdateStatus>> => invoke(IPC.UPDATE_INSTALL, { later: true }),
     /** 打开发布页（想手动下载时） */
-    openRelease: (): Promise<IpcResult<void>> => invoke(IPC.UPDATE_OPEN_RELEASE)
+    openRelease: (): Promise<IpcResult<void>> => invoke(IPC.UPDATE_OPEN_RELEASE),
+    openMirror: (): Promise<IpcResult<void>> => invoke(IPC.UPDATE_OPEN_MIRROR)
   },
 
   on: {

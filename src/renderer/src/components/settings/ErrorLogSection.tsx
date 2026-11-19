@@ -1,6 +1,6 @@
 import type * as React from 'react'
 import { useEffect, useMemo, useState } from 'react'
-import { AlertTriangle, Copy, FileDown, RefreshCw, Search, Trash2, X } from 'lucide-react'
+import { AlertTriangle, Copy, FileDown, Package, RefreshCw, Search, Trash2, X } from 'lucide-react'
 import type { ErrorEntry } from '@shared/types'
 import { call } from '@/lib/ipc'
 import { useToastStore } from '@/stores/toastStore'
@@ -128,6 +128,27 @@ export function ErrorLogSection(): React.JSX.Element {
         >
           <FileDown size={12} />
         </button>
+        {/*
+          诊断包：不依赖具体会话，连不上 / 闪退 / 更新失败都能导。
+          与「导出错误日志」的分工是这个多带了版本、系统、设置、启动日志。
+        */}
+        <button
+          className="btn-icon h-7 w-7"
+          title="导出诊断包（应用信息 + 错误日志 + 设置 + 启动日志）"
+          onClick={() => {
+            void call(window.api.support.exportBundle(), { errorTitle: '导出失败' }).then((res) => {
+              if (res && res.canceled === false) {
+                useToastStore.getState().push({
+                  kind: 'success',
+                  title: '诊断包已导出',
+                  detail: res.path
+                })
+              }
+            })
+          }}
+        >
+          <Package size={12} />
+        </button>
         <button
           className="btn-icon h-7 w-7 hover:text-danger"
           title="清空全部错误日志"
@@ -145,7 +166,7 @@ export function ErrorLogSection(): React.JSX.Element {
 
       <div className="text-3xs text-ink-3">
         {entries.length === 0
-          ? '暂无错误记录。出现异常时这里会自动收集，可直接导出反馈。'
+          ? '暂无错误记录。出现异常时这里会自动收集；要反馈问题点右侧「诊断包」图标，连版本和环境一起打包。'
           : `${filtered.length} 类 / 累计 ${totalCount} 次` +
             (keyword ? `（已按「${keyword}」筛选）` : '')}
       </div>

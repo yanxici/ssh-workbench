@@ -1,5 +1,7 @@
 appId: com.sshworkbench.app
 productName: SSH Workbench
+# 安装包与 exe 文件属性里的版权行；许可证正文在仓库根 LICENSE（MIT）。
+copyright: Copyright © 2026 yanxici
 # 发布目标：GitHub Releases。
 #
 # 这段是应用内自动更新的元数据来源 —— electron-builder 会据此在打包时生成

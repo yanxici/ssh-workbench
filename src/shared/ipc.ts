@@ -190,6 +190,11 @@ export const IPC = {
   ERR_EXPORT: 'err:export',
   /** 渲染层把自身异常上报给主进程（窗口崩溃、React 错误等） */
   ERR_REPORT: 'err:report',
+  /**
+   * 一键诊断包：应用与运行环境 + 错误日志 + 设置（敏感字段已剔除）+ 启动日志，
+   * 打成一个 zip 交给研发。不联网、不自动上传 —— 用户主动点才产出。
+   */
+  SUPPORT_BUNDLE: 'support:bundle',
 
   /* ---------------- 自动重连 ---------------- */
   /**
@@ -288,6 +293,8 @@ export const IPC = {
   UPDATE_INSTALL: 'update:install',
   /** 打开发布页（用户想手动下载/看更新说明时） */
   UPDATE_OPEN_RELEASE: 'update:open-release',
+  /** 打开国内镜像发布页（Gitee）。与上一条同属兜底，不改自动更新源 */
+  UPDATE_OPEN_MIRROR: 'update:open-mirror',
 
   /* ---------------- 主进程 -> 渲染进程 事件 ---------------- */
   /** 更新状态机变化（检查中/有新版/下载进度/待重启安装/失败） */

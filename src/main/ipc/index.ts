@@ -9,6 +9,7 @@ import { registerSessionIpc } from './sessions'
 import { registerSerialIpc } from './serial'
 import { registerSftpIpc } from './sftp'
 import { registerSettingsIpc } from './settings'
+import { registerSupportIpc } from './support'
 import { registerTftpIpc } from './tftp'
 import { registerTransferRecordIpc } from './transferRecord'
 import { registerTrzszIpc } from './trzsz'
@@ -33,6 +34,7 @@ export function registerAllIpc(): void {
   registerTftpIpc()
   registerCommandIpc()
   registerSettingsIpc()
+  registerSupportIpc()
   registerSftpIpc()
   registerZmodemIpc()
   registerTrzszIpc()

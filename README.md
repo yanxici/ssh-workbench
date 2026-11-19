@@ -4,6 +4,33 @@ English | [简体中文](./README.zh-CN.md)
 
 A lightweight desktop SSH client with a built-in workbench for embedded-device technical support. Built with Electron, React and TypeScript.
 
+![SSH Workbench overview](docs/ui/overview.png)
+
+## Download & install
+
+Windows 10/11 (x64) only. Pick one of the three packages — **use the [Gitee mirror](https://gitee.com/w3554334905/ssh-workbench/releases) from mainland China**, [GitHub Releases](https://github.com/yanxici/ssh-workbench/releases) everywhere else. Same files, same version:
+
+| Package | File name | Best for |
+| --- | --- | --- |
+| Installer (recommended) | `ssh-workbench-Setup-2.2.1.exe` | Installs into the system, supports in-app auto-update |
+| Portable | `ssh-workbench-2.2.1.exe` | Run from a USB stick / jump host, writes no registry keys |
+| Zip bundle | `ssh-workbench-2.2.1-win.zip` | Unzip and run; easiest to mirror onto an internal share |
+
+- Always latest: <https://github.com/yanxici/ssh-workbench/releases/latest>
+- Pinned: <https://github.com/yanxici/ssh-workbench/releases/tag/v2.2.1>
+- Integrity: `latest.yml` in the same release carries the sha512 of each artifact.
+
+**Mainland China**
+
+1. Primary: <https://gitee.com/w3554334905/ssh-workbench/releases> — mirrored in sync with GitHub, no proxy needed.
+2. Pinned: `https://gitee.com/w3554334905/ssh-workbench/releases/download/v2.2.1/` + the file name above.
+3. GitHub + proxy prefix (third-party relay, availability not guaranteed): `https://ghproxy.net/https://github.com/yanxici/ssh-workbench/releases/download/v2.2.1/` + file name.
+4. Internal mirror (most reliable): copy `ssh-workbench-2.2.1-win.zip` to a company share or artifact store and link it here — `<internal mirror URL>`.
+
+> The in-app updater still talks to GitHub Releases only (delta updates need a fixed `latest.yml` feed, which a mirror does not provide). If GitHub is unreachable, use Settings → Software update → "Download from Gitee" and install once by hand; config files are untouched.
+
+> UI language: the interface is Simplified Chinese only — there is no i18n layer yet. In-app updates only talk to GitHub Releases.
+
 ## Features
 
 **Connections & terminal**
@@ -146,3 +173,7 @@ Recent updates:
 - Auto-reconnect on connection drop
 - Performance optimization for large connection lists (2900+ connections tested)
 - Connection group management (create, rename, delete, drag-to-reorder)
+
+## License
+
+MIT © 2026 yanxici. Full text in [LICENSE](./LICENSE).

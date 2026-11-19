@@ -23,6 +23,7 @@ export function UpdateSection(): React.JSX.Element {
   const download = useUpdateStore((s) => s.download)
   const install = useUpdateStore((s) => s.install)
   const openRelease = useUpdateStore((s) => s.openRelease)
+  const openMirror = useUpdateStore((s) => s.openMirror)
 
   const [proxyDraft, setProxyDraft] = useState<string | null>(null)
   const prefs: UpdatePrefs = settings.update ?? {}
@@ -116,6 +117,15 @@ export function UpdateSection(): React.JSX.Element {
           <button className="btn-ghost h-6 gap-1 px-2 text-2xs" onClick={() => void openRelease()}>
             <ExternalLink size={11} />
             打开发布页
+          </button>
+          {/* GitHub 在国内经常连不上，给一条能真下到包的替代入口 */}
+          <button
+            className="btn-ghost h-6 gap-1 px-2 text-2xs"
+            title="国内镜像（Gitee）：GitHub 拉不动时从这里手动下载"
+            onClick={() => void openMirror()}
+          >
+            <Download size={11} />
+            从 Gitee 下载
           </button>
         </div>
       </div>

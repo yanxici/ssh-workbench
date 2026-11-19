@@ -3,6 +3,7 @@
   "version": "2.2.1",
   "private": true,
   "description": "轻量级 SSH 客户端 + 嵌入式技术支持工作台",
+  "license": "MIT",
   "author": "ssh-workbench",
   "repository": {
     "type": "git",

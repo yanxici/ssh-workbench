@@ -1481,6 +1481,8 @@ export interface UpdateStatus {
   releaseNotes?: string
   /** 发布页地址，供「打开发布页」使用 */
   releaseUrl?: string
+  /** 国内镜像地址（Gitee），GitHub 连不上时的替代下载入口 */
+  mirrorUrl?: string
   /**
    * 本次会话里用户是否点过「稍后」。
    * 点过后标题栏收起成一个小圆点，不再强提示；重启应用会重置。

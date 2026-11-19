@@ -49,6 +49,16 @@ let broadcast: (status: UpdateStatus) => void = () => {}
 const RELEASE_PAGE = 'https://github.com/yanxici/ssh-workbench/releases/latest'
 
 /**
+ * 国内下载镜像（Gitee 上的同源发布）。
+ *
+ * 只作为「兜底下载入口」，不做自动更新源：electron-updater 的 generic 源需要
+ * 一个固定的 latest.yml 地址，而 Gitee 的下载路径带 tag（releases/download/v2.2.1/…），
+ * 版本一变地址就变，无法当作长期固定 feed。所以自动更新仍走 GitHub，
+ * 这边负责「GitHub 连不上时，用户还有一条能自己下到包的活路」。
+ */
+const MIRROR_PAGE = 'https://gitee.com/w3554334905/ssh-workbench/releases'
+
+/**
  * 开发态是否允许跑更新检查。
  *
  * electron-updater 在未打包的 app 里会直接抛错（没有 app-update.yml）。
@@ -60,7 +70,8 @@ const DEV_ENABLED = process.env['SSHWB_UPDATE_DEV'] === '1'
 const state: UpdateStatus = {
   phase: 'idle',
   currentVersion: app.getVersion(),
-  releaseUrl: RELEASE_PAGE
+  releaseUrl: RELEASE_PAGE,
+  mirrorUrl: MIRROR_PAGE
 }
 
 let initialized = false
@@ -222,6 +233,11 @@ export function quitAndInstall(): void {
 /** 打开 Release 页面（App 内更新走不通时的兜底） */
 export async function openReleasePage(): Promise<void> {
   await shell.openExternal(state.releaseUrl ?? RELEASE_PAGE)
+}
+
+/** 打开国内镜像页（GitHub 打不开时的兜底下载入口） */
+export async function openMirrorPage(): Promise<void> {
+  await shell.openExternal(MIRROR_PAGE)
 }
 
 /** 用户点「稍后」：本会话内收起提示 */

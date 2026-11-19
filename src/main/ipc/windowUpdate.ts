@@ -8,6 +8,7 @@ import {
   dismiss as dismissUpdate,
   downloadUpdate,
   getUpdateStatus,
+  openMirrorPage,
   openReleasePage,
   quitAndInstall as quitAndInstallUpdate
 } from '../updater'
@@ -58,5 +59,8 @@ export function registerWindowUpdateIpc(): void {
   })
   handle(IPC.UPDATE_OPEN_RELEASE, async () => {
     await openReleasePage()
+  })
+  handle(IPC.UPDATE_OPEN_MIRROR, async () => {
+    await openMirrorPage()
   })
 }

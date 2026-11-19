@@ -4,6 +4,33 @@
 
 轻量级桌面 SSH 客户端，内置面向嵌入式设备技术支持的工作台。基于 Electron + React + TypeScript。
 
+![SSH Workbench 主界面](docs/ui/overview.png)
+
+## 下载安装
+
+只发 Windows 10/11（x64）。三个包任选一个：**国内用 [Gitee 镜像](https://gitee.com/w3554334905/ssh-workbench/releases)**（快，推荐），海外用 [GitHub Releases](https://github.com/yanxici/ssh-workbench/releases)。两边文件同名同版本：
+
+| 包 | 文件名 | 适合谁 |
+| --- | --- | --- |
+| 安装版（推荐） | `ssh-workbench-Setup-2.2.1.exe` | 装进系统，支持应用内自动更新 |
+| 便携版 | `ssh-workbench-2.2.1.exe` | 拷 U 盘 / 跳板机直接用，不写注册表 |
+| 免安装压缩包 | `ssh-workbench-2.2.1-win.zip` | 解压即用，适合放进内网共享盘分发 |
+
+- 最新版固定入口：<https://github.com/yanxici/ssh-workbench/releases/latest>
+- 指定版本：<https://github.com/yanxici/ssh-workbench/releases/tag/v2.2.1>
+- 校验：同目录 `latest.yml` 里带 sha512，下载后可自行核对。
+
+**国内下载**
+
+1. 主入口：<https://gitee.com/w3554334905/ssh-workbench/releases> —— 三个包与 GitHub 同源同步，直连可用。
+2. 指定版本：`https://gitee.com/w3554334905/ssh-workbench/releases/download/v2.2.1/` + 上面的文件名。
+3. GitHub 备用（加速前缀）：<https://ghproxy.net/https://github.com/yanxici/ssh-workbench/releases/download/v2.2.1/> + 文件名（第三方中转，可用性不由本项目保证）。
+4. 内网分发（最稳）：把 `ssh-workbench-2.2.1-win.zip` 放到公司共享盘或制品库，链接填在这里 —— `<内部镜像地址待填>`。
+
+> 应用内自动更新仍走 GitHub Releases（差量更新要读 `latest.yml`，镜像不提供固定 feed）。GitHub 拉不动时，设置 → 软件更新里点「从 Gitee 下载」，手动装一次即可，配置文件不受影响。
+
+> 界面语言：目前仅简体中文（工程里还没有 i18n 层）。英文文档只为便于阅读源码，不是英文界面。
+
 ## 功能
 
 **连接与终端**
@@ -145,3 +172,7 @@ Windows 下为 `%APPDATA%/ssh-workbench/data/`（设置面板里可以看到具�
 - 断线自动重连
 - 大规模连接列表性能优化（已测试 2900+ 条连接）
 - 连接分组管理（新建、重命名、删除、拖拽排序）
+
+## 许可证
+
+MIT © 2026 yanxici，完整条款见 [LICENSE](./LICENSE)。

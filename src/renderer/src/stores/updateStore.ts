@@ -37,6 +37,8 @@ interface UpdateState {
   later: () => Promise<void>
   /** 打开发布页 */
   openRelease: () => Promise<void>
+  /** 打开国内镜像（Gitee）下载页 */
+  openMirror: () => Promise<void>
 }
 
 export const useUpdateStore = create<UpdateState>()((set) => ({
@@ -78,6 +80,11 @@ export const useUpdateStore = create<UpdateState>()((set) => ({
 
   openRelease: async () => {
     await call(window.api.update.openRelease(), { errorTitle: '打开发布页失败' })
+    set({ panelOpen: false })
+  },
+
+  openMirror: async () => {
+    await call(window.api.update.openMirror(), { errorTitle: '打开镜像页失败' })
     set({ panelOpen: false })
   }
 }))
