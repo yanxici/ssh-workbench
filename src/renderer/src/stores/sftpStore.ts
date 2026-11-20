@@ -227,7 +227,7 @@ interface SftpState {
 
   openEditor: (sessionId: string | null, path: string) => Promise<void>
   closeEditor: () => void
-  saveEditor: (content: string) => Promise<void>
+  saveEditor: (content: string, opts?: { close?: boolean }) => Promise<boolean>
 
   removeRemote: (path: string) => Promise<void>
   removeLocal: (path: string) => Promise<void>
@@ -582,26 +582,31 @@ export const useSftpStore = create<SftpState>()((set, get) => ({
 
   closeEditor: () => set({ editing: null }),
 
-  saveEditor: async (content) => {
+  saveEditor: async (content, opts) => {
     const { editing } = get()
     const sessionId = editing?.sessionId
-    if (!sessionId || !editing) return
+    if (!sessionId || !editing) return false
     const done = await call(
       window.api.sftp.writeText(sessionId, editing.path, content, editing.encoding),
       { errorTitle: '保存失败' }
     )
-    if (done !== null) {
-      useToastStore.getState().push({
-        kind: 'success',
-        title: '已保存到远端',
-        detail: `原文件已自动备份为 ${editing.path}.bak`
-      })
+    if (done === null) return false
+    useToastStore.getState().push({
+      kind: 'success',
+      title: '已保存到远端',
+      detail: `原文件已自动备份为 ${editing.path}.bak`
+    })
+    if (opts?.close) {
       set({ editing: null })
-      // 保存后大小与修改时间都变了：旧缓存必须作废，侧栏文件树也要重挂
-      invalidateDir(sessionId, editing.path)
-      get().bumpTree()
-      await get().refreshRemote()
+    } else {
+      // In-place save: advance baseline content so dirty indicator clears
+      set((s) => (s.editing ? { editing: { ...s.editing, content } } : s))
     }
+    // 保存后大小与修改时间都变了：旧缓存必须作废，侧栏文件树也要重挂
+    invalidateDir(sessionId, editing.path)
+    get().bumpTree()
+    await get().refreshRemote()
+    return true
   },
 
   /* ---------------- 远程操作 ---------------- */

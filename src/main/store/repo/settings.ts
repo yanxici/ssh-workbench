@@ -76,7 +76,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
     lineHeight: 1.35,
     cursorStyle: 'block',
     cursorBlink: true,
-    scrollback: 5000
+    scrollback: 5000,
+    copyOnSelect: false,
+    rightClickPaste: false
   },
   uiShellVersion: UI_SHELL_VERSION,
   /*

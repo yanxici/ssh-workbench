@@ -201,7 +201,13 @@ export const api = {
       invoke(IPC.SESSION_SET_BAUD, sessionId, baudRate),
     /** 发 BREAK；durationMs 缺省 250，主进程夹到 50..2000 */
     break: (sessionId: string, durationMs?: number): Promise<IpcResult<void>> =>
-      invoke(IPC.SESSION_BREAK, sessionId, durationMs)
+      invoke(IPC.SESSION_BREAK, sessionId, durationMs),
+    /** 导出当前终端缓冲纯文本 */
+    exportBuffer: (
+      suggestedName: string,
+      content: string
+    ): Promise<IpcResult<{ canceled: true } | { canceled: false; path: string; bytes: number }>> =>
+      invoke(IPC.SESSION_EXPORT_BUFFER, { suggestedName, content })
   },
 
   /**

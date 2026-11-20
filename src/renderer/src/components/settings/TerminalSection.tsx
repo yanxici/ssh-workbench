@@ -1,5 +1,6 @@
 import type * as React from 'react'
 import { useSettingsStore } from '@/stores/settingsStore'
+import { useI18n } from '@/i18n'
 import { Toggle } from '@/components/ui'
 import { Row, Segmented } from './sectionUi'
 
@@ -7,6 +8,7 @@ import { Row, Segmented } from './sectionUi'
 export function TerminalSection(): React.JSX.Element {
   const settings = useSettingsStore((s) => s.settings)
   const update = useSettingsStore((s) => s.update)
+  const { t } = useI18n()
 
   const setTerminal = (patch: Partial<typeof settings.terminal>): void => {
     void update({ terminal: { ...settings.terminal, ...patch } })
@@ -64,6 +66,18 @@ export function TerminalSection(): React.JSX.Element {
           step={500}
           value={settings.terminal.scrollback}
           onChange={(e) => setTerminal({ scrollback: Number(e.target.value) || 5000 })}
+        />
+      </Row>
+      <Row label={t('terminal.copyOnSelect')} hint={t('terminal.copyOnSelect.hint')}>
+        <Toggle
+          checked={settings.terminal.copyOnSelect === true}
+          onChange={(v) => setTerminal({ copyOnSelect: v })}
+        />
+      </Row>
+      <Row label={t('terminal.rightClickPaste')} hint={t('terminal.rightClickPaste.hint')}>
+        <Toggle
+          checked={settings.terminal.rightClickPaste === true}
+          onChange={(v) => setTerminal({ rightClickPaste: v })}
         />
       </Row>
     </>

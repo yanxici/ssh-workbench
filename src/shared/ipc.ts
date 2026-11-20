@@ -46,6 +46,8 @@ export const IPC = {
   SESSION_SET_BAUD: 'session:setBaud',
   /** 发 BREAK：TX 拉低一段时间，bootloader / 交换机控制台进维护模式用 */
   SESSION_BREAK: 'session:break',
+  /** 导出当前终端缓冲纯文本到用户选定路径 */
+  SESSION_EXPORT_BUFFER: 'session:export-buffer',
 
   /* ---------------- 串口设备 ---------------- */
   /**

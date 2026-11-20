@@ -12,20 +12,20 @@
 
 | 包 | 文件名 | 适合谁 |
 | --- | --- | --- |
-| 安装版（推荐） | `ssh-workbench-Setup-2.3.0.exe` | 装进系统，支持应用内自动更新 |
-| 便携版 | `ssh-workbench-2.3.0.exe` | 拷 U 盘 / 跳板机直接用，不写注册表 |
-| 免安装压缩包 | `ssh-workbench-2.3.0-win.zip` | 解压即用，适合放进内网共享盘分发 |
+| 安装版（推荐） | `ssh-workbench-Setup-2.3.1.exe` | 装进系统，支持应用内自动更新 |
+| 便携版 | `ssh-workbench-2.3.1-portable.exe` | 拷 U 盘 / 跳板机直接用，不写注册表 |
+| 免安装压缩包 | `ssh-workbench-2.3.1-win.zip` | 解压即用，适合放进内网共享盘分发 |
 
 - 最新版固定入口：<https://github.com/yanxici/ssh-workbench/releases/latest>
-- 指定版本：<https://github.com/yanxici/ssh-workbench/releases/tag/v2.3.0>
+- 指定版本：<https://github.com/yanxici/ssh-workbench/releases/tag/v2.3.1>
 - 校验：同目录 `latest.yml` 里带 sha512，下载后可自行核对。
 
 **国内下载**
 
 1. 主入口：<https://gitee.com/w3554334905/ssh-workbench/releases> —— 三个包与 GitHub 同源同步，直连可用。
-2. 指定版本：`https://gitee.com/w3554334905/ssh-workbench/releases/download/v2.3.0/` + 上面的文件名。
-3. GitHub 备用（加速前缀）：<https://ghproxy.net/https://github.com/yanxici/ssh-workbench/releases/download/v2.3.0/> + 文件名（第三方中转，可用性不由本项目保证）。
-4. 内网分发（最稳）：把 `ssh-workbench-2.3.0-win.zip` 放到公司共享盘或制品库，链接填在这里 —— `<内部镜像地址待填>`。
+2. 指定版本：`https://gitee.com/w3554334905/ssh-workbench/releases/download/v2.3.1/` + 上面的文件名。
+3. GitHub 备用（加速前缀）：<https://ghproxy.net/https://github.com/yanxici/ssh-workbench/releases/download/v2.3.1/> + 文件名（第三方中转，可用性不由本项目保证）。
+4. 内网分发（最稳）：把 `ssh-workbench-2.3.1-win.zip` 放到公司共享盘或制品库，链接填在这里 —— `<内部镜像地址待填>`。
 
 > 应用内自动更新仍走 GitHub Releases（差量更新要读 `latest.yml`，镜像不提供固定 feed）。GitHub 拉不动时，设置 → 软件更新里点「从 Gitee 下载」，手动装一次即可，配置文件不受影响。
 
@@ -137,9 +137,10 @@ Windows 下为 `%APPDATA%/ssh-workbench/data/`（设置面板里可以看到具�
 
 ## 版本
 
-当前版本：**v2.3.0**
+当前版本：**v2.3.1**
 
 最近更新：
+- **v2.3.1** —— 终端默认改用智能 `Ctrl+C` / `Ctrl+V`（有选区复制、无选区透传 `SIGINT`），新增可选「选中即复制」与「右键快速复制粘贴」（`Shift+右键` 出菜单）、单标签 `Ctrl+滚轮` 临时缩放（`Ctrl+0` 复位）、右键导出终端缓冲纯文本、大流量输出 8–32ms 自适应合帧；零依赖升级内置远程编辑器（行号、`Ctrl+F/H` 查找替换、`Ctrl+S` 原地保存、编码与行列状态条、`Tab` 缩进、未保存误关提醒）；修复终端右键「发送文件…」静默失效。
 - **v2.3.0** —— 交互反馈落地：命令卡片悬停轻抬、按下回弹，命令墙按 12ms 错峰淡入，连接行扫过亮出品牌色竖条，分组箭头改成同一个图标旋转，设置 → 实验性 → 「界面动效」可一键静止（系统开了「减少动态效果」时自动跟随）。
 - **v2.2.1** —— 传输不再"假装完成"：ZMODEM 会续传而不是卡死，上下行都整片落盘，远程编辑不再损坏原文件，新增传输记录面板，刷新文件树不再越展开越慢。
 - **v2.2.0** —— 串口：不断开即可改波特率、可发 BREAK；每次录制额外写一份纯文本 `.log`（剥控制码、带时间戳）；只发 LF 的设备不再阶梯错位。

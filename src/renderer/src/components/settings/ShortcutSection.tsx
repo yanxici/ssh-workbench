@@ -186,7 +186,7 @@ export function ShortcutSection(): React.JSX.Element {
         )
       })}
       <div className="pt-1 text-3xs leading-relaxed text-ink-3/70">
-        提示：终端内「搜索 / 复制 / 粘贴」的组合键（Ctrl+F / Ctrl+Shift+C / Ctrl+Shift+V）在此配置后，
+        提示：终端内「搜索 / 复制 / 粘贴」的组合键（Ctrl+F / Ctrl+C / Ctrl+V）在此配置后，
         在终端聚焦时同样生效；避免与系统/浏览器快捷键冲突。
       </div>
 

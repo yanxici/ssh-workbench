@@ -367,6 +367,10 @@ export interface TerminalPrefs {
   cursorStyle: 'block' | 'underline' | 'bar'
   cursorBlink: boolean
   scrollback: number
+  /** 选中终端文本后自动复制到剪贴板 */
+  copyOnSelect?: boolean
+  /** 右键直接复制/粘贴（按住 Shift+右键 唤出完整菜单） */
+  rightClickPaste?: boolean
 }
 
 /**

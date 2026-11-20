@@ -21,6 +21,12 @@ import { describeSerialTarget } from '@shared/serialDisplay'
 import { getConnection, getSettings, touchConnection } from '../store/repository'
 import { recorder } from './recorder'
 import {
+  createAdaptiveFlushState,
+  onAdaptiveFeed,
+  onAdaptiveFlush,
+  type AdaptiveFlushState
+} from '../util/adaptiveFlush'
+import {
   looksLikeTrzsz,
   looksLikeTrzszMissing,
   stripTrzszHandshake,
@@ -104,6 +110,7 @@ interface SessionRecord {
   /** 输出合帧缓冲（已解码文本，原始字节单独暂存给 ZMODEM） */
   pendingText: string[]
   pendingRaw: Buffer[]
+  flushState: AdaptiveFlushState
   flushTimer?: NodeJS.Timeout
   /** 最近一次探测的时刻 / 是否正在进行，供全局轮转探针调度 */
   probedAt?: number
@@ -127,7 +134,6 @@ interface SessionRecord {
 const PROBE_TICK_MS = 1000
 /** 同一会话的最小探测间隔：会话少时给出 5s 级别的新鲜度，会话多时自然被拉长 */
 const PROBE_MIN_GAP_MS = 5000
-const FLUSH_INTERVAL_MS = 8
 /** 等待会话就绪的默认上限（连接握手未完成的挂起请求） */
 const READY_TIMEOUT_MS = 30_000
 
@@ -583,6 +589,7 @@ class SessionManager {
       serialConfig: init.serialConfig,
       pendingText: [],
       pendingRaw: [],
+      flushState: createAdaptiveFlushState(),
       closedByUser: false,
       shared: { refs: 1 },
       closed: false,
@@ -1232,11 +1239,21 @@ class SessionManager {
     if (record.closed) return
     record.pendingRaw.push(raw)
     if (text) record.pendingText.push(text)
+    const bytes = raw.length > 0 ? raw.length : Buffer.byteLength(text, 'utf8')
+    const decision = onAdaptiveFeed(record.flushState, bytes)
+    if (decision.flushNow) {
+      if (record.flushTimer) {
+        clearTimeout(record.flushTimer)
+        record.flushTimer = undefined
+      }
+      this.flush(record)
+      return
+    }
     if (record.flushTimer) return
     record.flushTimer = setTimeout(() => {
       record.flushTimer = undefined
       this.flush(record)
-    }, FLUSH_INTERVAL_MS)
+    }, decision.delayMs)
   }
 
   private flush(record: SessionRecord): void {
@@ -1247,6 +1264,10 @@ class SessionManager {
     const text = record.pendingText.join('')
     record.pendingRaw = []
     record.pendingText = []
+    onAdaptiveFlush(
+      record.flushState,
+      raw.length > 0 ? raw.length : Buffer.byteLength(text, 'utf8')
+    )
     /*
      * trzsz 分流。
      *

@@ -35,6 +35,13 @@ import { ensureZmodem, detachZmodem, bytesToBase64, requestZmodemConfirm } from 
 import { writeSessionData } from '@/lib/highlightRuntime'
 import { isCanvasFontApplied } from '@/lib/canvasFont'
 import { isImeComposing } from '@/lib/ime'
+import { useI18n } from '@/i18n'
+import {
+  decideRightClickAction,
+  decideTerminalCopy,
+  extractTerminalBuffer,
+  stepTempFontSize
+} from '@/lib/terminalUx'
 import { useTrzszOf } from '@/stores/trzszStore'
 import { SerialBootBar } from './SerialBootBar'
 
@@ -115,6 +122,11 @@ export function TerminalView({
 }): React.JSX.Element {
   const sessionId = session.id
   const containerRef = useRef<HTMLDivElement>(null)
+  const tempFontSizeRef = useRef<number | null>(null)
+  const lastGlobalFontSizeRef = useRef<number>(
+    useSettingsStore.getState().settings.terminal.fontSize
+  )
+  const { t } = useI18n()
 
   const [searchOpen, setSearchOpen] = useState(false)
   const [searchText, setSearchText] = useState('')
@@ -283,23 +295,69 @@ export function TerminalView({
     term.attachCustomKeyEventHandler((e) => {
       if (e.type !== 'keydown') return true
       const map = resolveShortcuts(useSettingsStore.getState().settings.shortcuts)
-      if (matchShortcut(e, map.terminalCopy)) {
+      const copyAction = decideTerminalCopy(e, map.terminalCopy, term.hasSelection())
+      if (copyAction === 'copy') {
+        e.preventDefault()
         const selection = term.getSelection()
         if (selection) void call(window.api.clip.write(selection), { silent: true })
         return false
       }
+      if (copyAction === 'passthrough') return true
+      if (copyAction === 'noop') {
+        e.preventDefault()
+        return false
+      }
       if (matchShortcut(e, map.terminalPaste)) {
+        e.preventDefault()
         void call(window.api.clip.read(), { silent: true }).then((text) => {
-          if (text) term.paste(text)
+          if (text) terminalRegistry.get(sessionId)?.term.paste(text)
         })
         return false
       }
       if (matchShortcut(e, map.terminalSearch)) {
+        e.preventDefault()
         setSearchOpen(true)
         return false
       }
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key === '0') {
+        if (tempFontSizeRef.current !== null) {
+          e.preventDefault()
+          tempFontSizeRef.current = null
+          term.options.fontSize = useSettingsStore.getState().settings.terminal.fontSize
+          scheduleFit()
+          return false
+        }
+      }
       return true
     })
+
+    // Copy-on-select (debounced to avoid spamming clipboard during drag)
+    let copyTimer: ReturnType<typeof setTimeout> | undefined
+    const selectionDisposer = term.onSelectionChange(() => {
+      if (useSettingsStore.getState().settings.terminal.copyOnSelect !== true) return
+      if (copyTimer) clearTimeout(copyTimer)
+      copyTimer = setTimeout(() => {
+        copyTimer = undefined
+        if (useSettingsStore.getState().settings.terminal.copyOnSelect !== true) return
+        const selection = term.getSelection()
+        if (selection) void call(window.api.clip.write(selection), { silent: true })
+      }, 120)
+    })
+
+    // Per-terminal temporary font zoom via Ctrl+wheel (capture phase so TUI apps do not swallow it)
+    const onWheel = (e: WheelEvent): void => {
+      if (!e.ctrlKey && !e.metaKey) return
+      e.preventDefault()
+      e.stopPropagation()
+      const base =
+        tempFontSizeRef.current ?? useSettingsStore.getState().settings.terminal.fontSize
+      const next = stepTempFontSize(base, e.deltaY)
+      if (next === base) return
+      tempFontSizeRef.current = next
+      term.options.fontSize = next
+      scheduleFit()
+    }
+    el.addEventListener('wheel', onWheel, { passive: false, capture: true })
 
     terminalRegistry.set(sessionId, { term, fit, search })
 
@@ -324,6 +382,9 @@ export function TerminalView({
     return () => {
       terminalRegistry.delete(sessionId)
       detachZmodem(sessionId)
+      if (copyTimer) clearTimeout(copyTimer)
+      selectionDisposer.dispose()
+      el.removeEventListener('wheel', onWheel, { capture: true })
       cancelAnimationFrame(fitRaf)
       resizeObserver.disconnect()
       dataDisposer.dispose()
@@ -340,8 +401,12 @@ export function TerminalView({
   useEffect(() => {
     const entry = terminalRegistry.get(sessionId)
     if (!entry) return
+    if (terminalPrefs.fontSize !== lastGlobalFontSizeRef.current) {
+      lastGlobalFontSizeRef.current = terminalPrefs.fontSize
+      tempFontSizeRef.current = null
+    }
     entry.term.options.fontFamily = terminalPrefs.fontFamily
-    entry.term.options.fontSize = terminalPrefs.fontSize
+    entry.term.options.fontSize = tempFontSizeRef.current ?? terminalPrefs.fontSize
     entry.term.options.lineHeight = terminalPrefs.lineHeight
     entry.term.options.cursorStyle = terminalPrefs.cursorStyle
     entry.term.options.cursorBlink = terminalPrefs.cursorBlink
@@ -413,11 +478,14 @@ export function TerminalView({
    * 而且要在渲染进程侧取 —— 主进程拿到的 File 不是同一个对象。
    * 文件内容一个字节都不进 IPC：主进程按路径自己 readFile。
    */
-  const startUpload = (paths: string[]): void => {
-    if (paths.length === 0) return
-    void call(window.api.trzsz.upload(sessionId, paths), {
-      errorTitle: 'trzsz 上传失败'
-    })
+  const startUpload = (paths?: string[]): void => {
+    if (paths && paths.length === 0) return
+    void call(
+      paths ? window.api.trzsz.upload(sessionId, paths) : window.api.trzsz.upload(sessionId),
+      {
+        errorTitle: 'trzsz 上传失败'
+      }
+    )
   }
 
   const dropPaths = (e: React.DragEvent<HTMLDivElement>): string[] => {
@@ -483,7 +551,7 @@ export function TerminalView({
           {
             label: '发送文件…',
             separatorBefore: true,
-            onClick: () => startUpload([])
+            onClick: () => startUpload()
           } as MenuEntry
         ]
       : []),
@@ -534,8 +602,61 @@ export function TerminalView({
       separatorBefore: true,
       onClick: () => setSearchOpen(true)
     },
+    {
+      label: t('terminal.exportBuffer'),
+      onClick: () => {
+        const entry = terminalRegistry.get(sessionId)
+        if (!entry) return
+        const text = extractTerminalBuffer(entry.term)
+        if (!text) {
+          useToastStore.getState().push({
+            kind: 'info',
+            title: t('terminal.exportBuffer.empty')
+          })
+          return
+        }
+        const stamp = new Date().toISOString().replace(/[:T]/g, '-').slice(0, 19)
+        const base = session.connectionName || session.target || 'terminal'
+        void call(window.api.session.exportBuffer(`${base}-${stamp}.txt`, text), {
+          errorTitle: t('terminal.exportBuffer.error')
+        }).then((res) => {
+          if (res && !res.canceled) {
+            useToastStore.getState().push({
+              kind: 'success',
+              title: t('terminal.exportBuffer.done'),
+              detail: res.path
+            })
+          }
+        })
+      }
+    },
     { label: '清屏', onClick: () => terminalRegistry.get(sessionId)?.term.clear() }
   ]
+
+  const handleContextMenu = (e: React.MouseEvent<HTMLDivElement>): void => {
+    const entry = terminalRegistry.get(sessionId)
+    const action = decideRightClickAction(
+      useSettingsStore.getState().settings.terminal.rightClickPaste === true,
+      e.shiftKey,
+      Boolean(entry?.term.hasSelection())
+    )
+    if (action === 'menu') {
+      openMenu(e, 'context')
+      return
+    }
+    e.preventDefault()
+    if (action === 'copy') {
+      const selection = entry?.term.getSelection()
+      if (selection) void call(window.api.clip.write(selection), { silent: true })
+    } else {
+      void call(window.api.clip.read(), { silent: true }).then((text) => {
+        if (!text) return
+        const latest = terminalRegistry.get(sessionId)
+        latest?.term.paste(text)
+        latest?.term.focus()
+      })
+    }
+  }
 
   /* ---------- 状态覆盖层 ---------- */
   const showOverlay = session.status !== 'connected'
@@ -550,7 +671,7 @@ export function TerminalView({
         <div
           ref={containerRef}
           className="h-full w-full"
-          onContextMenu={(e) => openMenu(e, 'context')}
+          onContextMenu={handleContextMenu}
           /*
            * 拖文件进终端 = 用 trzsz 发给远端。
            *

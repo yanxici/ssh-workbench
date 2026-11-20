@@ -5,6 +5,30 @@ All notable changes to SSH Workbench will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.3.1] - 2026-11-20
+
+<!-- release-notes:start -->
+### 这一版更新了什么
+
+- **终端默认改用 `Ctrl+C` / `Ctrl+V`**：有选区时 `Ctrl+C` 复制（保持选区不变），无选区时原样发送中断信号 `SIGINT`，不再与 Shell 中断冲突；`Ctrl+V` 直接粘贴且避免双份粘贴。
+- **终端鼠标与快捷手感补齐**：设置 → 终端新增「选中即复制」与「右键快速复制粘贴」（默认关闭，开启后 `Shift+右键` 仍可唤出完整菜单）；`Ctrl+滚轮` 仅对当前终端临时缩放字号（`Ctrl+0` 复位）；右键菜单新增「导出终端输出…」。
+- **大量输出更跟手**：主进程输出合帧改为自适应（常规交互保持 8ms，遇到 `cat` / `dmesg` 洪峰自动升档至 20–32ms 并设 256KB 强刷上限，空闲立刻回落 8ms）。
+- **内置远程编辑器升级**：零新增重依赖补齐行号栏、`Ctrl+F` / `Ctrl+H` 页内查找替换、`Ctrl+S` 原地保存不关窗、编码与行列状态条、`Tab` / `Shift+Tab` 缩进、未保存误关确认。
+- **修复终端右键「发送文件…」无反应**：空路径数组不再拦死主进程原生文件选择框。
+<!-- release-notes:end -->
+
+### Fixed（终端右键「发送文件…」静默失效）
+
+- `TerminalView.tsx` 右键菜单「发送文件…」此前传了 `startUpload([])`，被 `if (paths.length === 0) return` 直接吞掉。拆分为拖拽上传（非空路径）与右键主动选文件（不传 `paths`，由主进程弹原生文件框）。
+
+### Added（终端交互手感 + 自适应合帧 + 内置远程编辑器补齐）
+
+- **智能 `Ctrl+C` / `Ctrl+V`**：默认快捷键由 `Ctrl+Shift+C/V` 调整为 `Ctrl+C` / `Ctrl+V`（`shortcuts.ts`、`terminalUx.ts`、`TerminalView.tsx`、`ShortcutSection.tsx`）。有选区复制且不清选区，无选区透传 `\x03`；`Ctrl+V` 调用 `e.preventDefault()` 防 Chromium 原生粘贴重复输入。
+- **鼠标手感与缓冲导出**：`TerminalPrefs` 新增 `copyOnSelect` / `rightClickPaste`（默认 `false`，设置 → 终端可独立开启）；`Ctrl+滚轮` 在捕获阶段拦截防止被 `tmux`/`vim`/`less` 吞掉，仅做当前终端 10–28px 临时缩放并支持 `Ctrl+0` 复位；新增 `IPC.SESSION_EXPORT_BUFFER`（`session:export-buffer`），导出纯文本 `.txt` 时正确拼接软换行并保留软换行处的行尾空格。
+- **大流量输出自适应合帧**：新增 `src/main/util/adaptiveFlush.ts` 并接入 `sessionManager.ts`（8ms → 20ms → 32ms，256KB 立即强刷，空闲 80ms 或低流量立即回落 8ms）。
+- **内置远程编辑器（零新增依赖）**：新增 `src/renderer/src/lib/editorText.ts`，改造 `RemoteEditorDialog.tsx` 与 `sftpStore.saveEditor(content, { close })`；补齐同步行号栏、页内查找/替换（跳转不抢输入框焦点）、`window` 级快捷键监听（防按钮禁用后失焦）、`Ctrl+S` 原地保存（有改动才触发）、编码与行列状态条、`Tab` / `Shift+Tab` 缩进（修复首行为空行时的偏移边界）、未保存关闭二次确认（Tailwind 3 保持 `outline-none` 与 `bg-hover`）。
+- **新增回归**：`scripts/verify-terminal-ux.cjs`（23 项）、`scripts/verify-adaptive-flush.cjs`（13 项）、`scripts/verify-remote-editor.cjs`（27 项）。
+
 ## [2.3.0] - 2026-11-19
 
 <!-- release-notes:start -->

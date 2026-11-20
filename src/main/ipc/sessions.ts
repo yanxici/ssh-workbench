@@ -1,4 +1,8 @@
+import { BrowserWindow, dialog } from 'electron'
+import { promises as fs } from 'node:fs'
 import { IPC } from '@shared/ipc'
+import { dialogParent } from '../windowRef'
+import { dialogDefaultPath, rememberDialogPick } from '../util/dialogDirs'
 import { handle } from './handle'
 import { sessionManager } from '../ssh/sessionManager'
 
@@ -41,6 +45,30 @@ export function registerSessionIpc(): void {
   )
   handle(IPC.SESSION_BREAK, (sessionId: string, durationMs?: number) =>
     sessionManager.sendSerialBreak(sessionId, durationMs)
+  )
+  handle(
+    IPC.SESSION_EXPORT_BUFFER,
+    async (input: { suggestedName: string; content: string }) => {
+      const safeName =
+        Array.from(input.suggestedName, (ch) => (ch.charCodeAt(0) < 32 ? '_' : ch))
+          .join('')
+          .replace(/[<>:"/\\|?*]/g, '_')
+          .trim() || 'terminal-output'
+      const defaultName = safeName.endsWith('.txt') ? safeName : `${safeName}.txt`
+      const res = await dialog.showSaveDialog(dialogParent() as BrowserWindow, {
+        title: '导出终端输出',
+        defaultPath: dialogDefaultPath('file', defaultName),
+        filters: [{ name: '文本文件', extensions: ['txt'] }]
+      })
+      if (res.canceled || !res.filePath) return { canceled: true as const }
+      rememberDialogPick('file', res.filePath, false)
+      await fs.writeFile(res.filePath, input.content, 'utf-8')
+      return {
+        canceled: false as const,
+        path: res.filePath,
+        bytes: Buffer.byteLength(input.content, 'utf-8')
+      }
+    }
   )
   handle(IPC.SESSION_LIST, () => sessionManager.list())
 }

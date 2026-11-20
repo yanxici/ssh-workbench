@@ -169,7 +169,7 @@ window.__e2e = {
   editorTextarea(){ return Array.from(document.querySelectorAll('textarea')).find(t => !t.closest('.xterm')) || null },
   editorContent(){ const t = this.editorTextarea(); return t ? t.value : null },
   editorType(v){ const t = this.editorTextarea(); if(!t) return 'no-editor'; this.setValue(t, v); return 'ok' },
-  editorSave(){ const b = Array.from(document.querySelectorAll('.modal button')).find(x => /保存到远端/.test(x.textContent)); if(!b) return 'no-save'; b.click(); return 'ok' },
+  editorSave(){ const b = Array.from(document.querySelectorAll('.modal button')).find(x => /保存到远端|保存并关闭/.test(x.textContent)); if(!b) return 'no-save'; b.click(); return 'ok' },
   closeModal(){ const b = Array.from(document.querySelectorAll('.modal button')).find(x => /^(取消|关闭)$/.test(x.textContent.trim())); if(!b) return 'no-close'; b.click(); return 'ok' },
   modalOpen(){ return !!document.querySelector('.modal') },
   toastTexts(){ return Array.from(document.querySelectorAll('body *')).filter(e => e.children.length === 0 && e.closest('[data-toast], .toast')).map(e => e.textContent.trim()).slice(0, 6) },

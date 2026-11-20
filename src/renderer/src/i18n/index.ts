@@ -55,7 +55,37 @@ const zh = {
   'section.privacy.hint': '零遥测 / 零崩溃上报 / 出站域名可查',
   'privacy.noTelemetry': '不含任何遥测与崩溃上报：没有统计 SDK，崩溃日志只写本地文件，不会上传。',
   'privacy.egress': '应用只主动连接两类地址：更新源（GitHub 或你在上面填的镜像）和你自己的 SSH 主机。',
-  'privacy.verify': '可自查：scripts/verify-privacy.cjs 会静态扫描依赖与源码里的所有出站域名。'
+  'privacy.verify': '可自查：scripts/verify-privacy.cjs 会静态扫描依赖与源码里的所有出站域名。',
+  'terminal.copyOnSelect': '选中即复制',
+  'terminal.copyOnSelect.hint': '鼠标拖选终端文字后自动写入剪贴板',
+  'terminal.rightClickPaste': '右键快速复制粘贴',
+  'terminal.rightClickPaste.hint': '有选区时右键复制、无选区时直接粘贴；按住 Shift+右键 仍可唤出菜单',
+  'terminal.exportBuffer': '导出终端输出…',
+  'terminal.exportBuffer.empty': '当前终端缓冲为空',
+  'terminal.exportBuffer.done': '已导出终端输出',
+  'terminal.exportBuffer.error': '导出终端输出失败',
+  'editor.find': '查找',
+  'editor.findPlaceholder': '查找内容…',
+  'editor.replacePlaceholder': '替换为…',
+  'editor.caseSensitive': '区分大小写',
+  'editor.prevMatch': '上一个 (Shift+Enter)',
+  'editor.nextMatch': '下一个 (Enter)',
+  'editor.replaceOne': '替换',
+  'editor.replaceAll': '全部替换',
+  'editor.noMatch': '无匹配',
+  'editor.matchOf': '{current}/{total}',
+  'editor.closeFind': '关闭查找 (Esc)',
+  'editor.lineCol': '行 {line}, 列 {col}',
+  'editor.linesTotal': '共 {count} 行',
+  'editor.encoding': '编码',
+  'editor.saving': '保存中…',
+  'editor.saved': '已保存',
+  'editor.save': '保存',
+  'editor.saveAndClose': '保存并关闭',
+  'editor.close': '关闭',
+  'editor.dirtyPrompt': '当前有未保存修改，关闭将丢失变更。',
+  'editor.keepEditing': '继续编辑',
+  'editor.discardClose': '放弃修改'
 } as const
 
 export type I18nKey = keyof typeof zh
@@ -100,7 +130,38 @@ const en: Record<I18nKey, string> = {
   'privacy.egress':
     'The app only ever contacts the update feed (GitHub or the mirror you set above) and your own SSH hosts.',
   'privacy.verify':
-    'Verify it yourself: scripts/verify-privacy.cjs statically scans dependencies and every URL in the source.'
+    'Verify it yourself: scripts/verify-privacy.cjs statically scans dependencies and every URL in the source.',
+  'terminal.copyOnSelect': 'Copy on select',
+  'terminal.copyOnSelect.hint': 'Automatically copy selected terminal text to clipboard',
+  'terminal.rightClickPaste': 'Right-click quick copy/paste',
+  'terminal.rightClickPaste.hint':
+    'Right-click copies when selected or pastes otherwise; hold Shift + right-click for menu',
+  'terminal.exportBuffer': 'Export terminal output…',
+  'terminal.exportBuffer.empty': 'Terminal buffer is empty',
+  'terminal.exportBuffer.done': 'Terminal output exported',
+  'terminal.exportBuffer.error': 'Failed to export terminal output',
+  'editor.find': 'Find',
+  'editor.findPlaceholder': 'Find…',
+  'editor.replacePlaceholder': 'Replace with…',
+  'editor.caseSensitive': 'Match case',
+  'editor.prevMatch': 'Previous (Shift+Enter)',
+  'editor.nextMatch': 'Next (Enter)',
+  'editor.replaceOne': 'Replace',
+  'editor.replaceAll': 'Replace all',
+  'editor.noMatch': 'No match',
+  'editor.matchOf': '{current}/{total}',
+  'editor.closeFind': 'Close find (Esc)',
+  'editor.lineCol': 'Ln {line}, Col {col}',
+  'editor.linesTotal': '{count} lines',
+  'editor.encoding': 'Encoding',
+  'editor.saving': 'Saving…',
+  'editor.saved': 'Saved',
+  'editor.save': 'Save',
+  'editor.saveAndClose': 'Save & Close',
+  'editor.close': 'Close',
+  'editor.dirtyPrompt': 'You have unsaved changes. Closing will discard them.',
+  'editor.keepEditing': 'Keep editing',
+  'editor.discardClose': 'Discard'
 }
 
 const DICTS: Record<Lang, Record<I18nKey, string>> = { 'zh-CN': zh, en }

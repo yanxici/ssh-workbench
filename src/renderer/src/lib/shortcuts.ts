@@ -16,8 +16,8 @@ export const SHORTCUT_ACTIONS: Array<{ id: ShortcutAction; label: string; defaul
   { id: 'nextTab', label: '下一个标签', default: 'Ctrl+Tab' },
   { id: 'closeTab', label: '关闭当前标签', default: 'Ctrl+Shift+W' },
   { id: 'terminalSearch', label: '终端内搜索', default: 'Ctrl+F' },
-  { id: 'terminalCopy', label: '复制', default: 'Ctrl+Shift+C' },
-  { id: 'terminalPaste', label: '粘贴', default: 'Ctrl+Shift+V' },
+  { id: 'terminalCopy', label: '复制', default: 'Ctrl+C' },
+  { id: 'terminalPaste', label: '粘贴', default: 'Ctrl+V' },
   /*
    * 分屏之间移动焦点。用 Ctrl+Alt+方向键而不是 Ctrl+方向键：
    * 后者在终端里是「按词移动光标」，bash/readline 重度使用者离不开它。

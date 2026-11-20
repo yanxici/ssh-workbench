@@ -665,10 +665,12 @@ export function App(): React.JSX.Element {
       </div>
       {editing && (
         <RemoteEditorDialog
+          key={`${editing.sessionId}:${editing.path}`}
           path={editing.path}
           content={editing.content}
+          encoding={editing.encoding}
           onClose={closeEditor}
-          onSave={(content) => void saveEditor(content)}
+          onSave={(content, close) => saveEditor(content, { close })}
         />
       )}
       <SettingsPanel open={settingsOpen} onClose={() => setSettingsOpen(false)} />
