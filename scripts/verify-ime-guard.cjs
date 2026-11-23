@@ -274,8 +274,10 @@ for (const it of rows) {
 
 console.log('\n=== 断言 ===')
 check(
-  '需要守卫的 handler 数 === 14（少一处就是漏修）',
-  needGuard.length === 14,
+  '需要守卫的 handler 数 === 15（少一处就是漏修）',
+  /* 15 而非 14：UpdateSection.tsx 新增了「更新通道」输入框（已配 isImeComposing(e)），
+     这一条是「新增 handler 必须配守卫」的刻度，同步上调至 15。 */
+  needGuard.length === 15,
   `实际 ${needGuard.length}`
 )
 check(
