@@ -616,6 +616,15 @@ export interface UpdatePrefs {
    * 留空则跟随系统代理（Windows 的「Internet 选项」设置）。
    */
   proxyUrl?: string
+  /**
+   * 更新通道 / 镜像源。
+   *
+   * 留空或 `'auto'` = 自动（未配代理时优先 Gitee 国内源，不通依次回退
+   * GitHub 官方与公共加速站；配了代理时优先 GitHub 官方以享差量更新）。
+   * 也可显式指定 `'gitee'`、`'github'`、镜像前缀（如 `https://gh-proxy.com`）
+   * 或完整的 `…/releases/latest/download` 内网镜像地址。
+   */
+  mirror?: string
 }
 
 /** 可自定义的快捷键动作 */
@@ -1507,6 +1516,8 @@ export interface UpdateStatus {
   releaseUrl?: string
   /** 国内镜像地址（Gitee），GitHub 连不上时的替代下载入口 */
   mirrorUrl?: string
+  /** 本次检查或下载实际命中的更新通道名（如「Gitee 国内源」「GitHub 官方」「gh-proxy.com」） */
+  sourceLabel?: string
   /**
    * 本次会话里用户是否点过「稍后」。
    * 点过后标题栏收起成一个小圆点，不再强提示；重启应用会重置。

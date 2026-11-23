@@ -12,24 +12,24 @@ Windows 10/11 (x64) only. Pick one of the three packages — **use the [Gitee mi
 
 | Package | File name | Best for |
 | --- | --- | --- |
-| Installer (recommended) | `ssh-workbench-Setup-2.3.1.exe` | Installs into the system, supports in-app auto-update |
-| Portable | `ssh-workbench-2.3.1-portable.exe` | Run from a USB stick / jump host, writes no registry keys |
-| Zip bundle | `ssh-workbench-2.3.1-win.zip` | Unzip and run; easiest to mirror onto an internal share |
+| Installer (recommended) | `ssh-workbench-Setup-2.3.2.exe` | Installs into the system, supports in-app auto-update |
+| Portable | `ssh-workbench-2.3.2-portable.exe` | Run from a USB stick / jump host, writes no registry keys |
+| Zip bundle | `ssh-workbench-2.3.2-win.zip` | Unzip and run; easiest to mirror onto an internal share |
 
 - Always latest: <https://github.com/yanxici/ssh-workbench/releases/latest>
-- Pinned: <https://github.com/yanxici/ssh-workbench/releases/tag/v2.3.1>
+- Pinned: <https://github.com/yanxici/ssh-workbench/releases/tag/v2.3.2>
 - Integrity: `latest.yml` in the same release carries the sha512 of each artifact.
 
 **Mainland China**
 
 1. Primary: <https://gitee.com/w3554334905/ssh-workbench/releases> — mirrored in sync with GitHub, no proxy needed.
-2. Pinned: `https://gitee.com/w3554334905/ssh-workbench/releases/download/v2.3.1/` + the file name above.
-3. GitHub + proxy prefix (third-party relay, availability not guaranteed): `https://ghproxy.net/https://github.com/yanxici/ssh-workbench/releases/download/v2.3.1/` + file name.
-4. Internal mirror (most reliable): copy `ssh-workbench-2.3.1-win.zip` to a company share or artifact store and link it here — `<internal mirror URL>`.
+2. Pinned: `https://gitee.com/w3554334905/ssh-workbench/releases/download/v2.3.2/` + the file name above.
+3. GitHub + proxy prefix (third-party relay, availability not guaranteed): `https://gh-proxy.com/https://github.com/yanxici/ssh-workbench/releases/download/v2.3.2/` + file name.
+4. Internal mirror (most reliable): copy `ssh-workbench-2.3.2-win.zip` to a company share or artifact store and link it here — `<internal mirror URL>`.
 
-> The in-app updater still talks to GitHub Releases only (delta updates need a fixed `latest.yml` feed, which a mirror does not provide). If GitHub is unreachable, use Settings → Software update → "Download from Gitee" and install once by hand; config files are untouched.
+> In-app auto-update now uses an automatic multi-channel feed: without a proxy it tries the official Gitee mirror first and falls back to GitHub Releases and built-in mirrors (verifying the first-party sha512 before downloading from any third-party relay); with an update proxy configured it prefers GitHub first for differential updates. You can also pick a specific channel or custom feed URL under Settings → Updates.
 
-> UI language: the interface is Simplified Chinese only — there is no i18n layer yet. In-app updates only talk to GitHub Releases.
+> UI language: Simplified Chinese by default, with an English option in Settings for the settings shell.
 
 ## Features
 
@@ -138,9 +138,10 @@ Architecture, directory layout and roadmap (Chinese): [DESIGN.md](./DESIGN.md)
 
 ## Version
 
-Current: **v2.3.1**
+Current: **v2.3.2**
 
 Recent updates:
+- **v2.3.2** — Added a zero-proxy domestic in-app auto-update channel: Auto mode tries the official Gitee mirror first (resolving the latest tag via public API and disabling differential Range downloads on Gitee CDN) and falls back across `Gitee → GitHub → gh-proxy.com → ghfast.top` with first-party `sha512` verification; Settings → Updates now supports choosing a channel or custom intranet feed and displays the active source; added `scripts/sync-gitee-release.ps1` and an optional Gitee sync step in CI.
 - **v2.3.1** — Smart terminal `Ctrl+C` / `Ctrl+V` by default (copy with selection, pass `SIGINT` through without), optional copy-on-select and right-click copy/paste (`Shift+right-click` opens menu), per-terminal `Ctrl+wheel` zoom (`Ctrl+0` reset), export terminal buffer to `.txt`, adaptive 8–32ms output coalescing, upgraded built-in remote editor (line numbers, `Ctrl+F`/`Ctrl+H` find/replace, `Ctrl+S` in-place save, encoding/cursor bar, `Tab` indent, dirty-close prompt), and fixed right-click "Send files…".
 - **v2.3.0** — Interaction feedback landed: command cards lift on hover and dip on press, the command wall fades in with a 12ms stagger, connection rows show a brand-colored tick on the left, group arrows rotate instead of swapping icons, and Settings → Experimental → "Motion" turns all of it off (and follows the system reduce-motion preference).
 - **v2.2.1** — Transfers stopped lying about being finished: ZMODEM resumes instead of stalling, downloads and uploads land whole, editing a remote file no longer damages it, a transfer history panel was added, and refreshing the file tree no longer costs more the deeper you have expanded.

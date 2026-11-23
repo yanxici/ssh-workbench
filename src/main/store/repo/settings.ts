@@ -125,7 +125,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
   update: {
     autoCheck: true,
     autoDownload: false,
-    proxyUrl: ''
+    proxyUrl: '',
+    // 留空 = 自动通道（国内直连优先 Gitee 同源镜像，不通自动回退 GitHub / 公共加速站）
+    mirror: ''
   },
   /*
    * 任务完成通知。
@@ -170,6 +172,7 @@ function mergeSettings(base: AppSettings, patch: Partial<AppSettings>): AppSetti
      * （渲染层每次都是把新数组整个传上来），否则会被默认的空数组清掉。
      */
     taskNotify: { ...base.taskNotify, ...(patch.taskNotify ?? {}) } as AppSettings['taskNotify'],
+    update: { ...base.update, ...(patch.update ?? {}) },
     splitLayout: patch.splitLayout ?? base.splitLayout,
     dangerPatterns: patch.dangerPatterns ?? base.dangerPatterns
   }

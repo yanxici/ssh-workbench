@@ -7,15 +7,17 @@ import { useUpdateStore, formatMB, formatRemaining } from '@/stores/updateStore'
 import { Toggle } from '@/components/ui'
 import { cn } from '@/lib/utils'
 import { isImeComposing } from '@/lib/ime'
+import { useI18n, type I18nKey } from '@/i18n'
 
 /**
  * 设置 → 软件更新。
  *
  * 与标题栏的 UpdateBadge 是同一份状态的两种视图：
  * 标题栏负责「随时能看到、随手能点」，这里负责「说清楚现在是什么情况、
- * 以及把检查频率和代理配好」。两边都读 useUpdateStore，不存在状态不一致。
+ * 以及把检查频率、国内更新通道和代理配好」。两边都读 useUpdateStore，不存在状态不一致。
  */
 export function UpdateSection(): React.JSX.Element {
+  const { t } = useI18n()
   const settings = useSettingsStore((s) => s.settings)
   const updateSettings = useSettingsStore((s) => s.update)
   const status = useUpdateStore((s) => s.status)
@@ -26,6 +28,7 @@ export function UpdateSection(): React.JSX.Element {
   const openMirror = useUpdateStore((s) => s.openMirror)
 
   const [proxyDraft, setProxyDraft] = useState<string | null>(null)
+  const [mirrorDraft, setMirrorDraft] = useState<string | null>(null)
   const prefs: UpdatePrefs = settings.update ?? {}
 
   const setPrefs = (patch: Partial<UpdatePrefs>): void => {
@@ -36,6 +39,12 @@ export function UpdateSection(): React.JSX.Element {
     if (proxyDraft === null) return
     setPrefs({ proxyUrl: proxyDraft.trim() })
     setProxyDraft(null)
+  }
+
+  const commitMirror = (): void => {
+    if (mirrorDraft === null) return
+    setPrefs({ mirror: mirrorDraft.trim() })
+    setMirrorDraft(null)
   }
 
   const phase = status?.phase ?? 'idle'
@@ -66,7 +75,7 @@ export function UpdateSection(): React.JSX.Element {
             )}
           </span>
           <div className="min-w-0 flex-1">
-            <div className="text-xs text-ink-2">{describe(status)}</div>
+            <div className="text-xs text-ink-2">{describe(status, t)}</div>
             {phase === 'downloading' && (
               <div className="mt-1.5 space-y-1">
                 <div className="h-1 overflow-hidden rounded-full bg-edge-soft">
@@ -101,31 +110,31 @@ export function UpdateSection(): React.JSX.Element {
           {phase === 'available' && (
             <button className="btn h-6 gap-1 px-2 text-2xs" onClick={() => void download()}>
               <Download size={11} />
-              下载更新
+              {t('update.download')}
             </button>
           )}
           {phase === 'downloaded' && (
             <button className="btn h-6 gap-1 px-2 text-2xs" onClick={() => void install()}>
               <RotateCw size={11} />
-              重启并安装
+              {t('update.restartInstall')}
             </button>
           )}
           <button className="btn h-6 gap-1 px-2 text-2xs" disabled={busy} onClick={() => void check()}>
             <RefreshCw size={11} className={cn(busy && 'animate-spin')} />
-            {phase === 'checking' ? '检查中…' : '立即检查'}
+            {phase === 'checking' ? t('update.checking') : t('update.checkNow')}
           </button>
           <button className="btn-ghost h-6 gap-1 px-2 text-2xs" onClick={() => void openRelease()}>
             <ExternalLink size={11} />
-            打开发布页
+            {t('update.openRelease')}
           </button>
           {/* GitHub 在国内经常连不上，给一条能真下到包的替代入口 */}
           <button
             className="btn-ghost h-6 gap-1 px-2 text-2xs"
-            title="国内镜像（Gitee）：GitHub 拉不动时从这里手动下载"
+            title={t('update.openGitee.title')}
             onClick={() => void openMirror()}
           >
             <Download size={11} />
-            从 Gitee 下载
+            {t('update.openGitee')}
           </button>
         </div>
       </div>
@@ -133,9 +142,9 @@ export function UpdateSection(): React.JSX.Element {
       {/* ---------- 偏好 ---------- */}
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
-          <div className="text-xs text-ink-2">启动时自动检查</div>
+          <div className="text-xs text-ink-2">{t('update.autoCheck')}</div>
           <div className="mt-0.5 text-2xs leading-snug text-ink-3">
-            启动几秒后静默查一次（只读几 KB 的版本文件），有新版会在标题栏亮出「更新」
+            {t('update.autoCheck.hint')}
           </div>
         </div>
         <Toggle checked={prefs.autoCheck !== false} onChange={(v) => setPrefs({ autoCheck: v })} />
@@ -143,9 +152,9 @@ export function UpdateSection(): React.JSX.Element {
 
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
-          <div className="text-xs text-ink-2">自动下载安装包</div>
+          <div className="text-xs text-ink-2">{t('update.autoDownload')}</div>
           <div className="mt-0.5 text-2xs leading-snug text-ink-3">
-            默认关闭。现场网络按流量计费，几十兆的包在下之前应该由你点头
+            {t('update.autoDownload.hint')}
           </div>
         </div>
         <Toggle
@@ -155,10 +164,48 @@ export function UpdateSection(): React.JSX.Element {
       </div>
 
       <div className="space-y-1">
-        <div className="text-xs text-ink-2">更新专用代理</div>
+        <div className="text-xs text-ink-2">{t('update.channel')}</div>
         <input
           className="input h-7 font-mono text-2xs"
-          placeholder="http://127.0.0.1:7897（留空跟随系统代理）"
+          placeholder={t('update.channel.placeholder')}
+          value={mirrorDraft ?? prefs.mirror ?? ''}
+          onChange={(e) => setMirrorDraft(e.target.value)}
+          onBlur={commitMirror}
+          onKeyDown={(e) => {
+            if (isImeComposing(e)) return
+            if (e.key === 'Enter') commitMirror()
+            if (e.key === 'Escape') setMirrorDraft(null)
+          }}
+          spellCheck={false}
+        />
+        <div className="flex flex-wrap items-center gap-1">
+          {CHANNEL_PRESETS.map((p) => {
+            const cur = (prefs.mirror ?? '').trim().toLowerCase()
+            const active =
+              p.value === '' ? cur === '' || cur === 'auto' : cur === p.value.toLowerCase()
+            const label = p.labelKey ? t(p.labelKey) : p.rawLabel
+            return (
+              <button
+                key={p.value || 'auto'}
+                className={cn('btn-ghost h-5 px-1.5 text-3xs', active && 'text-accent')}
+                onClick={() => {
+                  setMirrorDraft(null)
+                  setPrefs({ mirror: p.value })
+                }}
+              >
+                {label}
+              </button>
+            )
+          })}
+        </div>
+        <div className="text-2xs leading-snug text-ink-3">{t('update.channel.hint')}</div>
+      </div>
+
+      <div className="space-y-1">
+        <div className="text-xs text-ink-2">{t('update.proxy')}</div>
+        <input
+          className="input h-7 font-mono text-2xs"
+          placeholder={t('update.proxy.placeholder')}
           value={proxyDraft ?? prefs.proxyUrl ?? ''}
           onChange={(e) => setProxyDraft(e.target.value)}
           onBlur={commitProxy}
@@ -169,35 +216,50 @@ export function UpdateSection(): React.JSX.Element {
           }}
           spellCheck={false}
         />
-        <div className="text-2xs leading-snug text-ink-3">
-          只影响更新包的下载，不影响 SSH 连接。国内直连 GitHub 常拉不动，填上本地代理能明显提速；
-          改完对下一次检查即生效。
-        </div>
+        <div className="text-2xs leading-snug text-ink-3">{t('update.proxy.hint')}</div>
       </div>
 
       <div className="text-3xs leading-relaxed text-ink-3/80">
-        当前版本 v{status?.currentVersion ?? '—'}
-        {status?.latestVersion ? ` ｜ 发布源最新 v${status.latestVersion}` : ''}
+        {t('update.meta.current', { version: status?.currentVersion ?? '—' })}
+        {status?.latestVersion ? t('update.meta.latest', { version: status.latestVersion }) : ''}
+        {status?.sourceLabel ? t('update.meta.source', { source: status.sourceLabel }) : ''}
       </div>
     </div>
   )
 }
 
+/**
+ * 更新通道预设。
+ *
+ * 空串 = 自动多通道回退（未配代理优先 Gitee 国内源，配了代理优先 GitHub 官方）；
+ * gitee / github = 固定单一官方源；其余为前缀式公共加速站。
+ */
+const CHANNEL_PRESETS: { labelKey?: I18nKey; rawLabel?: string; value: string }[] = [
+  { labelKey: 'update.channel.auto', value: '' },
+  { labelKey: 'update.channel.gitee', value: 'gitee' },
+  { labelKey: 'update.channel.github', value: 'github' },
+  { rawLabel: 'gh-proxy.com', value: 'https://gh-proxy.com' },
+  { rawLabel: 'ghfast.top', value: 'https://ghfast.top' }
+]
+
 /** 把状态机翻成一句人话 */
-function describe(status: UpdateStatus | null): string {
-  if (!status) return '尚未检查更新'
+function describe(
+  status: UpdateStatus | null,
+  t: (key: I18nKey, vars?: Record<string, string | number>) => string
+): string {
+  if (!status) return t('update.status.unchecked')
   switch (status.phase) {
     case 'checking':
-      return '正在检查更新…'
+      return t('update.status.checking')
     case 'available':
-      return `发现新版本 v${status.latestVersion}`
+      return t('update.status.available', { version: status.latestVersion ?? '' })
     case 'downloading':
-      return `正在下载 v${status.latestVersion}…`
+      return t('update.status.downloading', { version: status.latestVersion ?? '' })
     case 'downloaded':
-      return `v${status.latestVersion} 已下载，重启即可完成更新`
+      return t('update.status.downloaded', { version: status.latestVersion ?? '' })
     case 'error':
-      return '检查更新失败'
+      return t('update.status.error')
     default:
-      return `已是最新版本 v${status.currentVersion}`
+      return t('update.status.latest', { version: status.currentVersion })
   }
 }

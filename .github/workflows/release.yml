@@ -211,6 +211,30 @@ jobs:
           }
           gh release upload $tag @assets --clobber
 
+      # 可选：同步到 Gitee 国内同源更新通道。
+      # 在仓库 Secrets 配置 GITEE_TOKEN（Gitee 私人令牌，勾选 projects）后自动生效；
+      # 未配置时跳过，不阻塞 GitHub 发版。
+      - name: Sync release to Gitee (optional domestic update channel)
+        continue-on-error: true
+        shell: pwsh
+        env:
+          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+        run: |
+          if (-not $env:GITEE_TOKEN) {
+            Write-Host "未配置 secrets.GITEE_TOKEN，跳过 Gitee 同步（可手工运行 scripts/sync-gitee-release.ps1）"
+            exit 0
+          }
+          $ver = "${{ steps.version.outputs.value }}" -replace '^v',''
+          $notesFile = "release-notes-v$ver.generated.md"
+          pwsh -NoProfile -File scripts/sync-gitee-release.ps1 `
+            -Version $ver `
+            -DistDir "${{ steps.publish.outputs.dir }}" `
+            -NotesFile $notesFile
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "::warning::Gitee 国内通道同步失败（不影响 GitHub Release），请稍后手工补跑 scripts/sync-gitee-release.ps1"
+            exit $LASTEXITCODE
+          }
+
       - name: Upload build artifact (for debugging)
         uses: actions/upload-artifact@v4
         with:

@@ -4,19 +4,21 @@
  * 设计目标：打开软件 → 标题栏旁边出现「更新」小按钮 → 点一下下载 → 下完点重启，
  * 全程不跳浏览器、不手动找安装包。
  *
- * 为什么用 electron-updater 而不是自己写：
- *   1. 差量更新（.blockmap）是刚需 —— 78MB 的安装包在国内网络下直连 GitHub
- *      动辄十几分钟，差量通常只有几 MB；
- *   2. sha512 校验、断点续传、下载完成后的原子替换都由它处理，
- *      自己实现出错就是「更新完打不开」这种最坏结果；
- *   3. electron-builder 在打包时会自动生成 app-update.yml 与 latest.yml，
- *      两边元数据天然一致，不存在手写配置写错 owner/repo 的低级故障。
+ * 国内直连通道设计（零成本、零域名）：
+ *   1. 默认「自动」模式在未配代理时优先走 Gitee 同源仓库（w3554334905/ssh-workbench）：
+ *      通过 Gitee 公开 API 解析最新 tag，再把该 tag 的下载目录设为 generic feed，
+ *      同时关闭差量下载（Gitee 附件 CDN 对 Range 返回 200 全量，关闭可避免白下一次）；
+ *   2. 任意通道失败（超时 / 404 / 限流 / 返回 HTML 验证页）时，按顺序自动回退到
+ *      GitHub 官方、gh-proxy.com、ghfast.top，单通道探测 8 秒快速失败，不卡死界面；
+ *   3. 下载中途失败也会自动切换下一通道继续；若检查阶段已从一跳官方源（Gitee / GitHub）
+ *      拿到可信 sha512，回退到第三方加速站时强制校验 sha512 一致才允许下载；
+ *   4. 配了更新专用代理时，「自动」模式优先走 GitHub 官方以享受 .blockmap 差量更新。
  *
  * 几个刻意的取舍：
- *   - autoDownload 默认 false：现场网络（4G/专线）贵且慢，一次检查就偷偷拉 78MB
+ *   - autoDownload 默认 false：现场网络（4G/专线）贵且慢，一次检查就偷偷拉 80MB
  *     是不可接受的。查到了先只亮「更新」按钮，用户点了才下。
- *   - autoInstallOnAppQuit 保持 true：用户已经点了重启却临时取消，下次正常退出
- *     时顺手装上，不用再点一次。装完不会自己弹窗，行为可预期。
+ *   - autoUpdater.autoDownload 始终保持 false，由本模块自己决定是否触发 downloadUpdate()，
+ *     避免 electron-updater 绕过我们的多通道回退逻辑。
  *   - 所有异常都吞进状态机（phase='error'），不抛给调用方 ——
  *     更新失败绝不能让正在用的 SSH 会话受影响。
  */
@@ -25,6 +27,22 @@ import { app, shell, session } from 'electron'
 import { autoUpdater, type UpdateInfo } from 'electron-updater'
 import type { UpdatePhase, UpdateStatus } from '@shared/types'
 import { recordError } from './store/errorLog'
+import {
+  GITHUB_OWNER,
+  GITHUB_REPO,
+  GITEE_LATEST_API,
+  MIRROR_PAGE,
+  OFFICIAL_FEED,
+  RELEASE_PAGE,
+  buildCandidateSpecs,
+  feedUrlFor,
+  isFallbackShaAllowed,
+  isGiteeUrl,
+  parseGiteeLatestRelease,
+  parseLatestYmlMeta,
+  type LatestYmlMeta,
+  type UpdateCandidateSpec
+} from './updaterChannel'
 
 /**
  * electron-updater 内部用这个分区名建 net session（见其 electronHttpExecutor.js
@@ -33,30 +51,14 @@ import { recordError } from './store/errorLog'
  */
 const NET_SESSION_NAME = 'electron-updater'
 
+/** 单通道探测超时（毫秒）：国内连不上 GitHub 或镜像挂掉时快速切下一个，不干等 60 秒 */
+const PROBE_TIMEOUT_MS = 8000
+
 /** 主进程内的日志出口，由 index.ts 注入（那边已经有 bootLog 的写法） */
 let log: (...args: unknown[]) => void = () => {}
 
 /** 状态变化时通知渲染层，由 index.ts 注入（需要 mainWindow） */
 let broadcast: (status: UpdateStatus) => void = () => {}
-
-/**
- * 发布页地址。
- *
- * 与 electron-builder.yml 的 publish 段是同一份信息，但这里必须硬写一遍：
- * 更新失败时用户仍然需要一条能自己下载的活路，而那时 app-update.yml
- * 未必读得出来（例如打包产物被裁剪/被企业策略改写）。
- */
-const RELEASE_PAGE = 'https://github.com/yanxici/ssh-workbench/releases/latest'
-
-/**
- * 国内下载镜像（Gitee 上的同源发布）。
- *
- * 只作为「兜底下载入口」，不做自动更新源：electron-updater 的 generic 源需要
- * 一个固定的 latest.yml 地址，而 Gitee 的下载路径带 tag（releases/download/v2.2.1/…），
- * 版本一变地址就变，无法当作长期固定 feed。所以自动更新仍走 GitHub，
- * 这边负责「GitHub 连不上时，用户还有一条能自己下到包的活路」。
- */
-const MIRROR_PAGE = 'https://gitee.com/w3554334905/ssh-workbench/releases'
 
 /**
  * 开发态是否允许跑更新检查。
@@ -79,6 +81,46 @@ let checkTimer: NodeJS.Timeout | null = null
 /** 用户点过「稍后」的版本，避免同一版本反复强提示 */
 let dismissedVersion: string | undefined
 
+/** 当前生效的用户更新偏好（运行期修改设置时会同步刷新） */
+let currentMirror = ''
+let currentProxyUrl = ''
+let autoDownloadPref = false
+/** 环境变量强制指定了 feed 时，设置面板里的镜像不再生效（灰度/内网联调用） */
+let envOverrideUrl = ''
+/** 等待最近一次 setProxy 完成，避免刚改完代理立刻检查撞上旧代理 */
+let proxyReady: Promise<void> = Promise.resolve()
+
+/** 多通道探测/回退期间抑制 autoUpdater 提前发出的 error 事件，避免 UI 闪红 */
+let suppressAutoError = false
+/** 下载失败切源并内部重查 updateInfoAndProvider 时，屏蔽中间状态事件避免进度条闪回「检查中」 */
+let silentResync = false
+/** 当前正在检查的通道上下文，供 update-available / update-not-available 监听读取 */
+let probingContext: { label: string; fallbackNotes?: string } | null = null
+
+interface ActiveUpdateAttempt {
+  candidates: UpdateCandidateSpec[]
+  activeIndex: number
+  version: string
+  /** 来自一跳官方源（Gitee / GitHub）的可信 sha512，供回退到第三方代理时交叉校验 */
+  trustedSha512?: string
+}
+
+let activeAttempt: ActiveUpdateAttempt | null = null
+
+interface ResolvedChannel {
+  spec: UpdateCandidateSpec
+  feed:
+    | { provider: 'github'; owner: string; repo: string; releaseType: 'release' }
+    | { provider: 'generic'; url: string }
+  disableDifferentialDownload: boolean
+  meta: LatestYmlMeta
+  fallbackNotes?: string
+}
+
+function getUpdaterSession(): Electron.Session {
+  return session.fromPartition(NET_SESSION_NAME, { cache: false })
+}
+
 function setPhase(phase: UpdatePhase, patch: Partial<UpdateStatus> = {}): void {
   state.phase = phase
   Object.assign(state, patch)
@@ -91,8 +133,8 @@ function setPhase(phase: UpdatePhase, patch: Partial<UpdateStatus> = {}): void {
 
 function fail(err: unknown): void {
   const message = err instanceof Error ? err.message : String(err)
-  // 更新失败是「预期内的常态」（GitHub 在国内经常连不上），
-  // 记 error 日志会污染日志面板，这里只留在状态里给用户看。
+  // 更新失败是「预期内的常态」（离线/内网环境），
+  // 记 warn 而不是 error，避免污染主错误日志。
   log('[updater] failed:', message)
   setPhase('error', { error: message })
   void recordError({
@@ -103,42 +145,183 @@ function fail(err: unknown): void {
   }).catch(() => undefined)
 }
 
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err)
+}
+
 /** 把代理配置应用到 updater 专用的 net session 上 */
 function applyProxy(proxyUrl?: string): void {
+  const trimmed = (proxyUrl ?? '').trim()
+  currentProxyUrl = trimmed
   try {
-    const ses = session.fromPartition(NET_SESSION_NAME, { cache: false })
-    if (!proxyUrl || proxyUrl.trim() === '') {
+    const ses = getUpdaterSession()
+    if (!trimmed) {
       // 空值 = 跟随系统代理。显式 setProxy({mode:'system'}) 而不是不调用，
       // 是因为用户可能刚从「用代理」切回「自动」，不重置会一直走旧的。
-      void ses.setProxy({ mode: 'system' })
+      proxyReady = ses.setProxy({ mode: 'system' }).catch((err) => {
+        log('[updater] setProxy(system) failed:', errorMessage(err))
+      })
       log('[updater] proxy: system')
       return
     }
-    const trimmed = proxyUrl.trim()
-    void ses.setProxy({ mode: 'fixed_servers', proxyRules: trimmed, proxyBypassRules: '<local>' })
+    proxyReady = ses
+      .setProxy({ mode: 'fixed_servers', proxyRules: trimmed, proxyBypassRules: '<local>' })
+      .catch((err) => {
+        log('[updater] setProxy failed:', errorMessage(err))
+      })
     log('[updater] proxy:', trimmed)
   } catch (err) {
-    log('[updater] setProxy failed:', err instanceof Error ? err.message : String(err))
+    log('[updater] setProxy failed:', errorMessage(err))
   }
 }
 
-/** 从 UpdateInfo 里抽出可读的更新说明（GitHub release notes 可能是字符串或数组） */
-function readNotes(info: UpdateInfo): string | undefined {
-  const notes = info.releaseNotes
-  if (!notes) return undefined
-  const text = Array.isArray(notes)
-    ? notes.map((n) => (typeof n === 'string' ? n : n.note)).join('\n\n')
-    : notes
+/**
+ * 切换更新源偏好。
+ *
+ * 换源必须重置状态：旧源查出来的「有新版本」在新源上可能不同或路径失效，
+ * 重置成 idle 后下一次检查会重新走新源。
+ */
+function applyMirror(mirror?: string): void {
+  if (envOverrideUrl) return
+  const next = (mirror ?? '').trim()
+  if (next === currentMirror) return
+  currentMirror = next
+  activeAttempt = null
+  log('[updater] mirror pref:', next || 'auto')
+  if (state.phase !== 'idle' || state.sourceLabel !== undefined || state.latestVersion !== undefined) {
+    setPhase('idle', {
+      latestVersion: undefined,
+      error: undefined,
+      releaseNotes: undefined,
+      sourceLabel: undefined
+    })
+  }
+}
+
+function formatNotesText(text: string): string | undefined {
   if (!text) return undefined
   // Release notes 里常带完整 markdown（含图片表格），标题栏下拉框放不下。
   // 这里只取前几行纯文本，够用户判断「这次更了什么」即可。
-  return text
+  const cleaned = text
     .replace(/<[^>]+>/g, '')
     .split('\n')
     .map((line) => line.trim())
     .filter(Boolean)
     .slice(0, 12)
     .join('\n')
+  return cleaned || undefined
+}
+
+/** 从 UpdateInfo 里抽出可读的更新说明（GitHub release notes 可能是字符串或数组） */
+function readNotes(info: UpdateInfo, fallback?: string): string | undefined {
+  const notes = info.releaseNotes
+  const text = !notes
+    ? ''
+    : Array.isArray(notes)
+      ? notes.map((n) => (typeof n === 'string' ? n : n.note)).join('\n\n')
+      : notes
+  return formatNotesText(text) ?? (fallback ? formatNotesText(fallback) : undefined)
+}
+
+function extractSha512(info: UpdateInfo): string | undefined {
+  const first = Array.isArray(info.files)
+    ? info.files.find((f) => typeof f.sha512 === 'string' && f.sha512.trim().length > 0)
+    : undefined
+  if (first?.sha512) return first.sha512.trim()
+  const raw = (info as unknown as { sha512?: unknown }).sha512
+  return typeof raw === 'string' && raw.trim() ? raw.trim() : undefined
+}
+
+/** 带 8 秒超时的会话级 fetch（走与 electron-updater 相同的代理分区） */
+async function fetchWithTimeout(url: string, accept: string): Promise<Response> {
+  await proxyReady
+  const ses = getUpdaterSession()
+  const res = await ses.fetch(url, {
+    method: 'GET',
+    headers: {
+      Accept: accept,
+      'User-Agent': `ssh-workbench/${app.getVersion()}`
+    },
+    signal: AbortSignal.timeout(PROBE_TIMEOUT_MS)
+  })
+  return res
+}
+
+/** 探测指定 feed 目录下的 latest.yml，过滤 404/超时的同时挡住返回 HTML 验证页的坏镜像 */
+async function probeLatestYml(feedBaseUrl: string): Promise<LatestYmlMeta> {
+  const ymlUrl = `${feedBaseUrl.replace(/\/+$/, '')}/latest.yml?noCache=${Date.now().toString(32)}`
+  const res = await fetchWithTimeout(ymlUrl, 'text/yaml, text/plain, */*')
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status}`)
+  }
+  const text = await res.text()
+  const meta = parseLatestYmlMeta(text)
+  if (!meta) {
+    throw new Error('返回的 latest.yml 格式无效（可能被拦截或重定向到登录/验证页）')
+  }
+  return meta
+}
+
+/**
+ * 把一条候选通道解析成可直接交给 electron-updater 的配置，并完成快速可达性探测。
+ */
+async function resolveChannel(spec: UpdateCandidateSpec): Promise<ResolvedChannel> {
+  if (spec.kind === 'gitee') {
+    const apiRes = await fetchWithTimeout(GITEE_LATEST_API, 'application/json')
+    if (!apiRes.ok) {
+      throw new Error(`Gitee API HTTP ${apiRes.status}`)
+    }
+    const json: unknown = await apiRes.json()
+    const resolved = parseGiteeLatestRelease(json)
+    if (!resolved) {
+      throw new Error('Gitee 最新发行版缺少 latest.yml 或为预发布版')
+    }
+    const meta = await probeLatestYml(resolved.feedUrl)
+    return {
+      spec,
+      feed: { provider: 'generic', url: resolved.feedUrl },
+      // Gitee 附件 CDN 对 Range 返回 200 全量而非 206，关掉差量避免无意义的二次下载
+      disableDifferentialDownload: true,
+      meta,
+      fallbackNotes: resolved.notes
+    }
+  }
+
+  if (spec.kind === 'github') {
+    const meta = await probeLatestYml(OFFICIAL_FEED)
+    return {
+      spec,
+      feed: {
+        provider: 'github',
+        owner: GITHUB_OWNER,
+        repo: GITHUB_REPO,
+        releaseType: 'release'
+      },
+      disableDifferentialDownload: false,
+      meta
+    }
+  }
+
+  const targetUrl =
+    spec.kind === 'env' ? (spec.rawUrl ?? '').replace(/\/+$/, '') : feedUrlFor(spec.rawUrl)
+  const meta = await probeLatestYml(targetUrl)
+  return {
+    spec,
+    feed: { provider: 'generic', url: targetUrl },
+    disableDifferentialDownload: isGiteeUrl(targetUrl),
+    meta
+  }
+}
+
+function applyResolvedChannel(resolved: ResolvedChannel): void {
+  autoUpdater.disableDifferentialDownload = resolved.disableDifferentialDownload
+  autoUpdater.setFeedURL(resolved.feed)
+  log(
+    '[updater] feed:',
+    resolved.spec.label,
+    resolved.feed.provider === 'generic' ? resolved.feed.url : 'github',
+    resolved.disableDifferentialDownload ? '(full)' : '(differential)'
+  )
 }
 
 /** 当前是否有可用更新（渲染层据此决定要不要亮按钮） */
@@ -166,50 +349,161 @@ export async function checkForUpdates(force = false): Promise<UpdateStatus> {
   if (!force && state.phase === 'available') {
     return getUpdateStatus()
   }
-  setPhase('checking', { error: undefined, percent: undefined, transferred: undefined, total: undefined })
+
+  setPhase('checking', {
+    error: undefined,
+    percent: undefined,
+    transferred: undefined,
+    total: undefined
+  })
+
+  const candidates = buildCandidateSpecs(currentMirror, currentProxyUrl, envOverrideUrl)
+  const failures: string[] = []
+  activeAttempt = null
+
+  suppressAutoError = true
   try {
-    const result = await autoUpdater.checkForUpdates()
-    if (!result) {
-      // updater 在「已禁用」时返回 null（如未打包且没开 forceDevUpdateConfig）
-      setPhase('idle')
-      return getUpdateStatus()
+    for (let i = 0; i < candidates.length; i++) {
+      const spec = candidates[i]
+      try {
+        const resolved = await resolveChannel(spec)
+        applyResolvedChannel(resolved)
+        probingContext = { label: spec.label, fallbackNotes: resolved.fallbackNotes }
+
+        const result = await autoUpdater.checkForUpdates()
+        if (!result) {
+          // updater 在「已禁用」时返回 null（如未打包且没开 forceDevUpdateConfig）
+          setPhase('idle')
+          return getUpdateStatus()
+        }
+
+        const latest = result.updateInfo.version
+        const sha512 = extractSha512(result.updateInfo) ?? resolved.meta.sha512
+        const snap = getUpdateStatus()
+        if (snap.phase === 'available') {
+          activeAttempt = {
+            candidates,
+            activeIndex: i,
+            version: latest,
+            trustedSha512: spec.isFirstParty ? sha512 : undefined
+          }
+          if (autoDownloadPref) {
+            void downloadUpdate()
+          }
+        } else if (latest === snap.latestVersion && snap.phase === 'checking') {
+          // checkForUpdates 会触发 update-available / update-not-available 事件，
+          // 正常流程上面两个监听已经把 phase 改掉了。走到这里说明事件没来
+          // （某些 provider 的边界情况），兜底成「已是最新」。
+          setPhase('idle', { latestVersion: latest, sourceLabel: spec.label })
+        }
+        return getUpdateStatus()
+      } catch (err) {
+        const reason = errorMessage(err)
+        failures.push(`${spec.label}: ${reason}`)
+        log(`[updater] channel failed (${spec.label}):`, reason)
+      } finally {
+        probingContext = null
+      }
     }
-    const latest = result.updateInfo.version
-    /*
-     * 现读一次状态，不能用上面几个 if 里窄化过的 state.phase。
-     *
-     * 前面 `if (state.phase === 'checking' ...) return` 之后，TS 把 state.phase
-     * 窄化成 "error" | "idle" | "available"，但 await 期间监听器完全可以把
-     * phase 改回 'checking'（checkForUpdates 会自己发事件）。拿快照读真实值，
-     * 既避开误报的 TS2367，逻辑上也才是对的。
-     */
-    const snap = getUpdateStatus()
-    if (latest === snap.latestVersion && snap.phase === 'checking') {
-      // checkForUpdates 会触发 update-available / update-not-available 事件，
-      // 正常流程上面两个监听已经把 phase 改掉了。走到这里说明事件没来
-      // （某些 provider 的边界情况），兜底成「已是最新」。
-      setPhase('idle', { latestVersion: latest })
-    }
+
+    fail(new Error(failures.length === 1 ? failures[0] : `全部通道均不可用（${failures.join('；')}）`))
     return getUpdateStatus()
-  } catch (err) {
-    fail(err)
-    return getUpdateStatus()
+  } finally {
+    suppressAutoError = false
+    probingContext = null
   }
 }
 
-/** 开始下载已发现的更新包 */
+/**
+ * 开始下载已发现的更新包。
+ *
+ * 先走检查命中的主通道；若中途断链、限流或被拦截，自动按候选队列切换下一个通道，
+ * 静默重拉元数据并校验版本与官方 sha512（如有）后再继续下载。
+ */
 export async function downloadUpdate(): Promise<UpdateStatus> {
   if (!initialized) return getUpdateStatus()
   if (state.phase === 'downloading' || state.phase === 'downloaded') {
     return getUpdateStatus()
   }
   setPhase('downloading', { percent: 0, transferred: 0, total: undefined, error: undefined })
+
+  const attempt = activeAttempt
+  const fallbackOrder = attempt
+    ? attempt.candidates
+        .map((spec, idx) => ({ spec, idx }))
+        .filter((item) => item.idx !== attempt.activeIndex)
+    : []
+
+  const failures: string[] = []
+  suppressAutoError = true
   try {
-    await autoUpdater.downloadUpdate()
-  } catch (err) {
-    fail(err)
+    // 第 1 轮：直接使用检查阶段已经就绪的 updateInfoAndProvider，不重复查 latest.yml
+    try {
+      await autoUpdater.downloadUpdate()
+      return getUpdateStatus()
+    } catch (err) {
+      const activeLabel = attempt?.candidates[attempt.activeIndex]?.label ?? state.sourceLabel ?? '当前源'
+      const reason = errorMessage(err)
+      failures.push(`${activeLabel}: ${reason}`)
+      log(`[updater] download failed on ${activeLabel}:`, reason)
+    }
+
+    // 后续轮：切到剩余候选通道，重新绑定 updateInfoAndProvider 后重试下载
+    if (attempt && fallbackOrder.length > 0) {
+      for (const { spec, idx } of fallbackOrder) {
+        try {
+          log(`[updater] switching download channel → ${spec.label}`)
+          const resolved = await resolveChannel(spec)
+          if (resolved.meta.version !== attempt.version) {
+            throw new Error(`版本不一致（期望 ${attempt.version}，该通道为 ${resolved.meta.version}）`)
+          }
+          if (!isFallbackShaAllowed(attempt.trustedSha512, resolved.meta.sha512, spec.isThirdPartyProxy)) {
+            throw new Error('sha512 与官方源不一致，拒绝使用第三方代理')
+          }
+
+          applyResolvedChannel(resolved)
+          silentResync = true
+          let resyncInfo: UpdateInfo | undefined
+          try {
+            const checkRes = await autoUpdater.checkForUpdates()
+            resyncInfo = checkRes?.updateInfo
+          } finally {
+            silentResync = false
+          }
+          if (!resyncInfo || resyncInfo.version !== attempt.version) {
+            throw new Error(`切换通道后版本不匹配（${resyncInfo?.version ?? 'none'}）`)
+          }
+          const resyncSha = extractSha512(resyncInfo) ?? resolved.meta.sha512
+          if (!isFallbackShaAllowed(attempt.trustedSha512, resyncSha, spec.isThirdPartyProxy)) {
+            throw new Error('切换通道后 sha512 与官方源不一致，拒绝下载')
+          }
+
+          setPhase('downloading', {
+            sourceLabel: spec.label,
+            percent: 0,
+            transferred: 0,
+            total: undefined,
+            bytesPerSecond: undefined,
+            error: undefined
+          })
+
+          await autoUpdater.downloadUpdate()
+          attempt.activeIndex = idx
+          return getUpdateStatus()
+        } catch (err) {
+          const reason = errorMessage(err)
+          failures.push(`${spec.label}: ${reason}`)
+          log(`[updater] fallback download failed (${spec.label}):`, reason)
+        }
+      }
+    }
+
+    fail(new Error(failures.length === 1 ? failures[0] : `下载失败（${failures.join('；')}）`))
+    return getUpdateStatus()
+  } finally {
+    silentResync = false
+    suppressAutoError = false
   }
-  return getUpdateStatus()
 }
 
 /**
@@ -259,6 +553,8 @@ export interface InitUpdaterOptions {
   autoDownload?: boolean
   /** 更新专用代理 */
   proxyUrl?: string
+  /** 更新通道 / 镜像源（见 UpdatePrefs.mirror）；留空走自动多通道 */
+  mirror?: string
 }
 
 /**
@@ -282,16 +578,27 @@ export function initUpdater(options: InitUpdaterOptions): () => void {
   if (initialized) return () => undefined
   initialized = true
 
+  if (DEV_ENABLED && !app.isPackaged) {
+    autoUpdater.forceDevUpdateConfig = true
+  }
+
   applyProxy(options.proxyUrl)
 
-  autoUpdater.autoDownload = options.autoDownload === true
+  // 始终由本模块自己触发 downloadUpdate()，确保走多通道回退逻辑
+  autoDownloadPref = options.autoDownload === true
+  autoUpdater.autoDownload = false
   autoUpdater.autoInstallOnAppQuit = true
   autoUpdater.allowPrerelease = false
   autoUpdater.allowDowngrade = false
+  autoUpdater.disableWebInstaller = true
+
   // 允许命令行/环境变量覆盖发布源，便于在内网镜像上做灰度验证
-  if (process.env['SSHWB_UPDATE_URL']) {
-    autoUpdater.setFeedURL({ provider: 'generic', url: process.env['SSHWB_UPDATE_URL'] })
-    log('[updater] feed overridden:', process.env['SSHWB_UPDATE_URL'])
+  envOverrideUrl = (process.env['SSHWB_UPDATE_URL'] ?? '').trim()
+  if (envOverrideUrl) {
+    log('[updater] feed overridden:', envOverrideUrl)
+  } else {
+    currentMirror = (options.mirror ?? '').trim()
+    log('[updater] mirror pref:', currentMirror || 'auto')
   }
 
   // logger 默认往文件写，这里接到主进程日志里，排障时一个日志面板能看到全部
@@ -301,27 +608,34 @@ export function initUpdater(options: InitUpdaterOptions): () => void {
     error: (...args: unknown[]) => log('[updater][error]', ...args),
     debug: () => undefined
   }
+
   autoUpdater.on('checking-for-update', () => {
+    if (silentResync) return
     setPhase('checking', { error: undefined })
   })
 
   autoUpdater.on('update-available', (info: UpdateInfo) => {
-    log('[updater] available:', info.version)
+    if (silentResync) return
+    const ctx = probingContext
+    log('[updater] available:', info.version, ctx ? `(${ctx.label})` : '')
     setPhase('available', {
       latestVersion: info.version,
-      releaseNotes: readNotes(info),
+      releaseNotes: readNotes(info, ctx?.fallbackNotes),
+      sourceLabel: ctx?.label ?? state.sourceLabel,
       error: undefined,
       percent: undefined,
       transferred: undefined,
       total: undefined
     })
-    if (options.autoDownload === true) void downloadUpdate()
   })
 
   autoUpdater.on('update-not-available', (info: UpdateInfo) => {
-    log('[updater] up to date:', info.version)
+    if (silentResync) return
+    const ctx = probingContext
+    log('[updater] up to date:', info.version, ctx ? `(${ctx.label})` : '')
     setPhase('idle', {
       latestVersion: info.version,
+      sourceLabel: ctx?.label ?? state.sourceLabel,
       error: undefined,
       percent: undefined,
       transferred: undefined,
@@ -330,6 +644,7 @@ export function initUpdater(options: InitUpdaterOptions): () => void {
   })
 
   autoUpdater.on('download-progress', (p) => {
+    if (silentResync) return
     setPhase('downloading', {
       percent: Math.max(0, Math.min(100, p.percent)),
       transferred: p.transferred,
@@ -349,6 +664,7 @@ export function initUpdater(options: InitUpdaterOptions): () => void {
   })
 
   autoUpdater.on('error', (err: Error) => {
+    if (suppressAutoError || silentResync) return
     fail(err)
   })
 
@@ -381,19 +697,26 @@ export function setUpdateProxy(proxyUrl?: string): void {
 /**
  * 运行期应用偏好改动。
  *
- * 用户在设置里把「启动时自动检查」从关改成开，如果只写进配置文件、
- * 等下次启动才生效，当下这一会话就永远是「没检查过」—— 用户会以为
- * 开关坏了。这里立刻补一次检查（延后 2 秒，避开设置面板刚关的动画）。
+ * 用户在设置里把「启动时自动检查」从关改成开，或切换了更新通道，
+ * 如果只写进配置文件、等下次启动才生效，当下这一会话就永远停在旧结果 ——
+ * 这里立刻补一次检查（延后 2 秒，避开设置面板刚关的动画）。
  */
 export function applyUpdatePrefs(prefs: {
   autoCheck?: boolean
   autoDownload?: boolean
   proxyUrl?: string
+  mirror?: string
 }): void {
   if (prefs.proxyUrl !== undefined) applyProxy(prefs.proxyUrl)
   if (!initialized) return
 
-  autoUpdater.autoDownload = prefs.autoDownload === true
+  // 换源要在「是否已有结果」的判断之前：换源会把状态重置成 idle，
+  // 顺序反了就会出现「换了镜像但这一会话再也不检查」。
+  if (prefs.mirror !== undefined) applyMirror(prefs.mirror)
+
+  if (prefs.autoDownload !== undefined) {
+    autoDownloadPref = prefs.autoDownload === true
+  }
 
   if (checkTimer) {
     clearTimeout(checkTimer)

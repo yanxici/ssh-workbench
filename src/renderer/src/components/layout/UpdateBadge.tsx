@@ -164,6 +164,11 @@ export function UpdateBadge(): React.JSX.Element | null {
                     <span className="text-brand">{status.latestVersion}</span>
                   </>
                 )}
+                {status.sourceLabel && (
+                  <span className="ml-1.5 font-sans text-3xs text-ink-3/80">
+                    ({status.sourceLabel})
+                  </span>
+                )}
               </div>
             </div>
             <button

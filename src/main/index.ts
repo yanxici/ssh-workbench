@@ -381,7 +381,8 @@ if (!gotLock) {
         },
         autoCheck: settings.update?.autoCheck !== false,
         autoDownload: settings.update?.autoDownload === true,
-        proxyUrl: settings.update?.proxyUrl
+        proxyUrl: settings.update?.proxyUrl,
+        mirror: settings.update?.mirror
       })
       bootLog('updater initialized')
     } catch (err) {

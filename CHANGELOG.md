@@ -5,6 +5,24 @@ All notable changes to SSH Workbench will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.3.2] - 2026-11-23
+
+<!-- release-notes:start -->
+### 这一版更新了什么
+
+- **国内免代理自动更新通道（默认开启）**：自动更新默认「自动」模式在未配置代理时优先走 Gitee 国内同源镜像，无需代理即可在应用内一键检查、下载并重启安装；命中 Gitee 时自动关闭差量下载规避 Range 200 重复拉取，并复用 Gitee 发行版说明。
+- **多通道自动回退与防篡改校验**：通道探测设 8 秒快速超时并校验 `latest.yml` 格式（直接拦截返回 HTML 验证页的坏镜像）；检查或下载失败时按 `Gitee 国内源 → GitHub 官方 → gh-proxy.com → ghfast.top` 自动切换；若检查阶段命中的是一跳官方源，回退到第三方加速站时强制比对 `sha512` 一致才允许下载。
+- **更新通道可配可观测**：设置 → 软件更新新增「更新通道」选择（自动 / Gitee 国内源 / GitHub 官方 / `gh-proxy.com` / `ghfast.top` / 自定义镜像或内网目录），标题栏更新弹窗与设置页均显示本次实际命中的通道名；配置更新专用代理时，「自动」模式仍优先走 GitHub 官方以享差量更新。
+- **发版同步工具**：新增 `scripts/sync-gitee-release.ps1` 并接入 CI 可选自动同步步骤（配置 `GITEE_TOKEN` 后自动同步到 Gitee 国内源）。
+<!-- release-notes:end -->
+
+### Added（国内免代理自动更新通道 + 多源自动回退）
+
+- **通道解析与回退内核**：新增纯逻辑模块 `src/main/updaterChannel.ts` 并重构 `src/main/updater.ts`；通过 Gitee 公开 API `/api/v5/repos/w3554334905/ssh-workbench/releases/latest` 解析最新 tag 与发行说明，确认已上传 `latest.yml` 后交给 `electron-updater` 的 `generic` provider，同时开启 `disableDifferentialDownload = true` 绕开 Gitee 附件 CDN 对 Range 返回 200 全量的旧阻塞。
+- **快速失败与防篡改**：单通道探测使用与 `electron-updater` 同分区的 `session.fetch`（遵循更新代理）并限定 8 秒超时，`parseLatestYmlMeta` 校验 `version`/`sha512` 并拦截 HTML 验证页；下载中途断链自动切下一通道静默续接，第三方加速站回退强制校验官方一跳源 `sha512`。
+- **设置面板与 i18n**：`UpdatePrefs` 新增 `mirror`、`UpdateStatus` 新增 `sourceLabel`；`UpdateSection.tsx` 补齐「更新通道」输入与 5 个预设按钮，并将该面板全部文案迁入 `src/renderer/src/i18n/index.ts`（中英双语），`UpdateBadge.tsx` 同步显示命中通道名；隐私断言 `verify-privacy.cjs` 保持零新增未审计第三方域名。
+- **Gitee 自动同步与回归**：新增 `scripts/sync-gitee-release.ps1`（先传 `.exe`/`.blockmap`、最后传 `latest.yml`）与 `.github/workflows/release.yml` 可选同步步骤；新增单元回归 `scripts/verify-updater-channel.cjs`（34 项断言）。
+
 ## [2.3.1] - 2026-11-20
 
 <!-- release-notes:start -->

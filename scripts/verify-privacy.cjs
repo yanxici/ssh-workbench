@@ -54,11 +54,12 @@ const TELEMETRY_DEPS = [
  * 允许的出站主机。
  *
  * 每一行都要能回答「谁在什么时候连它」：
- * - github.com：更新检查（官方 feed）与 README 里的发布页链接；
- * - ghfast.top / gh-proxy.com：更新源镜像预设，用户主动选择才会用它们；
- * - gitee.com：国内发布镜像页（updater.ts 的 MIRROR_PAGE），只在用户点「打不开？用镜像」
- *   时由系统浏览器打开，应用本身不请求它。
- * 换源逻辑见 src/main/updater.ts 的 feedUrlFor()。
+ * - gitee.com：国内同源更新通道（w3554334905/ssh-workbench 的 API 与 Release 附件）
+ *   以及「从 Gitee 下载」兜底入口；
+ * - github.com：GitHub 官方更新通道与发布页链接；
+ * - gh-proxy.com / ghfast.top：内置公共加速站，仅在官方源均不可达的自动回退
+ *   或用户主动选择时使用，且自动回退会校验官方 sha512。
+ * 通道解析逻辑见 src/main/updaterChannel.ts。
  */
 const ALLOWED_HOSTS = new Set(['github.com', 'ghfast.top', 'gh-proxy.com', 'gitee.com'])
 

@@ -24,7 +24,8 @@ export async function updateSettings(patch: Partial<AppSettings>): Promise<AppSe
       applyUpdatePrefs({
         autoCheck: patch.update.autoCheck,
         autoDownload: patch.update.autoDownload,
-        proxyUrl: patch.update.proxyUrl
+        proxyUrl: patch.update.proxyUrl,
+        mirror: patch.update.mirror
       })
     } catch {
       /* 运行期施加失败已由 updater 内部记录，不影响设置落盘结果 */
