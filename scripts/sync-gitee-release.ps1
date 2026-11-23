@@ -97,11 +97,20 @@ $authHeaders = @{ Authorization = "token $token" }
 Write-Host "同步 $tag 到 Gitee $Owner/$Repo（共 $($files.Count) 个附件）" -ForegroundColor Cyan
 
 # ---- 查找或创建 Release ----
+# 注意：Gitee API v5 查询不存在的 tag 时返回 HTTP 200 + JSON `null`（不会抛 404），
+# 不能只靠 catch 判定不存在，必须显式检查 `$found.id`。
 $release = $null
 try {
-  $release = Invoke-RestMethod -Method Get -Uri "$apiBase/releases/tags/$tag" -Headers $authHeaders -TimeoutSec 30
-  Write-Host "复用已有 Gitee Release: id=$($release.id) tag=$($release.tag_name)" -ForegroundColor Green
+  $found = Invoke-RestMethod -Method Get -Uri "$apiBase/releases/tags/$tag" -Headers $authHeaders -TimeoutSec 30
+  if ($found -and $found.id) {
+    $release = $found
+    Write-Host "复用已有 Gitee Release: id=$($release.id) tag=$($release.tag_name)" -ForegroundColor Green
+  }
 } catch {
+  # 404 时走下方创建逻辑
+}
+
+if (-not $release) {
   $createPayload = @{
     access_token     = $token
     tag_name         = $tag
