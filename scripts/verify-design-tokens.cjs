@@ -94,7 +94,8 @@ async function main() {
      本仓写成 0.16 的等价形式，所以比较前先归一化数字写法，只为格式差异不该变红。 */
   const normEase = (s) => String(s).replace(/\s+/g, '').replace(/0\./g, '.')
   check('主缓动曲线是 cubic-bezier(.16, 1, .3, 1)', normEase(vars.ease) === 'cubic-bezier(.16,1,.3,1)', vars.ease)
-  check('语义尺寸 26/38/248px', vars.sb === '26px' && vars.tb === '38px' && vars.rail === '248px', vars)
+  /* P2 把外壳换成「36px 顶栏 + 26px 状态栏 + 248px 左轨」的窄轨口径 */
+  check('语义尺寸 26/36/248px', vars.sb === '26px' && vars.tb === '36px' && vars.rail === '248px', vars)
   /* 间距/圆角在 v3 里是 tailwind.config.js 的刻度，不会有 --spacing-* / --radius-* 变量，
      所以量渲染值。顺带记录一处有意的 2px 偏差：上游 v4 的圆角阶梯是 4/6/10px
      （@theme 里的 --radius-sm/md/lg），v3 默认 lg=8px；主仓既有 UI 一直按 8px 渲染，
@@ -111,7 +112,7 @@ async function main() {
 
   console.log('\n[B. 任意值收敛]')
   const shell = await p.evaluate(`(() => { const el = document.createElement('div'); el.className = 'panel-shell'; document.body.appendChild(el); const cs = getComputedStyle(el); const r = { top: cs.top, bottom: cs.bottom }; el.remove(); return r })()`)
-  check('panel-shell 的 top/bottom 等于 token', shell.top === '38px' && shell.bottom === '26px', shell)
+  check('panel-shell 的 top/bottom 等于 token', shell.top === '36px' && shell.bottom === '26px', shell)
   const rail = await p.evaluate(`(() => { const el = document.createElement('div'); el.className = 'rail-w'; document.body.appendChild(el); const w = getComputedStyle(el).width; el.remove(); return w })()`)
   check('rail-w 宽度等于 248px', rail === '248px', rail)
 

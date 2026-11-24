@@ -23,7 +23,8 @@
   --c-ink-2: 55 65 81; /* #374151 正文 */
   --c-ink-3: 107 114 128; /* #6b7280 次要 */
   --c-brand: 39 201 63; /* #27c93f */
-  --c-on-brand: 255 255 255;
+  /* 品牌绿上的深墨字：对比 8.3:1（原来的纯白只有 2.21:1，不达 WCAG AA） */
+  --c-on-brand: 8 24 12;
   --c-select: 224 242 254; /* #e0f2fe */
   --c-accent: 37 99 235;
   --c-success: 16 185 129;
@@ -47,7 +48,7 @@
   --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
   --size-rail: 248px;
   --size-statusbar: 26px;
-  --size-titlebar: 38px;
+  --size-titlebar: 36px;
 
   color-scheme: light;
 }
@@ -64,7 +65,7 @@
   --c-ink-2: 55 65 81;
   --c-ink-3: 107 114 128;
   --c-brand: 39 201 63;
-  --c-on-brand: 255 255 255;
+  --c-on-brand: 8 24 12;
   --c-select: 224 242 254;
   --c-accent: 37 99 235;
   --c-success: 16 185 129;
@@ -91,7 +92,7 @@
   --c-ink-2: 212 212 216;
   --c-ink-3: 161 161 170;
   --c-brand: 39 201 63;
-  --c-on-brand: 10 10 10;
+  --c-on-brand: 8 24 12;
   --c-select: 30 58 74;
   --c-accent: 96 165 250;
   --c-success: 16 185 129;
@@ -266,34 +267,38 @@
 
   /* ---------- 外壳三段：标题栏 / 活动栏 / 状态栏 ---------- */
 
-  /* 标题栏：品牌绿底（44px）。规范要求绿色只出现在这一层，
-     所以连文字色一起定死，页面里就不必到处写 text-white。 */
+  /*
+   * 标题栏：中性面板底 + 一条极细下边框（36px，与 --size-titlebar 同口径）。
+   *
+   * 品牌绿从「面」降级为「点」：只出现在 Logo 徽标、激活标签顶部的 2px 指示线、
+   * 活动栏激活条上。中性底 + 单条指示线让标题栏与工作区处于同一套明度阶梯。
+   */
   .titlebar {
-    @apply flex h-11 shrink-0 items-center bg-brand text-on-brand;
+    @apply flex h-9 shrink-0 items-center border-b border-edge bg-panel text-ink;
   }
 
-  /* 标题栏里的图标按钮：半透明白字，悬停改透明度而不是背景色 ——
-     绿底上叠半透明底色会显脏。 */
+  /* 标题栏图标按钮：中性描边感，悬停只叠一层 hover 底 —— 不做投影与位移 */
   .titlebar-btn {
-    @apply inline-flex h-7 w-7 shrink-0 items-center justify-center rounded text-on-brand/80
-      transition-colors duration-150 hover:bg-on-brand/15 hover:text-on-brand
+    @apply inline-flex h-7 w-7 shrink-0 items-center justify-center rounded text-ink-3
+      transition-colors duration-150 hover:bg-hover hover:text-ink
       disabled:pointer-events-none disabled:opacity-40;
   }
 
-  /* 活动栏条目：图标竖排，宽 48px。激活项靠 2px 品牌绿指示线 + 微亮底 */
+  /* 活动栏条目：44px 窄轨，图标竖排。激活项 = 左侧 2px 品牌条 + 低透明微底 */
   .activity-item {
     @apply relative flex h-11 w-full items-center justify-center text-ink-3
       transition-colors duration-150 hover:text-ink;
   }
 
   .activity-item-active {
-    @apply bg-hover text-ink;
+    @apply bg-hover/60 text-ink;
   }
 
-  /* 状态栏：浅灰底 + 极细上边框（28px） */
+  /* 状态栏：面板底 + 极细上边框（26px，与 --size-statusbar 同口径）。
+     数字一律等宽（tabular-nums），否则延迟/尺寸变化时整条状态栏会左右抖动。 */
   .statusbar {
-    @apply flex h-7 shrink-0 items-center gap-3 border-t border-edge bg-panel px-3 text-2xs
-      text-ink-3;
+    @apply flex h-[26px] shrink-0 items-center gap-3 border-t border-edge bg-panel px-3 text-2xs
+      text-ink-3 tabular-nums;
   }
 
   /* 分段控件：选中只改底色，不做位移/缩放 */
@@ -416,31 +421,35 @@
     z-index: 5;
   }
 
+  /*
+   * 标签条已从品牌绿底搬到中性面板底，滑轨不能再跟 on-brand 走 ——
+   * 统一用 ink-3：任何主题下它都在 panel 上有足够对比度。
+   */
   .tabs-scrollbar-thumb {
     position: absolute;
     top: 0;
     height: 5px;
     border-radius: 3px;
-    background: rgb(var(--c-on-brand) / 0.45);
+    background: rgb(var(--c-ink-3) / 0.45);
     cursor: grab;
   }
 
   .tabs-scrollbar-thumb:hover {
-    background: rgb(var(--c-on-brand) / 0.7);
+    background: rgb(var(--c-ink-3) / 0.7);
   }
 
   .tabs-scrollbar-thumb:active {
-    background: rgb(var(--c-on-brand) / 0.85);
+    background: rgb(var(--c-ink-3) / 0.85);
     cursor: grabbing;
   }
 
-  /* 深色主题下 on-brand 是深色字色，滑轨要跟着反过来 */
+  /* 暗色主题里 ink-3 与 panel 的明度差更小，滑轨要压得更实一点才看得见 */
   .dark .tabs-scrollbar-thumb {
-    background: rgb(var(--c-on-brand) / 0.3);
+    background: rgb(var(--c-ink-3) / 0.55);
   }
 
   .dark .tabs-scrollbar-thumb:hover {
-    background: rgb(var(--c-on-brand) / 0.5);
+    background: rgb(var(--c-ink-3) / 0.8);
   }
 
   /* 细滚动条 */
@@ -482,7 +491,7 @@
    * ================================================================== */
 
   .panel-shell {
-    /* bottom-[26px] top-[38px] 原散落在 8 个面板根节点：状态栏高 / 标题栏高 */
+    /* bottom-[26px] top-[36px] 原散落在 8 个面板根节点：状态栏高 / 标题栏高 */
     bottom: var(--size-statusbar);
     top: var(--size-titlebar);
   }

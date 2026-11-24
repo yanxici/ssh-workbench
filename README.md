@@ -12,20 +12,20 @@ Windows 10/11 (x64) only. Pick one of the three packages — **use the [Gitee mi
 
 | Package | File name | Best for |
 | --- | --- | --- |
-| Installer (recommended) | `ssh-workbench-Setup-2.3.2.exe` | Installs into the system, supports in-app auto-update |
-| Portable | `ssh-workbench-2.3.2-portable.exe` | Run from a USB stick / jump host, writes no registry keys |
-| Zip bundle | `ssh-workbench-2.3.2-win.zip` | Unzip and run; easiest to mirror onto an internal share |
+| Installer (recommended) | `ssh-workbench-Setup-2.4.0.exe` | Installs into the system, supports in-app auto-update |
+| Portable | `ssh-workbench-2.4.0-portable.exe` | Run from a USB stick / jump host, writes no registry keys |
+| Zip bundle | `ssh-workbench-2.4.0-win.zip` | Unzip and run; easiest to mirror onto an internal share |
 
 - Always latest: <https://github.com/yanxici/ssh-workbench/releases/latest>
-- Pinned: <https://github.com/yanxici/ssh-workbench/releases/tag/v2.3.2>
+- Pinned: <https://github.com/yanxici/ssh-workbench/releases/tag/v2.4.0>
 - Integrity: `latest.yml` in the same release carries the sha512 of each artifact.
 
 **Mainland China**
 
 1. Primary: <https://gitee.com/w3554334905/ssh-workbench/releases> — mirrored in sync with GitHub, no proxy needed.
-2. Pinned: `https://gitee.com/w3554334905/ssh-workbench/releases/download/v2.3.2/` + the file name above.
-3. GitHub + proxy prefix (third-party relay, availability not guaranteed): `https://gh-proxy.com/https://github.com/yanxici/ssh-workbench/releases/download/v2.3.2/` + file name.
-4. Internal mirror (most reliable): copy `ssh-workbench-2.3.2-win.zip` to a company share or artifact store and link it here — `<internal mirror URL>`.
+2. Pinned: `https://gitee.com/w3554334905/ssh-workbench/releases/download/v2.4.0/` + the file name above.
+3. GitHub + proxy prefix (third-party relay, availability not guaranteed): `https://gh-proxy.com/https://github.com/yanxici/ssh-workbench/releases/download/v2.4.0/` + file name.
+4. Internal mirror (most reliable): copy `ssh-workbench-2.4.0-win.zip` to a company share or artifact store and link it here — `<internal mirror URL>`.
 
 > In-app auto-update now uses an automatic multi-channel feed: without a proxy it tries the official Gitee mirror first and falls back to GitHub Releases and built-in mirrors (verifying the first-party sha512 before downloading from any third-party relay); with an update proxy configured it prefers GitHub first for differential updates. You can also pick a specific channel or custom feed URL under Settings → Updates.
 
@@ -87,7 +87,7 @@ Windows 10/11 (x64) only. Pick one of the three packages — **use the [Gitee mi
 
 **Interface**
 - Title bar + activity bar + resizable sidebar and command rail (drag to resize, double-click to reset)
-- 7 color themes (VS Code Light, Workbench, Dracula, Nord, Solarized, One Dark, Gruvbox), each with light and dark variants; UI and terminal colors switch together
+- 4 curated high-contrast color themes (Precision Default, Gruvbox, Solarized, Dracula), each with light and dark variants (all 8 WCAG >= 4.5:1); UI and terminal colors switch together
 - Optimized for large connection lists (2900+ tested): pagination, fold long groups by default, indexed session lookup
 - Long command names and command text truncate with an ellipsis instead of overflowing the card; all 12 views audited for text overflow
 
@@ -138,9 +138,10 @@ Architecture, directory layout and roadmap (Chinese): [DESIGN.md](./DESIGN.md)
 
 ## Version
 
-Current: **v2.3.2**
+Current: **v2.4.0**
 
 Recent updates:
+- **v2.4.0** — Embedded SSH resilience, terminal workflow & precision instrument shell: per-connection legacy SSH algorithms (SHA-1/CBC/DSS) with one-click reconnect recovery; automatic BusyBox/POSIX Shell file-channel fallback when `sftp-server` is absent; tunnel reconnect auto-restore, connection auto-start, remote listening port discovery (`ss` / `netstat` / `/proc/net/tcp(6)`) and one-click ephemeral quick-forwarding; drag-and-drop SFTP upload straight to terminal `cwd`, editable multiline paste guard with Markdown fence stripping, one-click import from `~/.ssh/config`, MobaXterm, Xshell, SecureCRT & FinalShell, split-pane sync input and background tab unread dots; unified 36px monochrome instrument chrome, 4 curated high-contrast themes (7→4 with v3 silent migration), quick-launch welcome view and `Ctrl+Shift+Z` Zen focus mode.
 - **v2.3.2** — Added a zero-proxy domestic in-app auto-update channel: Auto mode tries the official Gitee mirror first (resolving the latest tag via public API and disabling differential Range downloads on Gitee CDN) and falls back across `Gitee → GitHub → gh-proxy.com → ghfast.top` with first-party `sha512` verification; Settings → Updates now supports choosing a channel or custom intranet feed and displays the active source; added `scripts/sync-gitee-release.ps1` and an optional Gitee sync step in CI.
 - **v2.3.1** — Smart terminal `Ctrl+C` / `Ctrl+V` by default (copy with selection, pass `SIGINT` through without), optional copy-on-select and right-click copy/paste (`Shift+right-click` opens menu), per-terminal `Ctrl+wheel` zoom (`Ctrl+0` reset), export terminal buffer to `.txt`, adaptive 8–32ms output coalescing, upgraded built-in remote editor (line numbers, `Ctrl+F`/`Ctrl+H` find/replace, `Ctrl+S` in-place save, encoding/cursor bar, `Tab` indent, dirty-close prompt), and fixed right-click "Send files…".
 - **v2.3.0** — Interaction feedback landed: command cards lift on hover and dip on press, the command wall fades in with a 12ms stagger, connection rows show a brand-colored tick on the left, group arrows rotate instead of swapping icons, and Settings → Experimental → "Motion" turns all of it off (and follows the system reduce-motion preference).

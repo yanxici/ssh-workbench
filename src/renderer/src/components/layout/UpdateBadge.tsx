@@ -117,11 +117,15 @@ export function UpdateBadge(): React.JSX.Element | null {
       <button
         ref={btnRef}
         type="button"
-        /* 用 titlebar-btn 的尺寸感，但宽度按内容撑开，所以单独拼类 */
+        /*
+         * 用 titlebar-btn 的尺寸感，但宽度按内容撑开，所以单独拼类。
+         * 配色走 ink 系而不是 on-brand：标题栏改中性面板底之后，
+         * on-brand（品牌色之上的字色）落在这里会失去对比度。
+         */
         className={cn(
           'no-drag inline-flex h-7 shrink-0 items-center gap-1 rounded px-1.5 text-2xs',
-          'text-on-brand/90 transition-colors duration-150 hover:bg-on-brand/15 hover:text-on-brand',
-          panelOpen && 'bg-on-brand/20 text-on-brand'
+          'text-ink-2 transition-colors duration-150 hover:bg-hover hover:text-ink',
+          panelOpen && 'bg-hover text-ink'
         )}
         title={
           status.phase === 'available'

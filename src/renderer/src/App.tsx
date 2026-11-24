@@ -51,6 +51,8 @@ import { ToastHost } from '@/components/ui'
 import { useSplitStore } from '@/stores/splitStore'
 import { useTrzszStore } from '@/stores/trzszStore'
 import { layoutPaneTree, leafIds, neighbor } from '@/lib/paneTree'
+import { paneOwnerOf } from '@/lib/paneRegistry'
+import { shouldMarkUnread } from '@/lib/tabUnread'
 
 /**
  * 重量级功能面板改为按需加载。
@@ -346,6 +348,29 @@ export function App(): React.JSX.Element {
        * "设备还活着、还在干活"，不该被当成静默。
        */
       noteSessionOutput(sessionId)
+      /*
+       * 后台标签的未读圆点：只有「此刻看不见的标签」才亮。判据全在
+       * shouldMarkUnread 里，这里只负责把当前快照递进去 —— 读 getState()
+       * 而不是从闭包取 activeId，否则这个 effect 每次切标签都要重建，
+       * 重建期间到达的字节会丢给一个已经 dispose 的回调。
+       */
+      const unreadState = useSessionStore.getState()
+      const unreadOwner = paneOwnerOf(sessionId)
+      const unreadVisible =
+        unreadState.activeId !== null && paneOwnerOf(unreadState.activeId) === unreadOwner
+      const unreadStatus =
+        unreadState.sessions.find((x) => x.id === sessionId)?.status ?? 'disconnected'
+      if (
+        shouldMarkUnread({
+          isVisibleInActiveTab: unreadVisible,
+          status: unreadStatus,
+          data,
+          leftAt: unreadState.tabLeftAt[unreadOwner],
+          now: Date.now()
+        })
+      ) {
+        unreadState.markUnread(unreadOwner)
+      }
       // ZMODEM 的 Sentry 挂在每个会话上（见 ensureZmodem），
       // 它的 to_terminal 负责把「非协议字节」写进终端；
       // 因此这里只把原始字节交给 Sentry，不再直接写终端，避免重复输出。
@@ -365,11 +390,16 @@ export function App(): React.JSX.Element {
       /*
        * 断开时清掉该会话的染色。
        *
-       * 断线遮罩是半透明的（bg-app/88），底下的染色行会透出来 ——
+       * 断线遮罩是半透明的（bg-app/[0.88]），底下的染色行会透出来 ——
        * 用户看到的是「已经断了，还在报错」，实际上那些红行是断之前的历史输出。
        * 重连成功后的新行会照常重新染色。
        */
-      if (status === 'disconnected' || status === 'error') clearHighlight(sessionId)
+      if (status === 'disconnected' || status === 'error') {
+        clearHighlight(sessionId)
+        // 会话没了，它上面探测到的远端端口也就没有意义了；留着只会在下次连同一台设备时
+        // 显示一份可能已经过期的端口表 —— 重新探测一次的成本只有一条命令。
+        useTunnelStore.getState().clearSessionDiscovery(sessionId)
+      }
     })
     const offLatency = window.api.on.sessionLatency(({ sessionId, ms }) => {
       useSessionStore.getState().updateLatency(sessionId, ms)
@@ -411,6 +441,14 @@ export function App(): React.JSX.Element {
     const offRecordChanged = window.api.on.recordChanged(() => {
       useTransferStore.getState().applyChanged()
     })
+    /*
+     * 文件通道降级通知：远端没 sftp-server 时主进程会退回普通命令通道。
+     * 这里只把结论记到会话上，让文件面板挂一个安静的角标 —— 降级本身
+     * 完全由主进程决定，渲染层不参与判定。
+     */
+    const offSftpMode = window.api.on.sftpMode((e) => {
+      useSftpStore.getState().setMode(e.sessionId, e.mode)
+    })
     // 应用更新状态：主进程每次推全量快照，这里直接覆盖
     const offUpdate = window.api.on.updateStatus((e) => {
       useUpdateStore.getState().applyEvent(e)
@@ -451,6 +489,7 @@ export function App(): React.JSX.Element {
     return () => {
       offData()
       offStatus()
+      offSftpMode()
       offLatency()
       offTunnel()
       offReconnect()
@@ -494,6 +533,10 @@ export function App(): React.JSX.Element {
         consume()
         // Ctrl+Alt+B：折叠/展开右侧命令栏（与侧边栏分开，各管一块）
         useLayoutStore.getState().toggleCommandRail()
+      } else if (matchShortcut(e, map.toggleZen)) {
+        consume()
+        // Ctrl+Shift+Z：专注模式（双栏一起收起，退出时按进入前的快照精准还原）
+        useLayoutStore.getState().toggleZenMode()
       } else if (matchShortcut(e, map.paneLeft) && focusSiblingPane('left')) {
         consume()
       } else if (matchShortcut(e, map.paneRight) && focusSiblingPane('right')) {
@@ -581,7 +624,7 @@ export function App(): React.JSX.Element {
 
   return (
     <div className="flex h-screen w-screen flex-col overflow-hidden bg-app text-ink-2">
-      {/* ================= 顶部标题栏（44px，品牌绿） ================= */}
+      {/* ================= 顶部标题栏（36px，中性仪器底） ================= */}
       <TitleBar />
 
       {/* ================= 主体：活动栏 + 侧栏 + 工作区 ================= */}

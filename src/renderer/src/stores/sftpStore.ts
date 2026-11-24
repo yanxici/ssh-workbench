@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import type {
   LocalFile,
   RemoteFile,
+  SftpBackendMode,
   TextEncoding,
   TransferProgressEvent,
   TransferTask
@@ -132,6 +133,26 @@ interface SftpState {
   /** 远程编辑器：sessionId 跟着一起存，保存时不必再让面板补上下文 */
   editing: { sessionId: string; path: string; content: string; encoding: TextEncoding } | null
 
+  /**
+   * 每个会话的文件通道后端。
+   *
+   * 'shell' 表示远端没有 sftp-server，主进程已经退回「用普通命令跑 ls/cat/cp」
+   * 的通道。这里只镜像主进程的判断结果，用于在面板头部挂一个安静的角标 ——
+   * 渲染层绝不自作主张改模式，否则两边会各说各话。
+   */
+  modeBySession: Record<string, SftpBackendMode>
+  /** 主进程广播的模式变更（也用于首帧对齐时写入结果） */
+  setMode: (sessionId: string, mode: SftpBackendMode) => void
+  /** 会话关闭时清掉：id 会被重连复用，留着会让新会话一上线就顶着旧角标 */
+  clearMode: (sessionId: string) => void
+  /**
+   * 主动问一次主进程「这个会话现在走哪条通道」。
+   *
+   * 事件只推未来发生的变化：降级若发生在用户点开面板之前，光靠订阅会让
+   * 角标缺一帧（甚至一直不出现）。所以打开/切换会话时补一次拉取。
+   */
+  syncMode: (sessionId: string) => Promise<void>
+
   /** 文件树刷新版本号（bump 后所有已挂载的树层级重新加载自身目录） */
   treeVersion: number
   bumpTree: () => void
@@ -260,6 +281,29 @@ export const useSftpStore = create<SftpState>()((set, get) => ({
   treeVersion: 0,
 
   uploadRequest: null,
+
+  modeBySession: {},
+
+  setMode: (sessionId, mode) =>
+    set((s) =>
+      s.modeBySession[sessionId] === mode
+        ? s
+        : { modeBySession: { ...s.modeBySession, [sessionId]: mode } }
+    ),
+
+  clearMode: (sessionId) =>
+    set((s) => {
+      if (s.modeBySession[sessionId] === undefined) return s
+      const next = { ...s.modeBySession }
+      delete next[sessionId]
+      return { modeBySession: next }
+    }),
+
+  syncMode: async (sessionId) => {
+    // silent：这条只是补首帧的对齐，失败时不该在用户眼前弹错误
+    const mode = await call(window.api.sftp.mode(sessionId), { silent: true })
+    if (mode) get().setMode(sessionId, mode)
+  },
 
   bumpTree: () => set((s) => ({ treeVersion: s.treeVersion + 1 })),
 

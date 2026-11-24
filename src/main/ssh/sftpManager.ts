@@ -1,4 +1,4 @@
-import type { OpenMode, SFTPWrapper, Stats } from 'ssh2'
+import type { Client, OpenMode, SFTPWrapper, Stats } from 'ssh2'
 import { existsSync, promises as fs } from 'node:fs'
 import type { FileHandle } from 'node:fs/promises'
 import { basename, dirname, extname, join } from 'node:path'
@@ -7,12 +7,31 @@ import iconv from 'iconv-lite'
 import type {
   RemoteFile,
   RemoteText,
+  SftpBackendMode,
+  SftpModeEvent,
   TextEncoding,
   TransferProgressEvent,
   TransferTask,
   UploadScanItem
 } from '@shared/types'
 import { sessionManager } from './sessionManager'
+import { execCollect } from './exec'
+import {
+  shellChmod,
+  shellDownloadFile,
+  shellHome,
+  shellList,
+  shellListMany,
+  shellMkdir,
+  shellReadText,
+  shellRemove,
+  shellRename,
+  shellUploadFile,
+  shellWalkRemote,
+  shellWriteText,
+  shQuote
+} from './shellFs'
+import type { ShellTransferHooks } from './shellFs'
 import { recordFromEvent } from '../store/transferRecord'
 import { recordError } from '../store/errorLog'
 
@@ -766,6 +785,47 @@ function makeReporter(
   }
 }
 
+/* --------------------------- 后端降级判定 --------------------------- */
+
+/**
+ * 这些错误说明「链路 / 会话本身」出了问题，而不是「服务器上没有 sftp 子系统」。
+ *
+ * 必须先判它们：`ECONNRESET`、`Channel is not open` 都是链路断掉的通用文案，
+ * 而链路错误的描述里经常顺带出现 not found / timed out 这类词。先跑降级正则的话，
+ * 一次地铁里断网就会被判成「这台设备没有 sftp-server」，之后整个会话都被钉在
+ * shell 通道上 —— 明明是网断了，用户看到的却是文件面板永久降级。
+ */
+const CONNECTION_LEVEL_SFTP_ERROR =
+  /channel open failure|channel is not open|not connected|connection lost|connection closed|socket hang up|econnreset|etimedout|epipe|timed out/i
+
+/**
+ * 只认「服务器明确表示 sftp 子系统起不来」这一种。
+ *
+ * 单目录的 Permission denied / No such file 不在其列：那是路径的问题，换一条通道
+ * （shell）同样读不到，把它们算成降级只会让用户以为自己打开了什么「兼容模式」，
+ * 而真正的错误原因被埋掉。
+ */
+const SFTP_SUBSYSTEM_MISSING_ERROR =
+  /unable to start subsystem|unable to start sftp|while establishing sftp session|unexpected sftp session termination|expected version packet|sftp-server|exit code 127|not found/i
+
+/**
+ * 判断异常是否等价于「对端没有 sftp 子系统」（老式嵌入式设备 / BusyBox / 老 dropbear）。
+ *
+ * 顺序不能反：先排除链路类错误，再看子系统缺失。反过来的话
+ * `Connection lost while waiting for ... not found` 这种句子会同时命中两条正则，
+ * 结果取决于正则书写顺序而不是真实原因 —— 那是不可维护的判据。
+ *
+ * 传入非 Error 时按字面消息处理（IPC 回来的错误常是字符串），其余一律 false：
+ * 拿不到消息就没有依据，宁可不降级也不要猜。
+ */
+export function isSftpSubsystemUnavailableError(err: unknown): boolean {
+  const message =
+    err instanceof Error ? err.message : typeof err === 'string' ? err : ''
+  if (message === '') return false
+  if (CONNECTION_LEVEL_SFTP_ERROR.test(message)) return false
+  return SFTP_SUBSYSTEM_MISSING_ERROR.test(message)
+}
+
 /* ------------------------------ 管理器 ------------------------------ */
 
 /** 导出类供回归脚本驱动（生产只使用下方的单例） */
@@ -789,8 +849,40 @@ export class SftpManager {
    */
   private running = 0
   private waiters: Array<() => void> = []
+  /**
+   * 每个会话「已确认」的文件通道后端。
+   *
+   * 只缓存确定的结果：shell 一旦确认就长期有效（这台设备上确实没有 sftp-server，
+   * 重试一百次也不会有），sftp 也缓存，省掉每次都要重新挂载子系统。
+   * 判定过程本身不写这里 —— 见 pendingMode。
+   */
+  private sessionModes = new Map<string, SftpBackendMode>()
+  /**
+   * 正在判定中的后端（并发请求共享同一次探测）。
+   *
+   * 打开文件面板时 bootstrap / listMany / prewarm 会一起打到主进程，
+   * 没有这道合并就是三次 sftp 子系统握手失败 + 三次 shell 探针。
+   */
+  private pendingMode = new Map<string, Promise<SftpBackendMode>>()
+  /** 首次确认降级时的通知钩子（主进程转成 IPC 事件推给渲染层） */
+  private onMode: ((e: SftpModeEvent) => void) | null = null
   setProgressHandler(handler: ProgressHandler): void {
     this.onProgress = handler
+  }
+
+  /**
+   * 注册「后端降级」通知。
+   *
+   * 只在**首次**确认降级时触发一次：渲染层据此在文件面板上打「Shell 兼容」角标，
+   * 每帧都推一遍既没必要，也会让渲染层误以为状态还在变。
+   */
+  setModeHandler(handler: (e: SftpModeEvent) => void): void {
+    this.onMode = handler
+  }
+
+  /** 该会话当前确认过的后端；尚未判定时返回 null（渲染层据此显示「未知」而不是猜一个） */
+  getMode(sessionId: string): SftpBackendMode | null {
+    return this.sessionModes.get(sessionId) ?? null
   }
 
   /* ------------------------------ 传输控制 ------------------------------ */
@@ -869,6 +961,15 @@ export class SftpManager {
   clearSession(sessionId: string): void {
     this.pendingMounts.delete(sessionId)
     this.homes.delete(sessionId)
+    /*
+     * 后端判定必须跟着会话一起清掉。
+     *
+     * 用户给设备装上 sftp-server 后重连，缓存的 'shell' 会让他永远走兼容通道；
+     * 反过来把 'sftp' 留在缓存里，重连到另一台 BusyBox 设备时会一直重试挂载
+     * 子系统，把唯一一次降级机会白白烧掉。重连即重置是唯一安全的语义。
+     */
+    this.sessionModes.delete(sessionId)
+    this.pendingMode.delete(sessionId)
     const wrapper = this.wrappers.get(sessionId)
     if (!wrapper) return
     this.wrappers.delete(sessionId)
@@ -934,6 +1035,68 @@ export class SftpManager {
     }
   }
 
+  /**
+   * 判定该会话该走哪种文件通道，并缓存结论。
+   *
+   * 判定顺序是有讲究的：**先试 SFTP**。绝大多数设备都有 sftp-server，
+   * 先试就等于「零额外开销」；只有握手明确失败、且错误说明子系统不存在、
+   * 且会话此刻确实是 connected 时，才用一条 echo 探针确认 shell 通道可用。
+   *
+   * 为什么要那条探针：BusyBox 设备的 exec 通道也可能被关掉（只留交互式 shell），
+   * 不做验证就切过去，用户会在文件面板里看到一个空目录而不是一句「设备不支持」。
+   * 探针失败时把原始 SFTP 错误原样抛出 —— 那才是用户该看到的真话。
+   */
+  async resolveBackend(sessionId: string): Promise<SftpBackendMode> {
+    const cached = this.sessionModes.get(sessionId)
+    if (cached) return cached
+
+    const inflight = this.pendingMode.get(sessionId)
+    if (inflight) return inflight
+
+    const resolving = (async (): Promise<SftpBackendMode> => {
+      try {
+        await this.getSftp(sessionId)
+        this.sessionModes.set(sessionId, 'sftp')
+        return 'sftp'
+      } catch (err) {
+        if (!isSftpSubsystemUnavailableError(err)) throw err
+        // 会话已经掉了：那不是「设备没有 sftp-server」，是网断了，原样抛
+        if (sessionManager.statusOf(sessionId) !== 'connected') throw err
+        const client = sessionManager.getClient(sessionId)
+        if (!client) throw err
+        const probe = await execCollect(client, 'echo __SWB_SH_OK__', 5000)
+        const usable =
+          probe.status === 'done' &&
+          probe.exitCode === 0 &&
+          probe.stdout.includes('__SWB_SH_OK__')
+        if (!usable) throw err
+        this.sessionModes.set(sessionId, 'shell')
+        this.onMode?.({ sessionId, mode: 'shell' })
+        return 'shell'
+      }
+    })()
+
+    this.pendingMode.set(sessionId, resolving)
+    try {
+      return await resolving
+    } finally {
+      if (this.pendingMode.get(sessionId) === resolving) this.pendingMode.delete(sessionId)
+    }
+  }
+
+  /**
+   * 取 shell 通道要用的 Client。
+   *
+   * 与 getSftp 一样先等会话 ready，但不能复用它的缓存：Client 在重连后会换成
+   * 新对象，抓住旧的只会在断线后一路报「Channel is not open」。
+   */
+  private async shellClient(sessionId: string): Promise<Client> {
+    await sessionManager.waitUntilReady(sessionId)
+    const client = sessionManager.getClient(sessionId)
+    if (!client) throw new Error('会话不存在或已断开，请先打开 SSH 连接')
+    return client
+  }
+
   /** 出错后使缓存的通道失效（例如会话已断开） */
   private invalidate(sessionId: string): void {
     this.clearSession(sessionId)
@@ -977,13 +1140,20 @@ export class SftpManager {
   async home(sessionId: string): Promise<string> {
     const cached = this.homes.get(sessionId)
     if (cached) return cached
-    const sftp = await this.getSftp(sessionId)
-    const abs = await new Promise<string>((resolve, reject) => {
-      sftp.realpath('.', (err, path) => {
-        if (err) reject(new Error(`无法获取远端主目录：${err.message}`))
-        else resolve(path)
+    const mode = await this.resolveBackend(sessionId)
+    let abs: string
+    if (mode === 'shell') {
+      // shell 通道没有 realpath：pwd 就是登录后的 home，语义等价
+      abs = await shellHome(await this.shellClient(sessionId))
+    } else {
+      const sftp = await this.getSftp(sessionId)
+      abs = await new Promise<string>((resolve, reject) => {
+        sftp.realpath('.', (err, path) => {
+          if (err) reject(new Error(`无法获取远端主目录：${err.message}`))
+          else resolve(path)
+        })
       })
-    })
+    }
     this.homes.set(sessionId, abs)
     return abs
   }
@@ -1000,7 +1170,9 @@ export class SftpManager {
    */
   async prewarm(sessionId: string): Promise<void> {
     try {
-      await this.getSftp(sessionId)
+      // 后端判定放在预热里做：真机上一次 sftp 握手失败要 300~800ms，
+      // 提前吃掉，用户点开文件面板时不会再卡一下才降级。
+      await this.resolveBackend(sessionId)
       // 顺手解析 home，打开面板时不用再等一次 realpath
       await this.home(sessionId)
     } catch {
@@ -1009,6 +1181,10 @@ export class SftpManager {
   }
 
   async list(sessionId: string, dir: string): Promise<RemoteFile[]> {
+    const mode = await this.resolveBackend(sessionId)
+    if (mode === 'shell') {
+      return shellList(await this.shellClient(sessionId), dir)
+    }
     const sftp = await this.getSftp(sessionId)
     try {
       return toRemoteFiles(dir, await pReaddir(sftp, dir))
@@ -1041,6 +1217,11 @@ export class SftpManager {
     sessionId: string,
     dirs: string[]
   ): Promise<{ dirs: Record<string, RemoteFile[]>; errors: Record<string, string> }> {
+    const mode = await this.resolveBackend(sessionId)
+    if (mode === 'shell') {
+      // shell 侧自带并发池（SHELL_LIST_CONCURRENCY），语义与这里一致
+      return shellListMany(await this.shellClient(sessionId), dirs)
+    }
     const sftp = await this.getSftp(sessionId)
     const dirsOut: Record<string, RemoteFile[]> = {}
     const errors: Record<string, string> = {}
@@ -1081,6 +1262,12 @@ export class SftpManager {
    * 渲染层拿到就能直接上屏。
    */
   async bootstrap(sessionId: string): Promise<{ home: string; files: RemoteFile[] }> {
+    const mode = await this.resolveBackend(sessionId)
+    if (mode === 'shell') {
+      const client = await this.shellClient(sessionId)
+      const home = await this.home(sessionId)
+      return { home, files: await shellList(client, home) }
+    }
     const sftp = await this.getSftp(sessionId)
     const home = await this.home(sessionId)
     try {
@@ -1091,6 +1278,12 @@ export class SftpManager {
   }
 
   async mkdir(sessionId: string, path: string): Promise<void> {
+    const mode = await this.resolveBackend(sessionId)
+    if (mode === 'shell') {
+      // recursive=false 与 sftp.mkdir 的语义对齐：目标已存在时报错，而不是静默成功
+      await shellMkdir(await this.shellClient(sessionId), path, false)
+      return
+    }
     const sftp = await this.getSftp(sessionId)
     await new Promise<void>((resolve, reject) => {
       sftp.mkdir(path, (err) => {
@@ -1102,6 +1295,12 @@ export class SftpManager {
 
   /** 递归删除（文件或目录） */
   async remove(sessionId: string, path: string): Promise<void> {
+    const mode = await this.resolveBackend(sessionId)
+    if (mode === 'shell') {
+      // shellRemove 内部先过 assertSafeRemovePath：rm -rf 的路径必须自己校验
+      await shellRemove(await this.shellClient(sessionId), path)
+      return
+    }
     const sftp = await this.getSftp(sessionId)
     await this.removeRecursive(sftp, path)
   }
@@ -1138,11 +1337,21 @@ export class SftpManager {
   }
 
   async rename(sessionId: string, from: string, to: string): Promise<void> {
+    const mode = await this.resolveBackend(sessionId)
+    if (mode === 'shell') {
+      await shellRename(await this.shellClient(sessionId), from, to)
+      return
+    }
     const sftp = await this.getSftp(sessionId)
     await pRename(sftp, from, to)
   }
 
   async chmod(sessionId: string, path: string, mode: number): Promise<void> {
+    const backend = await this.resolveBackend(sessionId)
+    if (backend === 'shell') {
+      await shellChmod(await this.shellClient(sessionId), path, mode)
+      return
+    }
     const sftp = await this.getSftp(sessionId)
     await new Promise<void>((resolve, reject) => {
       sftp.chmod(path, mode, (err) => {
@@ -1161,6 +1370,20 @@ export class SftpManager {
    * 存一次就变成满屏问号，中文注释永久丢失（旧实现就是这个行为）。
    */
   async readText(sessionId: string, path: string): Promise<RemoteText> {
+    /*
+     * shell 模式下没有 readFile：用 wc -c 先探大小（超限就不 cat，避免把
+     * 一个 500 MB 的日志整体拉进内存），再用 cat 收原始字节，编码探测仍走
+     * 与 SFTP 分支同一个 detectTextEncoding —— 两条通道的判定必须完全一致，
+     * 否则同一个 GBK 文件在降级前后会被判成不同编码。
+     */
+    if ((await this.resolveBackend(sessionId)) === 'shell') {
+      return shellReadText(
+        await this.shellClient(sessionId),
+        path,
+        detectTextEncoding,
+        EDIT_SIZE_LIMIT
+      )
+    }
     const sftp = await this.getSftp(sessionId)
     const st = await pLstat(sftp, path)
     if (st.isSymbolicLink()) {
@@ -1201,6 +1424,15 @@ export class SftpManager {
     content: string,
     encoding: TextEncoding = 'utf-8'
   ): Promise<void> {
+    /*
+     * shell 模式：shellWriteText 内部按同一套承诺行事（先 cp 一份 <path>.swb-bak，
+     * 用 cat > 截断写入，失败时从备份回滚）。差别只在备份文件名 —— SFTP 侧用
+     * .bak，shell 侧用 .swb-bak，避免两套实现互相踩到对方留下的备份。
+     */
+    if ((await this.resolveBackend(sessionId)) === 'shell') {
+      await shellWriteText(await this.shellClient(sessionId), path, encodeText(content, encoding))
+      return
+    }
     const sftp = await this.getSftp(sessionId)
 
     /*
@@ -1301,6 +1533,22 @@ export class SftpManager {
       const remotePath = joinRemote(remoteDir, basename(localPath))
       this.enqueue(
         async (ctl, hooks) => {
+          /*
+           * 上传前先定后端：sftp 子系统缺失的设备在 shell 通道上用
+           * cat > <part> && mv -f 流式写，语义与 SFTP 侧一致（先落中转再原子替换），
+           * 只是没有「远端已是最新就跳过」的判据 —— BusyBox 的 ls 时间精度
+           * 不足以做秒级比较，宁可重传也不能漏传。
+           */
+          if ((await this.resolveBackend(sessionId)) === 'shell') {
+            const client = await this.shellClient(sessionId)
+            const st = await fs.stat(localPath).catch(() => null)
+            if (st?.isDirectory()) {
+              await transferUploadShellDir(client, ctl, taskId, (e) => this.emit(e))
+            } else {
+              await transferUploadShell(client, ctl, taskId, (e) => this.emit(e))
+            }
+            return
+          }
           const sftp = await this.getSftp(sessionId)
           const st = await fs.stat(localPath).catch(() => null)
           if (st?.isDirectory()) {
@@ -1399,6 +1647,17 @@ export class SftpManager {
       const localPath = uniqueLocalPath(localDir, basename(remotePath), allocated)
       this.enqueue(
         async (ctl, hooks) => {
+          // 下载侧同理：shell 后端先探一次远端类型，再决定单文件还是整个目录
+          if ((await this.resolveBackend(sessionId)) === 'shell') {
+            const client = await this.shellClient(sessionId)
+            const kind = await shellKindOf(client, remotePath)
+            if (kind === 'directory') {
+              await transferDownloadShellDir(client, ctl, taskId, (e) => this.emit(e))
+            } else {
+              await transferDownloadShell(client, ctl, taskId, (e) => this.emit(e))
+            }
+            return
+          }
           const sftp = await this.getSftp(sessionId)
           const st = await pStat(sftp, remotePath).catch(() => null)
           if (st?.isDirectory()) {
@@ -2399,6 +2658,253 @@ async function transferDownloadDir(
   if (failed.length > 0) throw new TransferPartialError(failed, notes.join('；'))
   if (links.length > 0 || truncated) {
     // 只跳过链接/命中上限、文件全成功：不算失败，但也不能悄悄咽下去
+    emit(eventOf(ctl, taskId, 'running', { note: notes.join('；') }))
+  }
+}
+
+/* --------------------------- Shell 通道传输 --------------------------- */
+
+/**
+ * 探远端路径类型：shell 通道没有 lstat，只能用 test 内建问一句。
+ *
+ * 失败一律返回 'missing'：调用方会退回按单文件下载处理，
+ * 真正的错误（权限、路径不存在）由随后的 cat 暴露，不必在这里猜。
+ */
+async function shellKindOf(client: Client, remotePath: string): Promise<'file' | 'directory' | 'missing'> {
+  const quoted = shQuote(remotePath)
+  const command =
+    '[ -d ' + quoted + ' ] && echo __SWB_DIR__ || { [ -e ' + quoted + ' ] && echo __SWB_FILE__ || echo __SWB_NONE__; }'
+  const probe = await execCollect(client, command, 15000)
+  if (probe.status !== 'done' || probe.exitCode !== 0) return 'missing'
+  const text = probe.stdout.trim()
+  if (text.includes('__SWB_DIR__')) return 'directory'
+  if (text.includes('__SWB_FILE__')) return 'file'
+  return 'missing'
+}
+
+/**
+ * 把 TransferControl 桥接成 shellFs 的传输钩子。
+ *
+ * shellFs 只认回调、不认识 ctl，暂停 / 取消 / 进度全靠这里转接；
+ * 暂停时同样要让出并发位，否则三个暂停的 shell 传输会把整条队列永久卡死
+ * （与 checkpoint 里那套 release/acquire 保持同一套语义）。
+ *
+ * @param reportBytes 单文件传输为 true（进度按字节推进）；
+ *   目录内逐文件传时传 false —— 那时 ctl.unit 是 'files'，进度由文件数驱动，
+ *   让字节数覆盖 ctl.transferred 会把「3/100 个文件」显示成几 MB 的乱码进度。
+ */
+function bridgeShellHooks(
+  ctl: TransferControl,
+  taskId: string,
+  emit: (e: TransferProgressEvent) => void,
+  reportBytes: boolean
+): ShellTransferHooks {
+  const reporter = makeReporter(ctl, taskId, emit)
+  let announced = false
+  return {
+    isPaused: () => ctl.paused,
+    isCancelled: () => ctl.cancelled,
+    waitIfPaused: async () => {
+      if (!ctl.paused) return
+      ctl.release?.()
+      while (ctl.paused && !ctl.cancelled) {
+        await new Promise<void>((resolve) => ctl.waiters.push(resolve))
+      }
+      if (!ctl.cancelled && !ctl.holding && ctl.acquire) await ctl.acquire()
+    },
+    onProgress: (transferred, total) => {
+      if (!reportBytes) return
+      ctl.transferred = transferred
+      if (total > 0) ctl.total = total
+      const force = !announced && ctl.total > 0
+      if (force) announced = true
+      reporter.report(force)
+    }
+  }
+}
+
+/** 单文件上传（shell 后端）：进度按字节，取消/中断转成引擎认识的错误类型 */
+async function transferUploadShell(
+  client: Client,
+  ctl: TransferControl,
+  taskId: string,
+  emit: (e: TransferProgressEvent) => void
+): Promise<void> {
+  await checkpoint(ctl)
+  ctl.unit = 'bytes'
+  ctl.transferred = 0
+  ctl.total = 0
+  try {
+    await shellUploadFile(client, ctl.localPath, ctl.remotePath, bridgeShellHooks(ctl, taskId, emit, true))
+  } catch (err) {
+    // shellFs 抛的是「传输已取消：路径」这种文案，引擎只认错误类型，
+    // 这里必须翻译成 TransferCancelledError，否则取消会被记成一次失败。
+    if (ctl.cancelled) throw new TransferCancelledError()
+    throw err
+  }
+  if (ctl.total <= 0) ctl.total = ctl.transferred
+  ctl.transferred = Math.max(ctl.transferred, ctl.total)
+}
+
+/** 单文件下载（shell 后端） */
+async function transferDownloadShell(
+  client: Client,
+  ctl: TransferControl,
+  taskId: string,
+  emit: (e: TransferProgressEvent) => void
+): Promise<void> {
+  await checkpoint(ctl)
+  ctl.unit = 'bytes'
+  ctl.transferred = 0
+  ctl.total = 0
+  try {
+    await shellDownloadFile(client, ctl.remotePath, ctl.localPath, bridgeShellHooks(ctl, taskId, emit, true))
+  } catch (err) {
+    if (ctl.cancelled) throw new TransferCancelledError()
+    throw err
+  }
+  if (ctl.total <= 0) ctl.total = ctl.transferred
+  ctl.transferred = Math.max(ctl.transferred, ctl.total)
+}
+
+/**
+ * 上传目录（shell 后端）：进度按「已完成文件数 / 总文件数」。
+ *
+ * 与 SFTP 侧的差别只有一处：不做 mtime 跳过判断（BusyBox ls 精度不够，
+ * 判错就是「该传的没传」）。其余语义（保留目录名、空目录、上限提示、
+ * 单文件失败不拖垮整批）完全对齐。
+ */
+async function transferUploadShellDir(
+  client: Client,
+  ctl: TransferControl,
+  taskId: string,
+  emit: (e: TransferProgressEvent) => void
+): Promise<void> {
+  const localDir = ctl.localPath
+  const remoteDir = ctl.keepRoot
+    ? ctl.remotePath
+    : ctl.remotePath.slice(0, ctl.remotePath.lastIndexOf('/')) || '/'
+  const { files, dirs, links, truncated } = await walkLocalTree(localDir, UPLOAD_FILE_LIMIT)
+
+  if (ctl.keepRoot) await shellMkdir(client, remoteDir, true)
+  for (const d of dirs) {
+    await shellMkdir(client, joinRemote(remoteDir, d), true)
+  }
+
+  ctl.unit = 'files'
+  ctl.total = files.length
+  ctl.transferred = 0
+  emit(eventOf(ctl, taskId, 'running'))
+
+  let done = 0
+  // 同一目录下的文件只 mkdir 一次：每文件一次 mkdir -p 是纯粹的往返浪费
+  let lastDir = ''
+  const failed: Array<{ path: string; message: string }> = []
+  for (const f of files) {
+    await checkpoint(ctl)
+    const target = joinRemote(remoteDir, f.rel)
+    const targetDir = target.slice(0, target.lastIndexOf('/')) || '/'
+    if (targetDir !== lastDir) {
+      await shellMkdir(client, targetDir, true)
+      lastDir = targetDir
+    }
+    try {
+      await shellUploadFile(client, f.full, target, bridgeShellHooks(ctl, taskId, emit, false))
+    } catch (err) {
+      if (ctl.cancelled) throw new TransferCancelledError()
+      if (err instanceof TransferCancelledError || err instanceof TransferAbortedError) throw err
+      // 链路类错误向上抛：否则剩下几十个文件会以同样理由失败，真相被埋成「N 个文件失败」
+      if (isRetryable(err)) throw err
+      failed.push({ path: f.rel, message: err instanceof Error ? err.message : String(err) })
+    }
+    done += 1
+    ctl.transferred = done
+    emit(eventOf(ctl, taskId, 'running'))
+  }
+  ctl.transferred = ctl.total
+
+  const notes: string[] = []
+  if (failed.length > 0) {
+    const sample = failed
+      .slice(0, 3)
+      .map((x) => `${x.path}（${x.message}）`)
+      .join('；')
+    notes.push(`${failed.length} 个文件失败（例如 ${sample}）`)
+  } else if (ctl.total === 0) {
+    notes.push('该文件夹里没有文件，已创建目录结构')
+  }
+  if (links.length > 0) {
+    notes.push(`跳过 ${links.length} 个符号链接/目录联接（例如 ${links.slice(0, 2).join('、')}）`)
+  }
+  notes.push('兼容模式下不判断远端是否已是最新，已全部重传')
+  if (truncated) {
+    notes.push(`文件数超过 ${UPLOAD_FILE_LIMIT} 上限，已只上传前 ${UPLOAD_FILE_LIMIT} 个`)
+  }
+  if (failed.length > 0) throw new TransferPartialError(failed, notes.join('；'))
+  emit(eventOf(ctl, taskId, 'running', { note: notes.join('；') }))
+}
+
+/** 下载目录（shell 后端）：进度按「已完成文件数 / 总文件数」 */
+async function transferDownloadShellDir(
+  client: Client,
+  ctl: TransferControl,
+  taskId: string,
+  emit: (e: TransferProgressEvent) => void
+): Promise<void> {
+  const remoteDir = ctl.remotePath
+  const localDir = ctl.localPath
+  const entries = await shellWalkRemote(client, remoteDir, DOWNLOAD_FILE_LIMIT, MAX_WALK_DEPTH)
+  const dirs = entries.filter((e) => e.isDir)
+  const files = entries.filter((e) => !e.isDir)
+  // 条目数撞到上限：数字是下限，必须提示用户「没下全」
+  const truncated = entries.length >= DOWNLOAD_FILE_LIMIT
+
+  ctl.unit = 'files'
+  ctl.total = files.length
+  ctl.transferred = 0
+  emit(eventOf(ctl, taskId, 'running'))
+
+  // 远端空目录也要在本地建出来，否则下载完目录结构会凭空少几层
+  await fs.mkdir(localDir, { recursive: true })
+  for (const d of dirs) {
+    await fs.mkdir(join(localDir, ...d.relPath.split('/')), { recursive: true })
+  }
+
+  let done = 0
+  const failed: Array<{ path: string; message: string }> = []
+  for (const f of files) {
+    await checkpoint(ctl)
+    const target = join(localDir, ...f.relPath.split('/'))
+    await fs.mkdir(dirname(target), { recursive: true })
+    try {
+      await shellDownloadFile(client, f.remotePath, target, bridgeShellHooks(ctl, taskId, emit, false))
+    } catch (err) {
+      if (ctl.cancelled) throw new TransferCancelledError()
+      if (err instanceof TransferCancelledError || err instanceof TransferAbortedError) throw err
+      if (isRetryable(err)) throw err
+      failed.push({ path: f.relPath, message: err instanceof Error ? err.message : String(err) })
+    }
+    done += 1
+    ctl.transferred = done
+    emit(eventOf(ctl, taskId, 'running'))
+  }
+  ctl.transferred = ctl.total
+
+  const notes: string[] = []
+  if (failed.length > 0) {
+    const sample = failed
+      .slice(0, 3)
+      .map((x) => `${x.path}（${x.message}）`)
+      .join('；')
+    notes.push(`${failed.length} 个文件失败（例如 ${sample}）`)
+  } else if (ctl.total === 0) {
+    notes.push('该文件夹里没有文件，已创建目录结构')
+  }
+  if (truncated) {
+    notes.push(`文件数超过 ${DOWNLOAD_FILE_LIMIT} 上限，已只下载前 ${DOWNLOAD_FILE_LIMIT} 个`)
+  }
+  if (failed.length > 0) throw new TransferPartialError(failed, notes.join('；'))
+  if (truncated) {
     emit(eventOf(ctl, taskId, 'running', { note: notes.join('；') }))
   }
 }

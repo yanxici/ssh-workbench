@@ -1,13 +1,13 @@
 import type * as React from 'react'
 import { useRef, type DragEvent } from 'react'
-import { Plus, SquareTerminal } from 'lucide-react'
 import type { SessionUi } from '@/stores/sessionStore'
 import { cn } from '@/lib/utils'
 import { TerminalView } from '@/components/terminal/TerminalView'
 import { ZmodemOverlay } from '@/components/terminal/ZmodemOverlay'
-import { EmptyState } from '@/components/ui'
 import { useSplitStore } from '@/stores/splitStore'
+import { WelcomeQuickLaunch } from './WelcomeQuickLaunch'
 import { isNestedPane } from '@/lib/paneRegistry'
+import { useI18n } from '@/i18n'
 import {
   layoutPaneTree,
   leafIds,
@@ -136,40 +136,95 @@ function PaneGrid({
   activeId: string | null
 }): React.JSX.Element {
   const ref = useRef<HTMLDivElement | null>(null)
+  const { t } = useI18n()
   const { rects, dividers } = layoutPaneTree(node)
   const multi = rects.size > 1
   const byId = new Map(sessions.map((s) => [s.id, s]))
+  const syncOn = useSplitStore((s) => s.syncByTab[ownerId] === true)
+  const toggleSync = useSplitStore((s) => s.toggleSync)
+
+  /*
+   * 同步输入条只在多窗格时出现，且只占一条 28px —— 单窗格标签什么都不多。
+   *
+   * 开启态必须足够刺眼：之后在这屏里敲的每一个字都会进到所有已连接的窗格，
+   * 包括那台正在跑 rm -rf 的机器。一条安静的灰色小开关不够，用琥珀色整条铺满
+   * 再加一个实心点，扫一眼就知道自己在「同时指挥多台」。
+   */
+  const bar = multi ? (
+    <div
+      className={cn(
+        'z-30 flex h-7 shrink-0 items-center gap-2 border-b px-2.5',
+        syncOn
+          ? 'border-warning/50 bg-warning/15 text-warning'
+          : 'border-edge-soft bg-panel/80 text-ink-3'
+      )}
+    >
+      <button
+        type="button"
+        onClick={() => toggleSync(ownerId)}
+        title={syncOn ? t('workspace.sync.on') : t('workspace.sync.off')}
+        className={cn(
+          'flex h-5 shrink-0 items-center gap-1 rounded-sm border px-1.5 text-2xs transition-colors duration-150',
+          syncOn
+            ? 'border-warning/60 bg-warning/20 text-warning hover:bg-warning/30'
+            : 'border-edge bg-raised text-ink-3 hover:text-ink-2'
+        )}
+      >
+        <span
+          className={cn('h-1.5 w-1.5 rounded-full', syncOn ? 'bg-warning' : 'bg-ink-3/60')}
+        />
+        {syncOn ? t('workspace.sync.active') : t('workspace.sync.label')}
+      </button>
+      <span className="min-w-0 flex-1 truncate text-2xs">
+        {syncOn ? t('workspace.sync.on') : t('workspace.sync.off')}
+      </span>
+    </div>
+  ) : null
 
   return (
-    <div ref={ref} className="absolute inset-0">
-      {[...rects].map(([sessionId, r]) => {
-        const s = byId.get(sessionId)
-        // 会话已被关掉但树还没 reconcile：先留空，下一次 reconcile 会把它摘掉
-        if (!s) return null
-        const focused = sessionId === activeId
-        return (
-          <div
-            key={sessionId}
-            data-pane-id={sessionId}
-            className="absolute p-[2px]"
-            style={{ left: `${r.x}%`, top: `${r.y}%`, width: `${r.w}%`, height: `${r.h}%` }}
-          >
+    /*
+     * 同步条走普通流式布局，不盖在格子上。
+     * 用 absolute 压在顶上会正好吃掉每格终端 28px 的顶部（第一条输出、
+     * 以及贴在顶部的 tmux/htop 标题行），看起来像终端被裁了一条。
+     * 柱状布局里格子高度自动减去条高，layoutPaneTree 的百分比仍然按
+     * 剩余区域算 —— 分屏比例不受影响。
+     */
+    <div className="absolute inset-0 flex flex-col">
+      {bar}
+      {/**
+       * 这一层才是分屏容器：布局比例、分隔条热区都按它的 rect 算。
+       * 条本身不参与，所以「有同步条时格子被压扁」不会影响分隔条命中。
+       */}
+      <div ref={ref} className="relative min-h-0 flex-1">
+        {[...rects].map(([sessionId, r]) => {
+          const s = byId.get(sessionId)
+          // 会话已被关掉但树还没 reconcile：先留空，下一次 reconcile 会把它摘掉
+          if (!s) return null
+          const focused = sessionId === activeId
+          return (
             <div
-              className={cn(
-                'relative h-full w-full overflow-hidden rounded',
-                // 焦点格描边：分屏之后「命令会落到哪一格」必须是看一眼就知道的
-                multi && focused && 'ring-1 ring-accent/45',
-                multi && !focused && 'ring-1 ring-edge/70'
-              )}
+              key={sessionId}
+              data-pane-id={sessionId}
+              className="absolute p-[2px]"
+              style={{ left: `${r.x}%`, top: `${r.y}%`, width: `${r.w}%`, height: `${r.h}%` }}
             >
-              <TerminalView session={s} active={focused} />
+              <div
+                className={cn(
+                  'relative h-full w-full overflow-hidden rounded',
+                  // 焦点格描边：分屏之后「命令会落到哪一格」必须是看一眼就知道的
+                  multi && focused && 'ring-1 ring-accent/45',
+                  multi && !focused && 'ring-1 ring-edge/70'
+                )}
+              >
+                <TerminalView session={s} active={focused} />
+              </div>
             </div>
-          </div>
-        )
-      })}
-      {dividers.map((d) => (
-        <SplitDivider key={d.id} divider={d} ownerId={ownerId} containerRef={ref} />
-      ))}
+          )
+        })}
+        {dividers.map((d) => (
+          <SplitDivider key={d.id} divider={d} ownerId={ownerId} containerRef={ref} />
+        ))}
+      </div>
     </div>
   )
 }
@@ -211,21 +266,11 @@ export function MainWorkspace({
     >
       {tabs.length === 0 ? (
         /*
-         * 空态文案给「下一步动作」而不是「当前状态」：
-         * 用户盯着的是一块空白的黑区，他最想知道的是「怎么让它有东西」，
-         * 所以第一行是动作（双击连接），第二行才是补充（拖命令）。
+         * 空态不再是一句「双击左侧连接」的提示语，而是一个能直接动手的启动页：
+         * 上半部给四个动作入口，下半部给最近连接。用户盯着的是一块空白区，
+         * 他要的是「怎么让它有东西」，所以这里铺的是按钮和可点的行，不是文案。
          */
-        <EmptyState
-          icon={<SquareTerminal size={34} />}
-          title="双击左侧的连接开始会话"
-          hint="连上之后，侧栏「常用命令」里的按钮可以直接拖进终端执行；按 Ctrl+K 可全局搜命令"
-          action={
-            <button className="btn btn-primary h-7 px-3 text-2xs" onClick={onNewConnection}>
-              <Plus size={12} />
-              新建连接
-            </button>
-          }
-        />
+        <WelcomeQuickLaunch onNewConnection={onNewConnection} />
       ) : (
         tabs.map((s) => {
           const tree: PaneNode = trees[s.id] ?? { type: 'leaf', sessionId: s.id }

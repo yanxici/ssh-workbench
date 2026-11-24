@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react'
 import type { TunnelConfig, TunnelInput, TunnelType } from '@shared/types'
 import { isWildcardHost, needsLanGrant } from '@shared/bindHost'
 import { connectionTarget } from '@shared/serialDisplay'
+import { useI18n } from '@/i18n'
 import { cn } from '@/lib/utils'
 import { Field, Modal } from '@/components/ui'
 import { useConnectionStore } from '@/stores/connectionStore'
@@ -42,6 +43,8 @@ interface FormState {
   remark: string
   /** 允许监听非回环地址（后端 needsLanGrant 为真时才有意义） */
   allowLan: boolean
+  /** 该连接建立会话时自动启动（仅关联连接后有意义） */
+  autoStart: boolean
 }
 
 const EMPTY: FormState = {
@@ -53,7 +56,8 @@ const EMPTY: FormState = {
   targetHost: '127.0.0.1',
   targetPort: '80',
   remark: '',
-  allowLan: false
+  allowLan: false,
+  autoStart: false
 }
 
 function fromConfig(t: TunnelConfig): FormState {
@@ -71,7 +75,8 @@ function fromConfig(t: TunnelConfig): FormState {
      * 0.0.0.0（那时没有任何校验）。按当前 bindHost 反推初值，
      * 否则用户打开老隧道不重新勾选直接保存，会被后端拒绝 —— 改个名字都存不了。
      */
-    allowLan: t.allowLan ?? needsLanGrant(t.bindHost)
+    allowLan: t.allowLan ?? needsLanGrant(t.bindHost),
+    autoStart: t.autoStart === true
   }
 }
 
@@ -85,6 +90,7 @@ export function TunnelEditor({
   initial: TunnelConfig | null
   onClose: () => void
 }): React.JSX.Element {
+  const { t } = useI18n()
   const connections = useConnectionStore((s) => s.connections)
   const [form, setForm] = useState<FormState>(EMPTY)
   const [saving, setSaving] = useState(false)
@@ -143,7 +149,9 @@ export function TunnelEditor({
       targetPort: form.type === 'dynamic' ? undefined : Number(form.targetPort),
       connectionId: form.connectionId || undefined,
       remark: form.remark,
-      allowLan: form.allowLan
+      allowLan: form.allowLan,
+      // 没关联连接就没有「随连接自启」可言，后端也只在这种情况下持久化
+      autoStart: form.connectionId ? form.autoStart : false
     }
     const saved = await useTunnelStore.getState().save(input)
     setSaving(false)
@@ -216,6 +224,31 @@ export function TunnelEditor({
             ))}
           </select>
         </Field>
+
+        <label
+          className={cn(
+            'flex items-start gap-2 rounded-md border px-3 py-2 text-2xs leading-relaxed',
+            form.connectionId
+              ? 'border-edge bg-hover/40 text-ink-2'
+              : 'border-edge-soft bg-hover/20 text-ink-3'
+          )}
+        >
+          <input
+            type="checkbox"
+            className="mt-0.5"
+            disabled={!form.connectionId}
+            checked={form.connectionId ? form.autoStart : false}
+            onChange={(e) => set('autoStart', e.target.checked)}
+          />
+          <span>
+            {t('tunnel.editor.autoStart')}
+            <span className="block text-ink-3">
+              {form.connectionId
+                ? t('tunnel.editor.autoStartHint')
+                : t('tunnel.editor.autoStartOff')}
+            </span>
+          </span>
+        </label>
 
         <div className="grid grid-cols-2 gap-x-3 gap-y-3.5">
           <Field

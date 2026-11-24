@@ -347,9 +347,13 @@ export function runSmoke(win: BrowserWindow): void {
 
           /*
            * 外壳几何断言：新版五段结构。
-           * 规范把尺寸写死了（标题栏 44 / 活动栏 48 / 侧栏 280 / 状态栏 28），
+           * 规范把尺寸写死了（标题栏 36 / 活动栏 44 / 侧栏 280 / 状态栏 26），
            * 这类数值最容易在后续改动里被悄悄带偏，所以直接量 getBoundingClientRect。
-           * 同时校验品牌绿只出现在标题栏（这是规范里最容易被滥用的约束）。
+           *
+           * 品牌色的约束在 P2 里变过一次：旧版要求「整条标题栏是品牌绿底」，
+           * 现在绿色降级为「点」（Logo 徽标 / 激活标签顶线 / 活动栏指示条），
+           * 所以这里不再断言「只有 titlebar 是绿底」，改为统计绿色底的元素数量，
+           * 断言它 **不为 0 也不是整条标题栏** —— 绿色仍在用，但不再当大面使用。
            */
           const shellProbe = (await win.webContents.executeJavaScript(`
             (() => {
@@ -361,11 +365,21 @@ export function runSmoke(win: BrowserWindow): void {
               }
               const titlebar = document.querySelector('header.titlebar')
               const bg = titlebar ? getComputedStyle(titlebar).backgroundColor : ''
-              // 数一下页面里有几个元素用了品牌绿做背景：只允许标题栏一处
+              /*
+               * 数一下页面里有几个元素用了品牌绿做不透明背景。
+               *
+               * P2 之后判据变了：旧版期望「恰好 1 个（标题栏）」，现在标题栏是
+               * 中性面板底，绿色只出现在徽标/指示线这类小面积元素上 ——
+               * 所以「> 0 且不包含 header.titlebar」才是正确判据。
+               * 只看 backgroundColor 不看渐变/边框，避免把 ::before 的指示条算进来。
+               */
               const brandBg = [...document.querySelectorAll('*')].filter((el) => {
                 const c = getComputedStyle(el).backgroundColor
                 return c === 'rgb(39, 201, 63)'
               })
+              const titlebarIsBrand = titlebar
+                ? getComputedStyle(titlebar).backgroundColor === 'rgb(39, 201, 63)'
+                : false
               return {
                 titlebar: rect('header.titlebar'),
                 activitybar: rect('nav[aria-label="活动栏"]'),
@@ -373,6 +387,7 @@ export function runSmoke(win: BrowserWindow): void {
                 statusbar: rect('footer.statusbar'),
                 main: rect('main'),
                 titlebarBg: bg,
+                titlebarIsBrand,
                 brandBgCount: brandBg.length,
                 brandBgTags: brandBg.map((el) => el.tagName + '.' + (el.className || '').slice(0, 24)),
                 /*
@@ -397,7 +412,7 @@ export function runSmoke(win: BrowserWindow): void {
           /*
            * 先造 3 个假标签再量。
            * 冒烟环境没有 SSH 服务器，标签栏本来是空的 —— 而「标签在绿栏里不满格」
-           * 只有有标签时才量得出来（空标签栏的 stripH 也可能恰好是 44）。
+           * 只有有标签时才量得出来（空标签栏的 stripH 也可能恰好是 36）。
            *
            * 造 14 个：满高只看 3 个就够，但横向滚动要溢出才看得见（每个标签 128~220px），
            * 3 个撑不满一行，滚动条根本不会出现，`tabsScrollProbe` 就量不到东西。
@@ -415,12 +430,17 @@ export function runSmoke(win: BrowserWindow): void {
            *
            * 用户反馈：「连接在标题绿色栏不满格显示，看着好难受」。
            * 根因是 TabBar 根容器缺 `h-full` —— 它是块级 flex 容器，height 默认 auto，
-           * 只有内容高度（≈28px），而标题栏是 44px，于是标签上下各留一条绿边，
+           * 只有内容高度（≈28px），而标题栏是 36px，于是标签上下各留一条缝，
            * 视觉上把标题栏切成三条横向色带。
            *
-           * 判据：标签条自身的 top 必须贴着标题栏 top、高度必须撑满 44、每个标签
-           * 也必须是 44。只量标签不够 —— 容器没满时标签会被拉伸到容器高度，
-           * 看上去「高度对」，但上下仍露绿边，所以 strip 的两个值才是主判据。
+           * 判据：标签条自身的 top 必须贴着标题栏 top（stripGapTop === 0）、
+           * 高度必须撑满 36（stripH === barH）、每个标签也是同样高度。
+           * 只量标签不够 —— 容器没满时标签会被拉伸到容器高度，看上去「高度对」，
+           * 但上下仍露缝，所以 strip 的两个值才是主判据。
+           *
+           * 注意这里从来没有硬编码 36/44：barH 是现量的，断言用的是
+           * stripH === barH 这种相对判据，改外壳高度不需要回来改数字 ——
+           * 只有上面的注释里的数字需要跟着更新。
            */
           const tabStripProbe = (await win.webContents.executeJavaScript(`
             (() => {

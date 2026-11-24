@@ -15,8 +15,9 @@ const THEME_OPTIONS: Array<{ value: ThemeMode; label: string; icon: React.JSX.El
 ]
 
 /**
- * 配色主题画廊：每个主题给出一张色板预览（背景 / 强调色 / 成功色），
- * 点击即用，切换无需重载。颜色取自主题定义本身，因此预览必然与真实配色一致。
+ * 配色主题画廊：2x2 大色板，每块展示「画布 / 侧栏 / 选中行 / 强调色」四处取色，
+ * 下方一行风格标签。四处取色足以区分四套主题，颜色全部取自主题定义本身，
+ * 因此预览必然与真实配色一致；点击即用，切换无需重载。
  */
 export function ColorThemeGallery({
   value,
@@ -28,7 +29,7 @@ export function ColorThemeGallery({
   onChange: (next: ColorThemeId) => void
 }): React.JSX.Element {
   return (
-    <div className="grid grid-cols-3 gap-2">
+    <div className="grid grid-cols-2 gap-2.5">
       {COLOR_THEMES.map((t) => {
         const variant = dark ? t.dark : t.light
         const active = t.id === value
@@ -47,26 +48,26 @@ export function ColorThemeGallery({
             )}
             onClick={() => onChange(t.id)}
           >
-            {/* 色板预览：用主题自己的变量着色，所见即所得 */}
+            {/* 色板预览：画布底 + 侧栏 / 选中行 / 强调色 / 品牌块，用主题自己的变量着色 */}
             <div
-              className="flex h-7 items-center gap-1 overflow-hidden rounded-md border border-edge-soft px-1.5"
+              className="flex h-8 items-center gap-1 overflow-hidden rounded-md border border-edge-soft px-1.5"
               style={{ background: `rgb(${variant.vars.app})` }}
             >
               <span
-                className="h-3 w-3 rounded-full"
+                className="h-4 w-4 rounded-xs"
+                style={{ background: `rgb(${variant.vars.panel})` }}
+              />
+              <span
+                className="h-4 w-4 rounded-sm"
+                style={{ background: `rgb(${variant.vars.select})` }}
+              />
+              <span
+                className="h-4 w-4 rounded-full"
                 style={{ background: `rgb(${variant.vars.accent})` }}
               />
               <span
-                className="h-3 w-3 rounded-full"
-                style={{ background: `rgb(${variant.vars.success})` }}
-              />
-              <span
-                className="h-3 w-3 rounded-full"
-                style={{ background: `rgb(${variant.vars.danger})` }}
-              />
-              <span
-                className="ml-auto h-4 w-8 rounded-sm"
-                style={{ background: `rgb(${variant.vars.panel})` }}
+                className="ml-auto h-3 w-6 rounded-sm"
+                style={{ background: `rgb(${variant.vars.brand})` }}
               />
             </div>
             <div className="flex items-center gap-1">
@@ -84,6 +85,7 @@ export function ColorThemeGallery({
                 </span>
               )}
             </div>
+            <span className="truncate text-3xs text-ink-3">{t.tagline}</span>
           </button>
         )
       })}

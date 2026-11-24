@@ -28,6 +28,7 @@ import { cn } from '@/lib/utils'
 import { ContextMenu, useContextMenu, type MenuEntry } from '@/components/ui'
 import { isImeComposing } from '@/lib/ime'
 import { useSettingsStore } from '@/stores/settingsStore'
+import { useI18n } from '@/i18n'
 import { takeFlashTarget, toggleMuteConnection, watchFlash, clearFlashTarget } from '@/lib/taskNotify'
 import { isMuted, normalizeNotifyPrefs } from '@/lib/notifyPlan'
 import { useSplitStore } from '@/stores/splitStore'
@@ -51,13 +52,15 @@ const MIN_THUMB = 24
  * 顶部标签栏（位于 TitleBar 里，同时是窗口拖拽区）。
  * 支持：切换、关闭、双击重命名、右键菜单、拖拽排序、横向滚动。
  *
- * 视觉约定（品牌绿底上的白色标签）：
- * - 标签**满高**（撑满 44px 标题栏），不做上下留边。留 6px 绿边时标签像悬在
- *   绿条中间的一张小卡片，上下两道绿边把标题栏切成三条横向色带，看着「不满格」。
+ * 视觉约定（中性面板底上的标签）：
+ * - 标签**满高**（撑满 36px 标题栏），不做上下留边。留边时标签像悬在
+ *   标题栏中间的一张小卡片，上下两道缝把标题栏切成三条横向色带，看着「不满格」。
  * - 满高之后不再需要圆角：四角圆角在满高状态下会顶到窗口上沿、并和下方内容
- *   边缘撞在一起。改直边 + 1px 绿色缝，读起来就是一条真正的标签条。
- * - 激活标签 = 纯白底 + 深色文字；未激活 = 半透明白底 + 半透明白字，hover 提亮。
- * - 全程不用 transform / box-shadow：绿底本身视觉重心已经很高，再加位移会晃。
+ *   边缘撞在一起。改直边 + 1px 面板缝，读起来就是一条真正的标签条。
+ * - 激活标签 = 画布底（bg-app）+ 正文色，并在**顶部**画一条 2px 品牌色指示线，
+ *   与下方工作区连成一片 —— 这是「标签属于内容」的唯一表达；
+ *   未激活 = 透明底 + ink-3，hover 只提亮到面板的 hover 层。
+ * - 全程不用 transform / box-shadow：标题栏本身视觉重心已经很高，再加位移会晃。
  *
  * 滚动条为什么不能用（历史 bug，2026-10 修复）：
  * 1) 原来滚动容器本身就挂着 `drag-region`（`-webkit-app-region: drag`）。Electron 把
@@ -103,6 +106,8 @@ export function TabBar(): React.JSX.Element {
 
   const sessionById = useMemo(() => new Map(sessions.map((x) => [x.id, x])), [sessions])
   const reconnectById = useSessionStore((s) => s.reconnectById)
+  const unreadById = useSessionStore((s) => s.unreadById)
+  const { t } = useI18n()
   const activeSession = activeId ? sessionById.get(activeId) : undefined
 
   const [editingId, setEditingId] = useState<string | null>(null)
@@ -388,9 +393,9 @@ export function TabBar(): React.JSX.Element {
                 'transition-colors duration-150',
                 isActive
                   ? 'bg-app text-ink'
-                  : 'bg-on-brand/15 text-on-brand/85 hover:bg-on-brand/25 hover:text-on-brand',
-                dropTarget === i && dragIndex !== null && dragIndex !== i && 'bg-on-brand/35',
-                // 闪一下：绿色底光 0.6s 内淡出，非激活标签也看得见
+                  : 'bg-transparent text-ink-3 hover:bg-hover/70 hover:text-ink-2',
+                dropTarget === i && dragIndex !== null && dragIndex !== i && 'bg-hover',
+                // 闪一下：品牌色底光 0.6s 内淡出，非激活标签也看得见
                 flashId === s.id && 'animate-flash-ok'
               )}
               onMouseDown={(e) => {
@@ -400,6 +405,15 @@ export function TabBar(): React.JSX.Element {
               onContextMenu={(e) => openMenu(e, s.id)}
               title={editingId === s.id ? undefined : s.target}
             >
+              {/*
+                激活指示线：2px 品牌色画在标签顶部，紧贴窗口上沿。
+                用绝对定位而不是 border-top —— border 会占掉 2px 高度，标签
+                就不再是「满高」，另外几个标签会跟着上移 2px。
+              */}
+              {isActive && (
+                <span className="pointer-events-none absolute inset-x-0 top-0 h-0.5 bg-brand" />
+              )}
+
               <span className={cn('h-1.5 w-1.5 shrink-0 rounded-full', STATUS_DOT[s.status])} />
 
               {editingId === s.id ? (
@@ -419,6 +433,18 @@ export function TabBar(): React.JSX.Element {
                 <span className="min-w-0 flex-1 truncate">{s.title}</span>
               )}
 
+              {/**
+               * 后台标签的未读圆点：静态实心点，不做脉冲动画 —— 十几个标签同时跳会一直触发合成。
+               * 只在标签非激活时出现，切回即被 setActive 清掉。
+               */}
+              {!isActive && unreadById[s.id] === true && (
+                <span
+                  title={t('tab.unread')}
+                  aria-label={t('tab.unread')}
+                  className="h-1.5 w-1.5 shrink-0 rounded-full bg-accent"
+                />
+              )}
+
               {/*
                 * 自动重连进行中：显示脉冲点而不是重连按钮，
                 * 让用户知道「正在自己恢复，别急着手动点」。
@@ -427,7 +453,7 @@ export function TabBar(): React.JSX.Element {
                 <span
                   className={cn(
                     'flex h-4 shrink-0 items-center justify-center',
-                    isActive ? 'text-warning' : 'text-on-brand'
+                    isActive ? 'text-warning' : 'text-ink-3'
                   )}
                   title={rc.message}
                 >
@@ -438,7 +464,7 @@ export function TabBar(): React.JSX.Element {
                   <button
                     className={cn(
                       'flex h-4 w-4 shrink-0 items-center justify-center rounded transition-colors duration-150',
-                      isActive ? 'text-warning hover:bg-hover' : 'text-on-brand hover:bg-on-brand/20'
+                      isActive ? 'text-warning hover:bg-hover' : 'text-ink-3 hover:bg-hover hover:text-ink'
                     )}
                     title="重新连接"
                     onMouseDown={(e) => e.stopPropagation()}
@@ -463,7 +489,7 @@ export function TabBar(): React.JSX.Element {
                        * 也保留了 focus-visible 路径（键盘用户不需要 hover 也能看到它）。
                        * 只用 opacity，不用 transform —— TabBar 有几何禁令（见文件头注释）。
                        */
-                      'text-on-brand/70 opacity-0 group-hover:opacity-100 hover:bg-on-brand/20 hover:text-on-brand focus-visible:opacity-100'
+                      'text-ink-3 opacity-0 group-hover:opacity-100 hover:bg-hover hover:text-ink focus-visible:opacity-100'
                 )}
                 title={paneCount(s.id) > 1 ? '关闭此分屏' : '关闭标签'}
                 onClick={(e) => {

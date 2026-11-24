@@ -19,6 +19,15 @@ export const IPC = {
   CONN_IMPORT_PICK: 'conn:import-pick',
   CONN_IMPORT_PREVIEW: 'conn:import-preview',
   CONN_IMPORT_APPLY: 'conn:import-apply',
+  /**
+   * 外部客户端配置导入（ssh_config / MobaXterm / Xshell / SecureCRT / FinalShell）。
+   *
+   * 与上面三个「本产品自己的导出包」通道分开：那条链路带凭据、要解密；
+   * 这条链路只读对方机器的纯文本配置，永远不碰密码。
+   */
+  CONN_EXT_IMPORT_PICK: 'conn:ext-import-pick',
+  CONN_EXT_IMPORT_PREVIEW: 'conn:ext-import-preview',
+  CONN_EXT_IMPORT_APPLY: 'conn:ext-import-apply',
   /** 连接分组：重命名 / 删除（整组迁移或清空） */
   CONN_RENAME_GROUP: 'conn:rename-group',
   CONN_DELETE_GROUP: 'conn:delete-group',
@@ -133,6 +142,8 @@ export const IPC = {
   SFTP_TRANSFER_PAUSE: 'sftp:transfer-pause',
   SFTP_TRANSFER_RESUME: 'sftp:transfer-resume',
   SFTP_TRANSFER_CANCEL: 'sftp:transfer-cancel',
+  /** 该会话当前的文件通道后端（'sftp' | 'shell'），打开面板时对齐首帧 */
+  SFTP_MODE: 'sftp:mode',
 
   /* ---------------- 传输记录（历史账本） ---------------- */
   /** 列出全部传输记录（新的在前） */
@@ -215,6 +226,14 @@ export const IPC = {
   TUNNEL_START: 'tunnel:start',
   TUNNEL_STOP: 'tunnel:stop',
   TUNNEL_STATES: 'tunnel:states',
+  /** 探测当前会话远端的 TCP 监听端口（ss / netstat / /proc 三级降级） */
+  TUNNEL_DISCOVER_PORTS: 'tunnel:discover-ports',
+  /** 会话级临时转发：本机挑一个空闲端口转到远端某个端口，不落盘 */
+  TUNNEL_QUICK_START: 'tunnel:quick-start',
+  /** 把临时转发原地过户成持久隧道配置 */
+  TUNNEL_PROMOTE: 'tunnel:promote',
+  /** 用系统浏览器打开本机转发端口（严格白名单，只拼 127.0.0.1） */
+  TUNNEL_OPEN_LOCAL: 'tunnel:open-local',
 
   /* ---------------- 一键诊断巡检 + 报告 ---------------- */
   DIAG_SECTIONS_LIST: 'diag:sections',
@@ -344,7 +363,14 @@ export const IPC = {
    * 渲染层就要维护一份与磁盘可能不同步的镜像，两套更新路径迟早打架。
    * 主进程侧节流 300ms（见 transferRecord.RECORD_EMIT_MS）。
    */
-  EVT_TRANSFER_RECORD_CHANGED: 'evt:transfer-record-changed'
+  EVT_TRANSFER_RECORD_CHANGED: 'evt:transfer-record-changed',
+  /**
+   * 某会话的文件通道降级为纯 Shell。
+   *
+   * 只在「确认远端没有 sftp 子系统」时发一次；渲染层拿它在文件面板上挂角标，
+   * 并关掉依赖 SFTP 语义的能力（如远端权限位、mtime 跳过）。
+   */
+  EVT_SFTP_MODE: 'evt:sftp-mode'
 } as const
 
 export type IpcChannel = (typeof IPC)[keyof typeof IPC]

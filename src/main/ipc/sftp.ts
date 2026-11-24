@@ -24,6 +24,11 @@ export function registerSftpIpc(): void {
   handle(IPC.SFTP_BOOTSTRAP, (sessionId: string) => sftpManager.bootstrap(sessionId))
   handle(IPC.SFTP_HOME, (sessionId: string) => sftpManager.home(sessionId))
   /*
+   * 只读查询当前后端，不触发探测：探测要真去握一次 SFTP 子系统，
+   * 让「打开面板」这条只读路径替用户挡住 300~800ms 不合适 —— 预热已经在连上时做了。
+   */
+  handle(IPC.SFTP_MODE, (sessionId: string) => sftpManager.getMode(sessionId) ?? 'sftp')
+  /*
    * 写操作的路径在主进程兜一道校验。
    *
    * 渲染层的弹框已经拦过一次，但 IPC 是程序入口：一个渲染层 bug（或将来某个

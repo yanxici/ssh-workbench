@@ -1,5 +1,6 @@
 import { join } from 'node:path'
 import type { AppSettings, TerminalPrefs } from '@shared/types'
+import { normalizeColorTheme } from '@shared/themeCompat'
 import { JsonStore, dataDir } from '../jsonStore'
 
 /** 应用设置 + 一次性外观迁移 */
@@ -18,7 +19,7 @@ const settingsStore = new JsonStore<Partial<AppSettings>>(
  * 用版本号一刀切做一次性迁移，比猜用户意图可靠；迁移只发生一次，
  * 之后用户再改成什么都由他自己说了算。
  */
-const UI_SHELL_VERSION = 2
+const UI_SHELL_VERSION = 3
 
 /** 旧版默认字体链，仅用于迁移时判断「用户没改过」 */
 const LEGACY_FONT_FAMILY =
@@ -58,7 +59,33 @@ function migrateShell(stored: Partial<AppSettings>): Partial<AppSettings> {
     }
   }
 
+  /*
+   * v2 → v3：配色主题从 7 套精简到 4 套，退役 workbench / nord / onedark。
+   *
+   * 这里刻意**只**动 colorTheme，绝不再碰 theme。
+   * v2 那一步把 theme 强行写成 light，是因为那时分不清「旧默认值」与
+   * 「用户主动选的」；到 v3 之后，用户手里的 dark/light 是他在新外壳里
+   * 亲手点出来的结果 —— 再覆盖一次就是抢他的选择。
+   * 退役配色就近落到 vscode（色彩距离最近，且它本来就是默认值），
+   * 仍在架的三套原样保留。
+   */
+  if (from < 3) {
+    next.colorTheme = normalizeColorTheme(stored.colorTheme)
+  }
+
   return next
+}
+
+/**
+ * 收敛配色 ID —— 兜底「配置文件被手改 / 从更老的备份还原」这类绕过迁移的路径。
+ *
+ * migrateShell 只在版本号落后时才跑；用户把 settings.json 里的 uiShellVersion
+ * 手改回 3、却把 colorTheme 写成退役 ID，迁移就会整个被跳过。
+ * 所以出口处再收敛一次：这里是所有读取（getSettings）与所有写入（setSettings）
+ * 的必经之路。
+ */
+function withActiveColorTheme(settings: AppSettings): AppSettings {
+  return { ...settings, colorTheme: normalizeColorTheme(settings.colorTheme) }
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -78,7 +105,13 @@ export const DEFAULT_SETTINGS: AppSettings = {
     cursorBlink: true,
     scrollback: 5000,
     copyOnSelect: false,
-    rightClickPaste: false
+    rightClickPaste: false,
+    // 拖文件进终端默认走 SFTP 直传当前目录：这条路不要求远端装 trzsz，
+    // 而 trzsz 只是「没装 SFTP / 想走自己的传输协议」时的替代品。
+    dropUploadMode: 'sftp',
+    // 多行粘贴默认拦一下：终端里粘一段文本会逐行执行，误粘的代价很实在。
+    // 单行内容从不弹（渲染层 pasteGuard 判定），所以常态使用无感。
+    confirmMultilinePaste: true
   },
   uiShellVersion: UI_SHELL_VERSION,
   /*
@@ -181,7 +214,7 @@ function mergeSettings(base: AppSettings, patch: Partial<AppSettings>): AppSetti
 export async function getSettings(): Promise<AppSettings> {
   const stored = await settingsStore.read()
   const migrated = migrateShell(stored)
-  return mergeSettings(DEFAULT_SETTINGS, migrated)
+  return withActiveColorTheme(mergeSettings(DEFAULT_SETTINGS, migrated))
 }
 
 export async function setSettings(patch: Partial<AppSettings>): Promise<AppSettings> {
@@ -189,5 +222,5 @@ export async function setSettings(patch: Partial<AppSettings>): Promise<AppSetti
   const next = await settingsStore.update((stored) =>
     mergeSettings(mergeSettings(DEFAULT_SETTINGS, migrateShell(stored)), patch)
   )
-  return next as AppSettings
+  return withActiveColorTheme(next as AppSettings)
 }

@@ -1,5 +1,5 @@
 import type * as React from 'react'
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { AlertTriangle, FileDown, FileUp, Loader2 } from 'lucide-react'
 import type { ConnImportMode, ConnImportPreview } from '@shared/types'
 import { groupConnections, useConnectionStore } from '@/stores/connectionStore'
@@ -9,6 +9,8 @@ import { call } from '@/lib/ipc'
 import { cn } from '@/lib/utils'
 import { Field, Modal, Toggle } from '@/components/ui'
 import { isImeComposing } from '@/lib/ime'
+import type { ExternalImportPreview, ExternalImportSource } from '@shared/types'
+import { useI18n, type I18nKey } from '@/i18n'
 
 /**
  * 连接导出 / 导入：导出文件发给同事，对方导入后直接可用
@@ -198,7 +200,8 @@ function ExportDialog({ onClose }: { onClose: () => void }): React.JSX.Element {
  *  导入
  * ------------------------------------------------------------------ */
 
-function ImportDialog({ onClose }: { onClose: () => void }): React.JSX.Element | null {
+function ImportDialog({ onClose }: { onClose: () => void }): React.JSX.Element {
+  const { t } = useI18n()
   const load = useConnectionStore((s) => s.load)
   const [file, setFile] = useState<{ path: string; encrypted: boolean } | null>(null)
   const [pass, setPass] = useState('')
@@ -206,24 +209,25 @@ function ImportDialog({ onClose }: { onClose: () => void }): React.JSX.Element |
   const [mode, setMode] = useState<ConnImportMode>('skip')
   const [busy, setBusy] = useState(false)
   const [passError, setPassError] = useState<string | null>(null)
+  /** 顶部两页：本工具备份 / 其他客户端与 ~/.ssh/config */
+  const [page, setPage] = useState<'backup' | 'external'>('backup')
+  /** 外部客户端：source 决定用哪个解析器；extPaths 是主进程对话框选过并登记过的路径 */
+  const [source, setSource] = useState<ExternalImportSource | null>(null)
+  const [extPaths, setExtPaths] = useState<string[]>([])
+  const [extPreview, setExtPreview] = useState<ExternalImportPreview | null>(null)
+  const [extBusy, setExtBusy] = useState(false)
 
-  // 打开即弹出选择文件；取消选择则关闭
-  useEffect(() => {
-    let alive = true
-    void call(window.api.conn.importPick(), { errorTitle: '无法读取文件' }).then((res) => {
-      if (!alive) return
-      if (!res || res.canceled || !res.path) {
-        onClose()
-        return
-      }
-      setFile({ path: res.path, encrypted: Boolean(res.encrypted) })
-      if (!res.encrypted) void loadPreview(res.path)
-    })
-    return () => {
-      alive = false
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  /*
+   * 打开弹窗不再自动弹文件选择框。
+   * 顶部分成两页之后，自动弹框会先把只想导 MobaXterm 的人挡在门外：
+   * 取消选择等于关掉整个弹窗，根本走不到外部导入那一页。
+   */
+  const pickBackupFile = async (): Promise<void> => {
+    const res = await call(window.api.conn.importPick(), { errorTitle: '无法读取文件' })
+    if (!res || res.canceled || !res.path) return
+    setFile({ path: res.path, encrypted: Boolean(res.encrypted) })
+    if (!res.encrypted) void loadPreview(res.path)
+  }
 
   const loadPreview = async (path: string, passphrase?: string): Promise<void> => {
     setBusy(true)
@@ -269,9 +273,51 @@ function ImportDialog({ onClose }: { onClose: () => void }): React.JSX.Element |
     onClose()
   }
 
-  if (!file) return null
+  /* ---------- 外部客户端：只读纯文本配置，永不解析各家加密过的密码 ---------- */
 
-  const needPass = file.encrypted && !preview
+  const pickSource = async (next: ExternalImportSource): Promise<void> => {
+    setSource(next)
+    setExtPaths([])
+    setExtPreview(null)
+    setExtBusy(true)
+    const picked = await call(window.api.conn.extImportPick(next), {
+      errorTitle: t('conn.extImport.pickFailed')
+    })
+    if (!picked || picked.canceled || !picked.paths || picked.paths.length === 0) {
+      setExtBusy(false)
+      return
+    }
+    const res = await call(window.api.conn.extImportPreview(next, picked.paths), {
+      errorTitle: t('conn.extImport.previewFailed')
+    })
+    setExtBusy(false)
+    if (!res) return
+    setExtPaths(picked.paths)
+    setExtPreview(res)
+  }
+
+  const applyExternal = async (): Promise<void> => {
+    if (!source || extPaths.length === 0) return
+    setExtBusy(true)
+    const res = await call(window.api.conn.extImportApply(source, extPaths, mode), {
+      errorTitle: t('conn.extImport.importFailed')
+    })
+    setExtBusy(false)
+    if (!res) return
+    await load()
+    useToastStore.getState().push({
+      kind: res.added > 0 ? 'success' : 'warning',
+      title: t('conn.extImport.done', { added: res.added }),
+      detail: t('conn.extImport.doneDetail', {
+        updated: res.updated,
+        skipped: res.skipped,
+        invalid: res.invalid
+      })
+    })
+    onClose()
+  }
+
+  const needPass = Boolean(file?.encrypted) && !preview
 
   return (
     <Modal
@@ -284,26 +330,79 @@ function ImportDialog({ onClose }: { onClose: () => void }): React.JSX.Element |
           <button className="btn" onClick={onClose}>
             取消
           </button>
-          {needPass ? (
+          {page === 'backup' ? (
+            needPass ? (
+              <button
+                className="btn btn-primary"
+                disabled={busy || !pass || !file}
+                onClick={() => void loadPreview(file?.path ?? '', pass)}
+              >
+                {busy && <Loader2 size={13} className="animate-spin" />}
+                解锁
+              </button>
+            ) : (
+              <button
+                className="btn btn-primary"
+                disabled={busy || !preview}
+                onClick={() => void apply()}
+              >
+                {busy ? <Loader2 size={13} className="animate-spin" /> : <FileUp size={13} />}
+                导入
+              </button>
+            )
+          ) : (
             <button
               className="btn btn-primary"
-              disabled={busy || !pass}
-              onClick={() => void loadPreview(file.path, pass)}
+              disabled={extBusy || !extPreview || extPreview.count === 0}
+              onClick={() => void applyExternal()}
             >
-              {busy && <Loader2 size={13} className="animate-spin" />}
-              解锁
-            </button>
-          ) : (
-            <button className="btn btn-primary" disabled={busy || !preview} onClick={() => void apply()}>
-              {busy ? <Loader2 size={13} className="animate-spin" /> : <FileUp size={13} />}
-              导入
+              {extBusy ? <Loader2 size={13} className="animate-spin" /> : <FileUp size={13} />}
+              {t('conn.extImport.import')}
             </button>
           )}
         </>
       }
     >
-      <div className="space-y-4">
-        <div className="selectable break-all font-mono text-2xs text-ink-3">{file.path}</div>
+      <div className="space-y-3">
+        <div className="flex gap-1.5">
+          <button
+            type="button"
+            onClick={() => setPage('backup')}
+            className={cn(
+              'h-7 flex-1 rounded-md border text-xs transition-colors',
+              page === 'backup'
+                ? 'border-accent/60 bg-accent/15 text-accent'
+                : 'border-edge bg-raised text-ink-3 hover:text-ink-2'
+            )}
+          >
+            {t('conn.extImport.tab.backup')}
+          </button>
+          <button
+            type="button"
+            onClick={() => setPage('external')}
+            className={cn(
+              'h-7 flex-1 rounded-md border text-xs transition-colors',
+              page === 'external'
+                ? 'border-accent/60 bg-accent/15 text-accent'
+                : 'border-edge bg-raised text-ink-3 hover:text-ink-2'
+            )}
+          >
+            {t('conn.extImport.tab.external')}
+          </button>
+        </div>
+
+        {page === 'backup' && (
+          <>
+            {!file && (
+              <button className="btn w-full" disabled={busy} onClick={() => void pickBackupFile()}>
+                <FileUp size={13} />
+                {t('conn.transfer.pick')}
+              </button>
+            )}
+
+            {file && (
+              <div className="selectable break-all font-mono text-2xs text-ink-3">{file.path}</div>
+            )}
 
         {needPass && (
           <Field label="文件口令" hint="导出时设置的口令">
@@ -315,7 +414,7 @@ function ImportDialog({ onClose }: { onClose: () => void }): React.JSX.Element |
               onChange={(e) => setPass(e.target.value)}
               onKeyDown={(e) => {
                 if (isImeComposing(e)) return
-                if (e.key === 'Enter' && pass) void loadPreview(file.path, pass)
+                if (e.key === 'Enter' && pass) void loadPreview(file?.path ?? '', pass)
               }}
             />
             {passError && <div className="mt-1.5 text-2xs text-danger">{passError}</div>}
@@ -346,16 +445,7 @@ function ImportDialog({ onClose }: { onClose: () => void }): React.JSX.Element |
               </div>
             )}
 
-            <Field label="包含分组" hint={`${preview.groups.length} 个`}>
-              <div className="scroll-thin max-h-32 overflow-y-auto rounded-md border border-edge-soft bg-app px-2.5 py-1.5 text-xs text-ink-2">
-                {preview.groups.map((g) => (
-                  <div key={g.name} className="flex justify-between py-0.5">
-                    <span className="truncate">{g.name}</span>
-                    <span className="text-2xs text-ink-3">{g.count}</span>
-                  </div>
-                ))}
-              </div>
-            </Field>
+            <GroupList label="包含分组" groups={preview.groups} />
 
             {preview.duplicates > 0 && (
               <Field label="重复连接" hint={`${preview.duplicates} 条与本机已有连接相同（名称、地址、端口、用户名都一样）`}>
@@ -389,6 +479,91 @@ function ImportDialog({ onClose }: { onClose: () => void }): React.JSX.Element |
             )}
           </>
         )}
+          </>
+        )}
+
+        {page === 'external' && (
+          <>
+            <div className="flex flex-wrap gap-1.5">
+              {EXT_SOURCES.map((s) => (
+                <button
+                  key={s.value}
+                  type="button"
+                  disabled={extBusy}
+                  onClick={() => void pickSource(s.value)}
+                  className={cn(
+                    'h-7 rounded-md border px-2.5 text-xs transition-colors',
+                    source === s.value
+                      ? 'border-accent/60 bg-accent/15 text-accent'
+                      : 'border-edge bg-raised text-ink-3 hover:text-ink-2',
+                    extBusy && 'opacity-60'
+                  )}
+                >
+                  {t(s.labelKey)}
+                </button>
+              ))}
+            </div>
+
+            <div className="flex gap-2 rounded-md border border-edge-soft bg-app/60 px-3 py-2 text-2xs leading-relaxed text-ink-3">
+              <AlertTriangle size={13} className="mt-px shrink-0" />
+              <span>{t('conn.extImport.hint')}</span>
+            </div>
+
+            {extBusy && (
+              <div className="flex items-center gap-2 text-xs text-ink-3">
+                <Loader2 size={13} className="animate-spin" />
+                {t('conn.extImport.loading')}
+              </div>
+            )}
+
+            {!extBusy && extPreview && extPreview.count === 0 && (
+              <div className="text-2xs text-warning">{t('conn.extImport.empty')}</div>
+            )}
+
+            {!extBusy && extPreview && extPreview.count > 0 && (
+              <>
+                <div className="grid grid-cols-3 gap-2 text-center">
+                  <Stat label={t('conn.extImport.statCount')} value={extPreview.count} />
+                  <Stat label={t('conn.extImport.statGroups')} value={extPreview.groups.length} />
+                  <Stat label={t('conn.extImport.statFiles')} value={extPreview.files} />
+                </div>
+
+                {extPreview.withoutPasswordCount > 0 && (
+                  <div className="text-2xs leading-relaxed text-ink-3">
+                    {t('conn.extImport.needPassword', { count: extPreview.withoutPasswordCount })}
+                  </div>
+                )}
+
+                <GroupList
+                  label={t('conn.extImport.statGroups')}
+                  groups={extPreview.groups}
+                />
+
+                {extPreview.duplicates > 0 && (
+                  <DupMode
+                    labels={{
+                      label: t('conn.extImport.duplicatesLabel'),
+                      hint: t('conn.extImport.duplicates', { count: extPreview.duplicates }),
+                      skip: t('conn.extImport.duplicatesSkip'),
+                      overwrite: t('conn.extImport.duplicatesOverwrite')
+                    }}
+                    mode={mode}
+                    onChange={setMode}
+                  />
+                )}
+
+                {(extPreview.skippedNonSsh > 0 || extPreview.invalid > 0) && (
+                  <div className="text-2xs text-warning">
+                    {t('conn.extImport.skipped', {
+                      nonSsh: extPreview.skippedNonSsh,
+                      invalid: extPreview.invalid
+                    })}
+                  </div>
+                )}
+              </>
+            )}
+          </>
+        )}
       </div>
     </Modal>
   )
@@ -402,3 +577,72 @@ function Stat({ label, value }: { label: string; value: number }): React.JSX.Ele
     </div>
   )
 }
+
+/** 分组分布：导入前先看清这批连接会落在哪些分组里 */
+function GroupList({
+  label,
+  groups
+}: {
+  label: string
+  groups: Array<{ name: string; count: number }>
+}): React.JSX.Element {
+  return (
+    <Field label={label} hint={String(groups.length)}>
+      <div className="scroll-thin max-h-32 overflow-y-auto rounded-md border border-edge-soft bg-app px-2.5 py-1.5 text-xs text-ink-2">
+        {groups.map((g) => (
+          <div key={g.name} className="flex justify-between py-0.5">
+            <span className="truncate">{g.name}</span>
+            <span className="text-2xs text-ink-3">{g.count}</span>
+          </div>
+        ))}
+      </div>
+    </Field>
+  )
+}
+
+/** 重复连接的处理方式：备份导入与外部导入共用同一套选中态 */
+function DupMode({
+  labels,
+  mode,
+  onChange
+}: {
+  labels: { label: string; hint: string; skip: string; overwrite: string }
+  mode: ConnImportMode
+  onChange: (mode: ConnImportMode) => void
+}): React.JSX.Element {
+  return (
+    <Field label={labels.label} hint={labels.hint}>
+      <div className="flex gap-2">
+        {(
+          [
+            ['skip', labels.skip],
+            ['overwrite', labels.overwrite]
+          ] as const
+        ).map(([v, label]) => (
+          <button
+            key={v}
+            type="button"
+            onClick={() => onChange(v)}
+            className={cn(
+              'h-7 flex-1 rounded-md border text-xs transition-colors',
+              mode === v
+                ? 'border-accent/60 bg-accent/15 text-accent'
+                : 'border-edge bg-raised text-ink-3 hover:text-ink-2'
+            )}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+    </Field>
+  )
+}
+
+/** 五个外部来源；ssh_config 最通用放最前，MobaXterm 次之 */
+const EXT_SOURCES: Array<{ value: ExternalImportSource; labelKey: I18nKey }> = [
+  { value: 'ssh-config', labelKey: 'conn.extImport.source.sshConfig' },
+  { value: 'mobaxterm', labelKey: 'conn.extImport.source.mobaxterm' },
+  { value: 'xshell', labelKey: 'conn.extImport.source.xshell' },
+  { value: 'securecrt', labelKey: 'conn.extImport.source.securecrt' },
+  { value: 'finalshell', labelKey: 'conn.extImport.source.finalshell' }
+]

@@ -1,8 +1,10 @@
+import { useEffect } from 'react'
 import type * as React from 'react'
 import { ArrowDownToLine, ArrowLeft, ArrowRight, FolderTree, X } from 'lucide-react'
 import { useSftpStore } from '@/stores/sftpStore'
 import { LocalPane } from './LocalPane'
 import { RemotePane } from './RemotePane'
+import { ShellModeBadge } from './ShellModeBadge'
 import { UploadTargetDialog } from './UploadTargetDialog'
 
 /**
@@ -25,6 +27,16 @@ export function FileManagerPanel(): React.JSX.Element | null {
   const downloadPaths = useSftpStore((s) => s.downloadPaths)
   const transfers = useSftpStore((s) => s.transfers)
   const showDock = useSftpStore((s) => s.showDock)
+  const syncMode = useSftpStore((s) => s.syncMode)
+
+  /*
+   * 打开面板时补一次模式拉取。
+   * 降级事件只推「正在发生的变化」：如果这个会话早在面板打开之前就已经退回
+   * 命令行通道，光靠订阅会让角标一直不出现（面板以为自己还是 SFTP）。
+   */
+  useEffect(() => {
+    if (open && sessionId) void syncMode(sessionId)
+  }, [open, sessionId, syncMode])
 
   if (!open) return null
 
@@ -39,6 +51,7 @@ export function FileManagerPanel(): React.JSX.Element | null {
         <FolderTree size={14} className="text-accent" />
         <span className="text-xs font-semibold">文件管理</span>
         <span className="max-w-[280px] truncate text-2xs text-ink-3">{sessionTitle}</span>
+        <ShellModeBadge sessionId={sessionId} />
         <span className="flex-1" />
         <span className="hidden truncate text-2xs text-ink-3 lg:block">
           双击目录进入 · 双击远程文件编辑 · 拖拽两侧互相传输

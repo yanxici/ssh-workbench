@@ -25,6 +25,7 @@ import {
 import type { RemoteFile } from '@shared/types'
 import type { SessionUi } from '@/stores/sessionStore'
 import { useSftpStore } from '@/stores/sftpStore'
+import { ShellModeBadge } from './ShellModeBadge'
 import { useToastStore } from '@/stores/toastStore'
 import { call } from '@/lib/ipc'
 import { cn, formatBytes, remoteDirname, remoteJoin } from '@/lib/utils'
@@ -113,6 +114,7 @@ export function FileExplorer({
   const [loading, setLoading] = useState(false)
   const version = useSftpStore((s) => s.treeVersion)
   const bumpTree = useSftpStore((s) => s.bumpTree)
+  const syncMode = useSftpStore((s) => s.syncMode)
   const openEditor = useSftpStore((s) => s.openEditor)
   const downloadToStore = useSftpStore((s) => s.downloadTo)
   const downloadDefault = useSftpStore((s) => s.downloadToDefault)
@@ -130,6 +132,15 @@ export function FileExplorer({
 
   const sessionId = session?.id ?? null
   const connected = session?.status === 'connected'
+
+  /*
+   * 切会话（或刚连上）时补一次通道模式拉取。
+   * 降级只在「第一次用到文件通道」时才会被主进程发现并广播；如果那个时刻
+   * 用户还没打开这个面板，事件早就过去了，只能主动问一次才不会少一帧角标。
+   */
+  useEffect(() => {
+    if (sessionId && connected) void syncMode(sessionId)
+  }, [sessionId, connected, syncMode])
 
   /*
    * 「跟随终端 cd」开关。缺省按开处理（`!== false`）：老配置里没有这个键，
@@ -746,6 +757,7 @@ export function FileExplorer({
       <div className="panel-head">
         <FolderTree size={13} className="shrink-0 text-ink-3" />
         <span className="panel-title">文件</span>
+        <ShellModeBadge sessionId={sessionId} />
         <span
           className="min-w-0 flex-1 truncate text-right font-mono text-3xs text-ink-3"
           title={session.title}

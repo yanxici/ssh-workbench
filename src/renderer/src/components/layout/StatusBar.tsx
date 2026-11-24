@@ -119,7 +119,7 @@ function Sep(): React.JSX.Element {
 }
 
 /**
- * 底部状态栏（28px，浅灰底 + 极细上边框）。
+ * 底部状态栏（26px，面板底 + 极细上边框，与 --size-statusbar 同口径）。
  *
  * 左：SSH 连接状态 · 会话名 · 延迟 · Git 分支
  * 右：传输进度 · 编码 · 换行符 · Shell · 终端尺寸

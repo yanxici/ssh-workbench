@@ -28,11 +28,15 @@ import { useTransferStore } from '@/stores/transferStore'
 import { cn } from '@/lib/utils'
 
 /**
- * 左侧活动栏（48px，图标竖排）。
+ * 左侧活动栏（44px，图标竖排）。
  *
  * 交互：点已激活的条目 = 收起/展开侧栏；点其它条目 = 切换视图并展开。
- * 视觉：激活项左侧 2px 品牌绿指示线 + 文字色提亮，**不改 box-shadow、不做缩放**，
- * 因为指示线本身已经足够表达状态，加阴影会在浅色底上显脏。
+ * 视觉：激活项左侧 2px 品牌色指示线（16px 高，不顶满整格）+ 低透明微底 +
+ * 图标描边加粗一档。**不改 box-shadow、不做缩放**，因为指示线本身已经足够
+ * 表达状态，加阴影会在浅色底上显脏。
+ *
+ * 宽度从 48 收到 44：与 36px 标题栏一起构成「窄轨外壳」，横向留给内容更多，
+ * 图标 19px 在 44px 轨道里仍然左右各留 12px 呼吸区。
  *
  * 为什么没有「常用命令」这一项：命令栏已经常驻在窗口右侧了。
  * 再从活动栏切一个「常用命令」视图出来，等于同一个东西两个入口，
@@ -83,7 +87,7 @@ export function ActivityBar(): React.JSX.Element {
   return (
     <nav
       aria-label="活动栏"
-      className="flex w-12 shrink-0 flex-col items-stretch border-r border-edge bg-panel"
+      className="flex w-11 shrink-0 flex-col items-stretch border-r border-edge bg-panel"
     >
       {MAIN_ITEMS.map(({ view, label, icon: Icon }) => {
         const active = activityView === view && sidebarVisible
@@ -97,9 +101,14 @@ export function ActivityBar(): React.JSX.Element {
             aria-pressed={active}
             onClick={() => toggleActivityView(view)}
           >
-            {/* 激活指示线：2px 品牌绿，绝对定位贴在左沿（不占布局宽度） */}
+            {/*
+              激活指示线：2px 品牌色，绝对定位贴在左沿（不占布局宽度）。
+              用 top-[14px] 而不是 top-1/2 + -translate-y-1/2：活动栏有几何禁令
+              （见文件头注释），静态居中也不该引入 transform。
+              h-4 让它比整格矮一截 —— 顶满 44px 会把「指示」画成「隔断」。
+            */}
             {active && (
-              <span className="pointer-events-none absolute inset-y-1.5 left-0 w-0.5 rounded-r bg-brand" />
+              <span className="pointer-events-none absolute left-0 top-[14px] h-4 w-0.5 rounded-r bg-brand" />
             )}
             <Icon size={19} strokeWidth={active ? 2.1 : 1.7} />
           </button>
@@ -113,6 +122,9 @@ export function ActivityBar(): React.JSX.Element {
 
       <div className="flex-1" />
 
+      {/* 第二道分组线：上方是「工具」，下方是常驻的全局入口（命令栏 / 设置） */}
+      <span className="mx-3 my-1 h-px shrink-0 bg-edge-soft" />
+
       {/* 命令栏开关：命令栏有自己头部的关闭按钮，但收起之后那个按钮也跟着没了，
           所以活动栏底部必须留一个常驻入口，否则收起后无法再打开。 */}
       <button
@@ -124,7 +136,7 @@ export function ActivityBar(): React.JSX.Element {
         onClick={() => toggleCommandRail()}
       >
         {commandRailVisible && (
-          <span className="pointer-events-none absolute inset-y-1.5 left-0 w-0.5 rounded-r bg-brand" />
+          <span className="pointer-events-none absolute left-0 top-[14px] h-4 w-0.5 rounded-r bg-brand" />
         )}
         <Play size={19} strokeWidth={commandRailVisible ? 2.1 : 1.7} />
       </button>
@@ -196,7 +208,7 @@ function ToolsButton({ active }: { active: boolean }): React.JSX.Element {
         aria-haspopup="menu"
       >
         {active && (
-          <span className="pointer-events-none absolute inset-y-1.5 left-0 w-0.5 rounded-r bg-brand" />
+          <span className="pointer-events-none absolute left-0 top-[14px] h-4 w-0.5 rounded-r bg-brand" />
         )}
         <Wrench size={19} strokeWidth={active ? 2.1 : 1.7} />
       </button>

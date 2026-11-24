@@ -27,6 +27,7 @@ import { useToastStore } from '@/stores/toastStore'
 import { call } from '@/lib/ipc'
 import { cn, formatBytes, remoteDirname, remoteJoin } from '@/lib/utils'
 import { normalizeRemoteDir } from '@/lib/uploadDir'
+import { ShellModeBadge } from './ShellModeBadge'
 import { UploadTargetDialog } from './UploadTargetDialog'
 import { useUploadTarget } from './useUploadTarget'
 import {
@@ -86,12 +87,21 @@ export function SessionFileTree({
 }): React.JSX.Element {
   const version = useSftpStore((s) => s.treeVersion)
   const bumpTree = useSftpStore((s) => s.bumpTree)
+  const syncMode = useSftpStore((s) => s.syncMode)
   const openEditor = useSftpStore((s) => s.openEditor)
   const downloadTo = useSftpStore((s) => s.downloadTo)
   /** 所属会话的连接状态：连接中不发 SFTP 请求，就绪后自动加载 */
   const sessionStatus = useSessionStore(
     (s) => s.sessions.find((x) => x.id === sessionId)?.status ?? 'disconnected'
   )
+
+  /*
+   * 树一挂载就对齐一次通道模式：降级事件可能发生在这棵树打开之前
+   * （比如用户先上传过一个文件），只靠订阅会一直不显示角标。
+   */
+  useEffect(() => {
+    if (sessionStatus === 'connected') void syncMode(sessionId)
+  }, [sessionId, sessionStatus, syncMode])
 
   const [ready, setReady] = useState(false)
   const [autoExpand, setAutoExpand] = useState<string[]>([])
@@ -198,6 +208,7 @@ export function SessionFileTree({
       {/* 头部工具栏 */}
       <div className="flex h-8 shrink-0 items-center gap-0.5 border-b border-edge-soft pl-2 pr-1">
         <span className="shrink-0 text-2xs font-semibold text-ink-2">文件</span>
+        <ShellModeBadge sessionId={sessionId} />
         <span className="min-w-0 flex-1 truncate pl-1 text-2xs text-ink-3" title={title}>
           {title}
         </span>

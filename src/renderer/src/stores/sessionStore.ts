@@ -6,12 +6,13 @@ import type { Terminal } from '@xterm/xterm'
 import type { FitAddon } from '@xterm/addon-fit'
 import type { SearchAddon } from '@xterm/addon-search'
 import { uid } from '@/lib/utils'
-import { isNestedPane } from '@/lib/paneRegistry'
+import { isNestedPane, paneOwnerOf } from '@/lib/paneRegistry'
 import { useToastStore } from './toastStore'
 import { forgetCwd } from './cwdStore'
 import { forgetSession as forgetHighlight } from '@/lib/highlightRuntime'
 import { forgetNotifySession } from '@/lib/taskNotify'
 import { useTrzszStore } from './trzszStore'
+import { useSftpStore } from './sftpStore'
 
 /**
  * 终端实例注册表：TerminalView 挂载时注册，卸载时注销。
@@ -85,6 +86,18 @@ interface SessionState {
    * 导致所有终端跟着重渲染。
    */
   reconnectById: Record<string, ReconnectEvent>
+  /**
+   * 后台标签的未读标记：标签 id -> 有没有没看过的输出。
+   * 与 latencyById 同理由单独存放：终端输出每秒可能来上百次，塞进 sessions
+   * 就得重建数组，App 层订阅者随之重渲染，连带所有 xterm 一起重跑。
+   */
+  unreadById: Record<string, boolean>
+  /**
+   * 离开某个标签的时刻：标签 id -> 时间戳。
+   * 专供「离开不足 500ms 不点亮圆点」这条通融规则 —— Ctrl+Tab 快速扫过一串
+   * 标签时，每个标签都会收到几帧输出，那不是「后台在跑东西」。
+   */
+  tabLeftAt: Record<string, number>
 
   /** 收到主进程的重连事件 */
   applyReconnect: (e: ReconnectEvent) => void
@@ -106,6 +119,10 @@ interface SessionState {
   close: (id: string) => void
   closeOthers: (id: string) => void
   setActive: (id: string) => void
+  /** 记一个未读（后台标签收到可见输出时由 App 调用） */
+  markUnread: (ownerId: string) => void
+  /** 清掉未读（切回该标签、或该标签被关掉时） */
+  clearUnread: (ownerId: string) => void
   setTitle: (id: string, title: string) => void
   /**
    * 串口会话改了波特率：更新配置快照并重算 target。
@@ -126,6 +143,8 @@ export const useSessionStore = create<SessionState>()((set, get) => ({
   activeId: null,
   latencyById: {},
   reconnectById: {},
+  unreadById: {},
+  tabLeftAt: {},
 
   applyReconnect: (e) =>
     set((s) => {
@@ -280,9 +299,20 @@ export const useSessionStore = create<SessionState>()((set, get) => ({
     forgetHighlight(id)
     // 关会话同时清 trzsz 状态：id 会被重连复用，留着会让新会话一上线就显示"传输中"
     useTrzszStore.getState().clear(id)
+    // 文件通道模式同理：id 被复用后残留的 'shell' 会让新会话一上线就顶着兼容角标
+    useSftpStore.getState().clearMode(id)
     // 静默记账同理：id 若被复用（重连沿用），残留的 lastOutputAt 会让新会话
     // 一上线就被判成"静默很久"，凭空收到一条疑似完成通知。
     forgetNotifySession(id)
+    // 未读与「离开时刻」同理：id 复用后残留的 true 会让新标签一出生就带个圆点
+    const { unreadById, tabLeftAt } = get()
+    if (unreadById[id] || tabLeftAt[id] !== undefined) {
+      const nextUnread = { ...unreadById }
+      const nextLeft = { ...tabLeftAt }
+      delete nextUnread[id]
+      delete nextLeft[id]
+      set({ unreadById: nextUnread, tabLeftAt: nextLeft })
+    }
   },
 
   closeOthers: (id) => {
@@ -293,8 +323,38 @@ export const useSessionStore = create<SessionState>()((set, get) => ({
   },
 
   setActive: (id) => {
-    if (get().sessions.some((s) => s.id === id)) set({ activeId: id })
+    const { sessions, activeId, tabLeftAt, unreadById } = get()
+    if (!sessions.some((s) => s.id === id)) return
+    /*
+     * 切标签时记下「离开上一屏」的时刻，并顺手把要切进去那屏的未读清掉。
+     * 按**标签**（pane owner）而不是按会话记账：同一屏里的几格是一起看见的，
+     * 焦点在 A 格时 B 格的输出同样属于「用户正看着这一屏」。
+     */
+    const prevOwner = activeId ? paneOwnerOf(activeId) : null
+    const nextOwner = paneOwnerOf(id)
+    const patch: Partial<SessionState> = { activeId: id }
+    if (prevOwner && prevOwner !== nextOwner) {
+      patch.tabLeftAt = { ...tabLeftAt, [prevOwner]: Date.now() }
+    }
+    if (unreadById[nextOwner]) {
+      const fresh = { ...unreadById }
+      delete fresh[nextOwner]
+      patch.unreadById = fresh
+    }
+    set(patch)
   },
+
+  markUnread: (ownerId) =>
+    // 已经亮着就不写 state：输出事件很密，无谓的 set 会让标签条持续重渲染
+    set((s) => (s.unreadById[ownerId] ? {} : { unreadById: { ...s.unreadById, [ownerId]: true } })),
+
+  clearUnread: (ownerId) =>
+    set((s) => {
+      if (!s.unreadById[ownerId]) return {}
+      const next = { ...s.unreadById }
+      delete next[ownerId]
+      return { unreadById: next }
+    }),
 
   setTitle: (id, title) =>
     set((s) => ({

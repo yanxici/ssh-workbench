@@ -70,7 +70,16 @@ export async function saveTunnel(input: TunnelInput): Promise<TunnelConfig> {
       targetHost: input.targetHost?.trim() || undefined,
       targetPort: input.targetPort,
       connectionId: input.connectionId || undefined,
-      remark: input.remark?.trim() || undefined
+      remark: input.remark?.trim() || undefined,
+      /*
+       * autoStart 只在绑定了连接时才有意义：没绑连接的隧道是「用户临时手动开一个」，
+       * 让它跟着任意会话自启会给用户凭空多出监听端口。
+       *
+       * 必须写在 base 里而不是事后补：saveTunnel 用 { ...list[idx], ...base }
+       * 合并已有配置，base 里没有这个字段就等于把它覆盖成 undefined，
+       * 用户改个名字就会把自启标记弄丢。
+       */
+      autoStart: input.connectionId && input.autoStart === true ? true : undefined
     }
 
     if (input.id) {

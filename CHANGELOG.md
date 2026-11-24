@@ -5,6 +5,38 @@ All notable changes to SSH Workbench will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.0] - 2026-11-24
+
+<!-- release-notes:start -->
+### 这一版更新了什么
+
+- **老旧嵌入式设备 SSH 兼容算法**：连接配置新增「老旧设备兼容算法（SHA-1 / CBC / DSS）」开关（默认关闭，现代算法优先、老套件追加末尾，按当前运行时加密能力动态构建）；遇到老 Dropbear / OpenWrt / 工业交换机协商失败时，终端报错浮层提供一键「启用老设备兼容算法并重连」（不丢失既有密码与代理凭据）；主机指纹探测遇到协商失败自动回退重试一次。
+- **无 `sftp-server` 设备自动降级到纯 Shell/BusyBox 通道**：遇到裁剪掉 SFTP 子系统的 OpenWrt / Buildroot / BusyBox 设备时，经 `ssh2` 错误精准判别与 `echo` 探针双重确认后自动切入纯 Shell/BusyBox 兼容通道（排除 `MaxSessions` 瞬时上限与断线误降级），文件树、双栏传输、远程编辑（保留 `.bak` 与失败回滚）、固件上传与配置备份全链路恢复可用，文件面板顶部展示 `Shell 兼容` 徽标。
+- **端口转发断线自愈、随连自启与远端端口一键发现**：意外断线且将自动重连时，活跃隧道自动进入「等待重连恢复」并在重连成功后恢复（手动停掉的保持停止）；支持绑定连接「随连接自动启动」；隧道面板新增 BusyBox 兼容的远端监听端口探测（`ss` → `netstat` → `/proc/net/tcp(6)`）与一键会话级临时转发（冲突自动分配空闲口、支持一键「转存为常用隧道」原地不断流过户、HTTP 端口安全一键打开本机浏览器）。
+- **终端效率与多客户端一键迁移**：OS 文件拖入 SSH 终端默认直接通过 SFTP 上传到终端当前 `cwd`（按住 `Alt` 或设置可切 `trzsz`）；多行粘贴或含回车危险命令时弹出可编辑预览确认框（自动剥离 Markdown 代码围栏，危险词随编辑实时联动）；支持从 `~/.ssh/config`（含 `ProxyJump`）、MobaXterm（`.mxtsessions`）、Xshell（`.xsh` 含 UTF-16LE）、SecureCRT（`.ini` 十六进制端口）和 FinalShell 一键预览导入；新增分屏顶部同步输入开关与后台标签未读输出圆点。
+- **单色精密仪器风外壳、主题精简（7→4）与专注工作台**：取消 44px 高饱和绿标题栏，统一收敛为 `36px` 单色中性画布 + `2px` 品牌指示条与 `44px` 窄活动栏；砍掉高度同质化的 `workbench` / `nord` / `onedark`，保留「精密默认 / Gruvbox / Solarized / Dracula」4 套各自独立品牌色的高对比主题（8 组明暗变体全部实测 WCAG `>= 4.5:1`，老配置经 `UI_SHELL_VERSION = 3` 静默迁移且不覆盖明暗偏好）；空工作区升级为快速启动欢迎页（最近 8 条连接 + 快捷入口），新增 `Ctrl+Shift+Z` 一键 Zen 专注模式。
+<!-- release-notes:end -->
+
+### Added（P0 嵌入式 SSH 韧性与弱设备兼容）
+
+- **老旧设备 SSH 兼容算法**：`Connection` / `ConnectionInput` / `TestConnectionInput` / `connTransfer` 透传 `legacyAlgorithms?: boolean`；`connectConfig.ts` 运行时动态构建 `LEGACY_ALGORITHMS` 与 `isNegotiationError`（兼容 Electron BoringSSL 与不同 `ssh2` 原生绑定），`probeHostFingerprint` 协商失败自动以老算法重试一次；`ConnectionEditor.tsx` 补齐开关，`TerminalView.tsx` 报错浮层新增「启用老设备兼容算法并重连」并完整保留既有凭据与代理密码。
+- **纯 Shell/BusyBox 文件与流式传输降级**：新增 `src/main/ssh/shellFs.ts`（`shQuote`、`assertSafeRemovePath`、`parseLsOutput` 及原始二进制流上传下载）；`sftpManager.ts` 在不动既有 SFTP 分块引擎的前提下增加 `sessionModes` / `pendingMode` 与入口路由，经 `isSftpSubsystemUnavailableError`（排除 `channel open failure` / 断线）+ `echo __SWB_SH_OK__` 双确认触发降级；新增 `IPC.SFTP_MODE` / `IPC.EVT_SFTP_MODE` 与 `ShellModeBadge.tsx`。
+- **隧道自愈、自启与远端端口一键发现**：新增 `src/main/ssh/remotePorts.ts`（`ss` / `netstat` / `/proc/net/tcp(6)` 三级降级与纯 `[::1]` 保留 vs 双栈合并规则）；`sessionManager.ts` 扩展 `onClosed({ byUser, willReconnect })` / `onConnected` / `onReconnectGaveUp`；`portForward.ts` 统一管理持久与 `ephemeral` 临时转发（`reconnecting` 挂起恢复、`manuallyStopped` 记忆、`autoStart` 随连自启、幂等去重、原地过户 `promoteQuickForward` 与白名单 `buildSafeLocalTunnelUrl`）；`TunnelPanel.tsx` 升级为三段式布局。
+
+### Added（P1 终端效率与多客户端迁移）
+
+- **拖放文件直传 `cwd`**：新增 `src/renderer/src/lib/terminalDrop.ts`（含兼容 Windows `dragover` 保护模式的 `countDraggedFiles` 三级回退与 `decideDropAction`），`TerminalView.tsx` 拖入 OS 文件默认 SFTP 上传至 `cwdStore` 当前目录（`keepRoot: true`），不干扰命令卡片拖拽。
+- **多行粘贴安全确认**：新增 `src/renderer/src/lib/pasteGuard.ts` 与 `PasteConfirmDialog.tsx`，三处粘贴入口统一经 `requestPaste` 校验，支持一键去除 Markdown 代码围栏、去掉末尾回车、危险词实时联动与 IME 组合态守卫。
+- **外部客户端一键导入**：新增 `src/main/store/externalImport.ts` 与 `IPC.CONN_EXT_IMPORT_*`（主进程路径白名单保护），支持 `~/.ssh/config`、MobaXterm、Xshell（UTF-16LE BOM）、SecureCRT（十六进制端口）与 FinalShell，接入 `ConnTransferDialog.tsx` 双模式导入页。
+- **分屏同步输入与后台标签未读点**：新增 `src/renderer/src/lib/tabUnread.ts`，`splitStore.syncByTab` 与 `MainWorkspace.tsx` 流式 `h-7` 同步输入条协同复用 `session.broadcast()`（缩回单窗格自动关闭）；`sessionStore.unreadById` 配合 500ms 离开宽限期与纯控制符过滤驱动 `TabBar.tsx` 6px 静态未读圆点。
+
+### Changed（P2 单色精密仪器风 UI、主题精简与专注工作台，保留主仓技术栈）
+
+- **配色主题 7 → 4 去同质化**：新增 `src/shared/themeCompat.ts` 与 `UI_SHELL_VERSION = 3` 静默迁移，退役 `workbench` / `nord` / `onedark`，保留「精密默认 / Gruvbox / Solarized / Dracula」四套各自独立 `brand`/`accent`/`select` 的高对比主题，外观画廊升级为 2×2 四宫格。
+- **单色精密外壳（36px 顶栏，Tailwind 3 等价落地）**：`styles/index.css`、`TitleBar.tsx`、`TabBar.tsx`、`ActivityBar.tsx`、`StatusBar.tsx`、`UpdateBadge.tsx` 统一为 `36px` 顶栏 + `44px` 活动栏 + `26px` 状态栏单色中性画布，完整保留 v2.3.2 Gitee 国内免代理自动更新通道与 Electron 33 / React 18 / xterm 5 / Tailwind 3 技术栈。
+- **快速启动欢迎页与 Zen 专注模式**：新增 `WelcomeQuickLaunch.tsx`（含最近 8 条连接与「新建串口」直达串口 Tab）、`src/renderer/src/lib/zenState.ts` 与 `Ctrl+Shift+Z` 专注模式开关（活动栏与侧栏展栏入口统一收口自动退出 Zen）。
+- **新增回归**：`verify-legacy-algo.cjs`、`verify-shellfs.cjs`、`verify-tunnel-resilience.cjs`、`verify-paste-guard.cjs`、`verify-external-import.cjs`、`verify-split-sync.cjs`、`verify-p2-theme-zen.cjs`；`verify-ime-guard.cjs` 刻度与 Gitee 更新通道共同收敛至 16。
+
 ## [2.3.2] - 2026-11-23
 
 <!-- release-notes:start -->

@@ -274,10 +274,10 @@ for (const it of rows) {
 
 console.log('\n=== 断言 ===')
 check(
-  '需要守卫的 handler 数 === 15（少一处就是漏修）',
-  /* 15 而非 14：UpdateSection.tsx 新增了「更新通道」输入框（已配 isImeComposing(e)），
-     这一条是「新增 handler 必须配守卫」的刻度，同步上调至 15。 */
-  needGuard.length === 15,
+  '需要守卫的 handler 数 === 16（少一处就是漏修）',
+  /* 14 -> 15（v2.3.2 UpdateSection 更新通道输入框）-> 16（v2.4.0 PasteConfirmDialog textarea Ctrl+Enter 提交）。
+     两者均已配 isImeComposing(e)，由下方兄弟断言同步把关。 */
+  needGuard.length === 16,
   `实际 ${needGuard.length}`
 )
 check(

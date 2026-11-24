@@ -93,7 +93,14 @@ export async function saveConnection(input: ConnectionInput): Promise<Connection
       remark: input.remark,
       proxyJump: input.proxyJump && input.proxyJump.length > 0 ? input.proxyJump : undefined,
       // 代理密码不落盘：剥离后存入凭据保险箱（见下方 setSecret）
-      proxy: input.proxy ? { ...input.proxy, password: undefined } : undefined
+      proxy: input.proxy ? { ...input.proxy, password: undefined } : undefined,
+      /*
+       * 老设备兼容开关只对 SSH 有意义，串口一律忽略。
+       *
+       * 这里必须显式写 undefined 而不是省略：更新走的是 `{ ...list[idx], ...base }`，
+       * 省略掉这个键就等于「保持原值」，用户关掉开关也关不掉。
+       */
+      legacyAlgorithms: kind === 'ssh' && input.legacyAlgorithms === true ? true : undefined
     }
 
     if (input.id) {

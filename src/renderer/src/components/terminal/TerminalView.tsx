@@ -1,5 +1,5 @@
 import type * as React from 'react'
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { SearchAddon } from '@xterm/addon-search'
@@ -16,12 +16,13 @@ import {
   RefreshCw,
   Rows2,
   Search,
+  Wrench,
   X,
   XCircle
 } from 'lucide-react'
 import type { SessionUi } from '@/stores/sessionStore'
 import { terminalRegistry, useSessionStore } from '@/stores/sessionStore'
-import { applyOsc7, feedTerminalInput } from '@/stores/cwdStore'
+import { applyOsc7, feedTerminalInput, useCwdStore } from '@/stores/cwdStore'
 import { resolveDark, useSettingsStore } from '@/stores/settingsStore'
 import { matchShortcut, resolveShortcuts } from '@/lib/shortcuts'
 import { getXtermTheme } from '@/theme/colorThemes'
@@ -43,6 +44,13 @@ import {
   stepTempFontSize
 } from '@/lib/terminalUx'
 import { useTrzszOf } from '@/stores/trzszStore'
+import { countDraggedFiles, decideDropAction, type DropAction } from '@/lib/terminalDrop'
+import { resolveUploadDir } from '@/lib/uploadDir'
+import { invalidateDir } from '@/lib/dirCache'
+import { analyzePaste, type PasteAnalysis } from '@/lib/pasteGuard'
+import { paneOwnerOf } from '@/lib/paneRegistry'
+import { resolveSyncTargets } from '@/lib/tabUnread'
+import { PasteConfirmDialog } from './PasteConfirmDialog'
 import { SerialBootBar } from './SerialBootBar'
 
 function ReconnectButton({ sessionId }: { sessionId: string }): React.JSX.Element {
@@ -108,6 +116,105 @@ function UpdateHostKeyButton({ session }: { session: SessionUi }): React.JSX.Ele
 }
 
 /**
+ * 报错是否属于「算法协商失败」这类需要开老算法兼容的故障。
+ *
+ * 串口会话一律排除：它跟 SSH 算法协商没有交集（见设计文档的串口隔离约束）。
+ * kind 在旧数据里可能缺省为 undefined（历史连接没有这个字段），
+ * 那时按 ssh 处理 —— 所以判据写成「不是串口」而不是「等于 ssh」。
+ */
+function needsLegacyAlgorithms(session: SessionUi): boolean {
+  if (session.kind === 'serial') return false
+  return /算法协商失败|no matching|Unable to negotiate/i.test(session.error ?? '')
+}
+
+/**
+ * 算法协商失败的一键修复：给这条连接打上 legacyAlgorithms 再重连。
+ *
+ * 现场遇到的形态是老固件只认 group1-sha1 / 3des-cbc，报错文案却是英文原文，
+ * 让人去编辑器里翻开关太绕；这里把动作放在报错正下方，和上面的指纹按钮同款。
+ *
+ * 凭据必须原样保留：save 的入参里 password / passphrase / 代理密码全部写
+ * undefined，交给 saveConnection 的「未提供即保留」语义（这是设计文档
+ * Review Focus #2 的硬约束，改成空串就会把用户保存的密码清掉）。
+ */
+function EnableLegacyAlgoButton({
+  session
+}: {
+  session: SessionUi
+}): React.JSX.Element | null {
+  const { t } = useI18n()
+  const [busy, setBusy] = useState(false)
+  const connection = useConnectionStore((s) =>
+    s.connections.find((c) => c.id === session.connectionId)
+  )
+  // 已经开过的连接不再显示，避免用户点第二次时困惑
+  if (!connection || connection.legacyAlgorithms) return null
+  return (
+    <button
+      className="btn mt-1 h-7 px-3 text-xs"
+      disabled={busy}
+      title={t('terminal.legacyAlgo.enableAndReconnect')}
+      onClick={() => {
+        void (async () => {
+          setBusy(true)
+          try {
+            const saved = await useConnectionStore.getState().save({
+              ...connection,
+              legacyAlgorithms: true,
+              password: undefined,
+              passphrase: undefined,
+              proxy: connection.proxy
+                ? { ...connection.proxy, password: undefined }
+                : undefined
+            })
+            if (!saved) return
+            useToastStore.getState().push({
+              kind: 'success',
+              title: t('terminal.legacyAlgo.enabledToast')
+            })
+            useSessionStore.getState().reconnect(session.id)
+          } finally {
+            setBusy(false)
+          }
+        })()
+      }}
+    >
+      {busy ? <Loader2 size={12} className="animate-spin" /> : <Wrench size={12} />}
+      {t('terminal.legacyAlgo.enableAndReconnect')}
+    </button>
+  )
+}
+
+/**
+ * 同步输入：把「一次按键该发给谁」算出来并投递。
+ *
+ * 三个必守的边界（都是设计文档 Review Focus #5 点名的地方）：
+ *   1. 只在**当前标签**内部广播 —— 目标集合来自这棵 pane 树的叶子，不是全部会话；
+ *   2. 只发给 connected 的窗格；自己永远在集合里（哪怕自己正断着，也不影响别人）；
+ *   3. 单目标时老老实实走 session.write，不为了「统一」多开一条广播路径 ——
+ *      广播在单目标下语义相同，但多一次 IPC 参数编解码，而这是每一次按键。
+ *
+ * 用 getState() 现取而不是闭包捕获：这个函数会被注册进 init effect
+ * （依赖只有 sessionId），捕获到的 syncByTab / trees 会一直是首次渲染那份，
+ * 用户开了同步开关却要重开标签才生效 —— 那种 bug 在真机上极难复现。
+ */
+function sendTerminalInput(sessionId: string, data: string): void {
+  const split = useSplitStore.getState()
+  const owner = paneOwnerOf(sessionId)
+  const targets = resolveSyncTargets(
+    split.trees[owner],
+    split.syncByTab[owner] === true,
+    useSessionStore.getState().sessions,
+    sessionId
+  )
+  if (targets.length > 1) {
+    void window.api.session.broadcast(targets, data)
+    return
+  }
+  void window.api.session.write(sessionId, data)
+}
+
+/**
  * 终端视图：一个 SessionUi 对应一个 xterm 实例。
  * - 实例挂到 terminalRegistry，会话数据事件由 App 层写入；
  * - 容器尺寸变化（含标签切换、窗口缩放）自动 fit 并同步 cols/rows 到主进程；
@@ -136,6 +243,44 @@ export function TerminalView({
   })
 
   const { menu, openMenu, closeMenu } = useContextMenu<'context'>()
+
+  /* 待确认的多行粘贴；非空时渲染确认框 */
+  const [pasteRequest, setPasteRequest] = useState<{
+    text: string
+    analysis: PasteAnalysis
+  } | null>(null)
+
+  /**
+   * 三处粘贴入口（快捷键 / 右键菜单 / 右键直接粘贴）的唯一汇合点。
+   *
+   * 单行内容走 else 分支，与改造前的行为逐字节一致：不弹窗、不加延时、
+   * 不抢焦点。只有 pasteGuard 判定需要确认时才会拦下来 —— 拦截本身必须
+   * 便宜，因为它挂在每一次 Ctrl+V 上。
+   *
+   * 设置用 getState() 现取而非闭包捕获：快捷键处理器注册在 init effect 里
+   * （只依赖 sessionId），捕获的 settings 会一直是首次渲染那份，用户改了
+   * 「多行确认」开关后不重启终端就永远不生效。
+   */
+  const requestPaste = useCallback(
+    (raw: string): void => {
+      if (!raw) return
+      const { terminal, dangerPatterns } = useSettingsStore.getState().settings
+      const analysis = analyzePaste(raw, dangerPatterns, terminal.confirmMultilinePaste !== false)
+      if (!analysis.shouldConfirm) {
+        /*
+         * 这里刻意只写本地 xterm，不自己再广播一遍：term.paste() 会触发
+         * onData，而那条路已经统一走 sendTerminalInput —— 同步开启时自然
+         * 跟着广播。在这里补一次广播等于每个字符发两遍。
+         */
+        const entry = terminalRegistry.get(sessionId)
+        entry?.term.paste(raw)
+        entry?.term.focus()
+        return
+      }
+      setPasteRequest({ text: raw, analysis })
+    },
+    [sessionId]
+  )
 
   /* ---------- 初始化（每个会话一次） ---------- */
   useEffect(() => {
@@ -269,7 +414,7 @@ export function TerminalView({
        * 不必等远端命令真的执行完 —— 失败了侧栏也停下而已，无害。
        */
       feedTerminalInput(sessionId, data)
-      void window.api.session.write(sessionId, data)
+      sendTerminalInput(sessionId, data)
     })
 
     /*
@@ -310,7 +455,7 @@ export function TerminalView({
       if (matchShortcut(e, map.terminalPaste)) {
         e.preventDefault()
         void call(window.api.clip.read(), { silent: true }).then((text) => {
-          if (text) terminalRegistry.get(sessionId)?.term.paste(text)
+          if (text) requestPaste(text)
         })
         return false
       }
@@ -392,7 +537,11 @@ export function TerminalView({
       searchResultDisposer.dispose()
       term.dispose()
     }
-  }, [sessionId])
+    /*
+     * requestPaste 是 useCallback([sessionId])，与这里的依赖同源，
+     * 列进来不会导致终端重建；不列则会捕获首次渲染那份闭包。
+     */
+  }, [sessionId, requestPaste])
 
   /* ---------- 设置变化：字体 / 主题实时生效 ---------- */
   const terminalPrefs = useSettingsStore((s) => s.settings.terminal)
@@ -467,9 +616,34 @@ export function TerminalView({
     terminalRegistry.get(sessionId)?.term.focus()
   }
 
-  /* ---------- trzsz：拖文件进来 / 右键发送 ---------- */
+  /* ---------- P1-1 拖放上传：默认 SFTP 直传当前目录，Alt 临时切 trzsz ---------- */
   const trzsz = useTrzszOf(sessionId)
   const canTrzsz = session.kind !== 'serial' && session.status === 'connected'
+  const dropCwd = useCwdStore((s) => s.path[sessionId] ?? '')
+
+  /**
+   * 拖放时提示条的状态。
+   *
+   * 拖拽过程里 dragOver 会以每秒几十次的频率触发，所以只在 action / 目标目录
+   * 真正变化时才 setState —— 否则 React 会把整棵终端树重渲染几十遍。
+   */
+  const [dropHint, setDropHint] = useState<{
+    action: DropAction
+    files: number
+    dir: string
+  } | null>(null)
+
+  const resolveDropAction = (
+    e: React.DragEvent<HTMLDivElement>,
+    fileCount: number
+  ): DropAction =>
+    decideDropAction({
+      kind: session.kind ?? 'ssh',
+      status: session.status,
+      fileCount,
+      prefMode: terminalPrefs.dropUploadMode ?? 'sftp',
+      altKey: e.altKey
+    })
 
   /**
    * 把拖进来的若干条路径交给主进程上传。
@@ -491,6 +665,42 @@ export function TerminalView({
   const dropPaths = (e: React.DragEvent<HTMLDivElement>): string[] => {
     const files = Array.from(e.dataTransfer?.files ?? [])
     return files.map((f) => window.api.filePathOf(f)).filter((p) => Boolean(p))
+  }
+
+  /**
+   * SFTP 直传：目标目录取终端 cwd。
+   *
+   * cwd 可能还没被 OSC7 报上来（刚连上、或远端 shell 不报），这时才退到
+   * resolveUploadDir（记住的上次目录 → home）。宁可多发一次 home 查询，
+   * 也不要默认往 '/' 上传 —— 那是最容易把文件丢到找不着的地方的做法。
+   *
+   * keepRoot: true 与 SFTP 面板拖放保持一致：拖一个文件夹进来时保留它本身
+   * 那一层目录名，否则多个文件会被摊平到 cwd 里混在一起。
+   */
+  const uploadViaSftp = async (paths: string[]): Promise<void> => {
+    const target = dropCwd || (await resolveUploadDir(sessionId))
+    if (!target) {
+      useToastStore.getState().push({ kind: 'error', title: t('terminal.drop.error') })
+      return
+    }
+    const done = await call(window.api.sftp.upload(sessionId, paths, target, { keepRoot: true }), {
+      silent: true
+    })
+    if (!done) {
+      useToastStore.getState().push({ kind: 'error', title: t('terminal.drop.error') })
+      return
+    }
+    /* 传完立刻让目录缓存失效：不失效的话用户在文件面板里看到的还是旧列表 */
+    invalidateDir(sessionId, target)
+    useToastStore.getState().push({
+      kind: 'success',
+      title: t('terminal.drop.done', { count: done.length, dir: target })
+    })
+  }
+
+  const runDropAction = (action: DropAction, paths: string[]): void => {
+    if (action === 'trzsz') startUpload(paths)
+    else if (action === 'sftp') void uploadViaSftp(paths)
   }
 
   /* ---------- 分屏：终端右键入口 ---------- */
@@ -531,10 +741,7 @@ export function TerminalView({
       label: '粘贴',
       onClick: () => {
         void call(window.api.clip.read(), { silent: true }).then((text) => {
-          if (text) {
-            terminalRegistry.get(sessionId)?.term.paste(text)
-            terminalRegistry.get(sessionId)?.term.focus()
-          }
+          if (text) requestPaste(text)
         })
       }
     },
@@ -598,7 +805,7 @@ export function TerminalView({
         ]
       : []),
     {
-      label: '查找',
+      label: t('editor.find'),
       separatorBefore: true,
       onClick: () => setSearchOpen(true)
     },
@@ -650,10 +857,7 @@ export function TerminalView({
       if (selection) void call(window.api.clip.write(selection), { silent: true })
     } else {
       void call(window.api.clip.read(), { silent: true }).then((text) => {
-        if (!text) return
-        const latest = terminalRegistry.get(sessionId)
-        latest?.term.paste(text)
-        latest?.term.focus()
+        if (text) requestPaste(text)
       })
     }
   }
@@ -673,28 +877,76 @@ export function TerminalView({
           className="h-full w-full"
           onContextMenu={handleContextMenu}
           /*
-           * 拖文件进终端 = 用 trzsz 发给远端。
+           * 拖文件进终端 = 上传到远端（默认 SFTP 直传 cwd，Alt 或设置项切 trzsz）。
            *
            * 只拦带文件的拖拽：拖常用命令进来是另一条链路（App.tsx 的
            * handleTerminalDragOver），那边靠 dataTransfer.types 区分，
            * 这里用 files.length 区分，互不干扰。stopPropagation 是必要的 ——
            * 否则同一个 drop 也会被工作区那层的命令处理器看到。
+           *
+           * 命令拖拽的 files.length 恒为 0，所以 decideDropAction 的 fileCount
+           * 判据把它挡在第一步 —— 不会出现「拖一条命令进来弹出上传提示」。
            */
           onDragOver={(e) => {
-            if (!canTrzsz || (e.dataTransfer?.files.length ?? 0) === 0) return
+            /* 不能用 e.dataTransfer.files.length：Windows 在未落下时它是保护模式，恒为 0 */
+            const fileCount = countDraggedFiles(e.dataTransfer)
+            const action = resolveDropAction(e, fileCount)
+            if (action === 'ignore') {
+              if (dropHint) setDropHint(null)
+              return
+            }
             e.preventDefault()
             e.stopPropagation()
             e.dataTransfer.dropEffect = 'copy'
+            setDropHint((prev) =>
+              prev && prev.action === action && prev.files === fileCount && prev.dir === dropCwd
+                ? prev
+                : { action, files: fileCount, dir: dropCwd }
+            )
+          }}
+          /*
+           * 只在真正离开这个容器时才收提示层。
+           * dragleave 会随光标进出每个子元素各冒泡一次，不判 relatedTarget
+           * 是否仍在容器内的话，鼠标划过 xterm 的 canvas / 覆盖层本身就会闪一下。
+           */
+          onDragLeave={(e) => {
+            if (e.currentTarget.contains(e.relatedTarget as Node | null)) return
+            if (dropHint) setDropHint(null)
           }}
           onDrop={(e) => {
-            if (!canTrzsz) return
+            /* drop 阶段 files 已填好，但仍走同一个计数函数：两条路径只有一个真相 */
+            const action = resolveDropAction(e, countDraggedFiles(e.dataTransfer))
+            setDropHint(null)
+            if (action === 'ignore') return
             const paths = dropPaths(e)
             if (paths.length === 0) return
             e.preventDefault()
             e.stopPropagation()
-            startUpload(paths)
+            runDropAction(action, paths)
           }}
         />
+
+        {/*
+         * 拖放目标提示条。刻意用纯色 bg-app/[0.88] 而不是 backdrop-filter:
+         * 模糊层会让 xterm 的 canvas 每帧重合成，拖拽时肉眼可见地掉帧。
+         */}
+        {dropHint && dropHint.action !== 'ignore' && (
+          <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center bg-app/[0.88]">
+            <div className="flex max-w-[420px] flex-col items-center gap-1.5 rounded-xl border border-accent/40 bg-panel px-5 py-3 text-center shadow-pop">
+              <div className="text-xs font-medium text-ink">
+                {t('terminal.drop.overlay.title', { dir: dropHint.dir || '~' })}
+              </div>
+              <div className="text-2xs text-ink-3">
+                {t('terminal.drop.overlay.alt', {
+                  mode:
+                    dropHint.action === 'sftp'
+                      ? t('terminal.dropUploadMode.trzsz')
+                      : t('terminal.dropUploadMode.sftp')
+                })}
+              </div>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* 搜索条 */}
@@ -722,14 +974,22 @@ export function TerminalView({
           <button
             className="btn-icon h-5 w-5"
             onClick={() => runSearch(searchText, true)}
-            title="上一个 (Shift+Enter)"
+            title={t('editor.prevMatch')}
           >
             <ChevronUp size={12} />
           </button>
-          <button className="btn-icon h-5 w-5" onClick={() => runSearch(searchText)} title="下一个 (Enter)">
+          <button
+            className="btn-icon h-5 w-5"
+            onClick={() => runSearch(searchText)}
+            title={t('editor.nextMatch')}
+          >
             <ChevronDown size={12} />
           </button>
-          <button className="btn-icon h-5 w-5" onClick={closeSearch} title="关闭 (Esc)">
+          <button
+            className="btn-icon h-5 w-5"
+            onClick={closeSearch}
+            title={t('editor.closeFind')}
+          >
             <X size={12} />
           </button>
         </div>
@@ -737,7 +997,7 @@ export function TerminalView({
 
       {/* 连接中 / 错误 / 已断开 覆盖层 */}
       {showOverlay && (
-        <div className="absolute inset-0 z-20 flex items-center justify-center bg-app/88">
+        <div className="absolute inset-0 z-20 flex items-center justify-center bg-app/[0.88]">
           {session.status === 'connecting' && (
             <div className="flex items-center gap-2.5 text-xs text-ink-2">
               <Loader2 size={15} className="animate-spin text-accent" />
@@ -760,12 +1020,35 @@ export function TerminalView({
                 {session.error ?? '未知错误'}
               </div>
               {/指纹/.test(session.error ?? '') && <UpdateHostKeyButton session={session} />}
+              {needsLegacyAlgorithms(session) && <EnableLegacyAlgoButton session={session} />}
               <ReconnectButton sessionId={sessionId} />
             </div>
           )}
         </div>
       )}
 
+      {/*
+        多行粘贴确认框。挂在终端容器之外（同一层 relative），
+        这样它不会成为 xterm 的兄弟节点被 fit 计算影响。
+      */}
+      {pasteRequest && (
+        <PasteConfirmDialog
+          target={session.title || session.target}
+          analysis={pasteRequest.analysis}
+          text={pasteRequest.text}
+          onCancel={() => {
+            setPasteRequest(null)
+            /* 取消后把焦点还给终端：用户接下来大概率要继续敲命令 */
+            terminalRegistry.get(sessionId)?.term.focus()
+          }}
+          onConfirm={(finalText) => {
+            setPasteRequest(null)
+            const entry = terminalRegistry.get(sessionId)
+            entry?.term.paste(finalText)
+            entry?.term.focus()
+          }}
+        />
+      )}
       {menu && <ContextMenu x={menu.x} y={menu.y} items={menuItems} onClose={closeMenu} />}
     </div>
   )

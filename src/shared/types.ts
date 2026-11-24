@@ -129,6 +129,8 @@ export interface Connection {
   /** 跳板机链（ProxyJump），存的是其他 Connection 的 id，按顺序跳 */
   proxyJump?: string[]
   proxy?: ProxyConfig
+  /** 启用老设备兼容算法（旧固件只支持 group1-sha1 / ssh-dss / 3des-cbc 等） */
+  legacyAlgorithms?: boolean
   lastUsedAt?: number
   createdAt: number
   updatedAt: number
@@ -211,6 +213,50 @@ export interface ConnectionSecret {
   connectionId: string
   password?: string
   passphrase?: string
+}
+
+/* ---------- 外部 SSH 客户端导入（ssh_config / MobaXterm / Xshell / SecureCRT / FinalShell） ---------- */
+
+/** 外部配置来源；与 src/main/store/externalImport.ts 的解析器一一对应 */
+export type ExternalImportSource =
+  | 'ssh-config'
+  | 'mobaxterm'
+  | 'xshell'
+  | 'securecrt'
+  | 'finalshell'
+
+/**
+ * 导入预览。
+ *
+ * 刻意不带任何凭据字段：这几家的密码都是各自算法加密的（SecureCRT 的 Blowfish、
+ * Xshell 的会话密钥），解析它们既不可靠也没必要 —— 导入只搬「连到哪、用什么身份」。
+ */
+export interface ExternalImportPreview {
+  source: ExternalImportSource
+  /** 解析出的 SSH 连接数 */
+  count: number
+  groups: Array<{ name: string; count: number }>
+  /** 与本机现有连接重复的条数（名称+地址+端口+用户名） */
+  duplicates: number
+  /** 协议不是 SSH 被跳过的会话数（RDP / VNC / Telnet ...） */
+  skippedNonSsh: number
+  /** 字段缺失或格式坏掉、无法成条的会话数 */
+  invalid: number
+  /** 导入后需要自己补密码的连接数 */
+  withoutPasswordCount: number
+  /** 前几条连接名，供预览列表展示 */
+  sampleNames: string[]
+  /** 实际读取的配置文件数 */
+  files: number
+}
+
+export interface ExternalImportResult {
+  added: number
+  updated: number
+  skipped: number
+  invalid: number
+  skippedNonSsh: number
+  files: number
 }
 
 /**
@@ -351,14 +397,7 @@ export type ThemeMode = 'dark' | 'light' | 'system'
  *   colorTheme 在这套明暗之上换一整套配色
  * 每个配色主题都同时提供 dark 与 light 两套变量，因此任意组合都成立。
  */
-export type ColorThemeId =
-  | 'vscode'
-  | 'workbench'
-  | 'dracula'
-  | 'nord'
-  | 'solarized'
-  | 'onedark'
-  | 'gruvbox'
+export type ColorThemeId = 'vscode' | 'gruvbox' | 'solarized' | 'dracula'
 
 export interface TerminalPrefs {
   fontFamily: string
@@ -371,6 +410,10 @@ export interface TerminalPrefs {
   copyOnSelect?: boolean
   /** 右键直接复制/粘贴（按住 Shift+右键 唤出完整菜单） */
   rightClickPaste?: boolean
+  /** 拖文件进终端时的默认通道：sftp = 直传当前目录，trzsz = 走 trzsz 协议 */
+  dropUploadMode?: 'sftp' | 'trzsz'
+  /** 粘贴多行内容前弹确认框（单行从不弹）；undefined 视为开 */
+  confirmMultilinePaste?: boolean
 }
 
 /**
@@ -633,6 +676,7 @@ export type ShortcutAction =
   | 'settings'
   | 'togglePanel'
   | 'toggleCommandRail'
+  | 'toggleZen'
   | 'nextTab'
   | 'closeTab'
   | 'terminalSearch'
@@ -820,6 +864,8 @@ export interface ConnectionInput {
   remark?: string
   proxyJump?: string[]
   proxy?: ProxyConfig
+  /** 老设备兼容算法（仅 kind = 'ssh' 有意义；串口忽略） */
+  legacyAlgorithms?: boolean
   /**
    * 「另存为新设备」时带上原连接 id：新记录落库后把原连接保险箱里的
    * password / passphrase / proxyPassword 复制一份过去。
@@ -843,6 +889,8 @@ export interface TestConnectionInput {
   passphrase?: string
   proxyJump?: string[]
   proxy?: ProxyConfig
+  /** 老设备兼容算法（与连接上的同名字段一致） */
+  legacyAlgorithms?: boolean
 }
 
 export interface TestConnectionResult {
@@ -893,6 +941,24 @@ export interface HistoryFilter {
 /* ------------------------------------------------------------------ *
  *  SFTP / 本地文件管理
  * ------------------------------------------------------------------ */
+
+/**
+ * 文件通道后端模式。
+ *
+ * - 'sftp'：正常的 ssh2 SFTP 子系统通道；
+ * - 'shell'：远端根本没有 sftp 子系统（老式 dropbear / 精简 BusyBox），
+ *   退化成 "在 shell 里跑 ls/cat/cp" 的纯命令通道。
+ *
+ * 只在「确认子系统不存在」时才会变成 shell，网络抖动、认证失败、单目录权限
+ * 错误都不降级 —— 否则一台正常服务器会莫名其妙掉进慢速通道。
+ */
+export type SftpBackendMode = 'sftp' | 'shell'
+
+/** 会话的文件通道模式发生变化（主进程 → 渲染层单向广播） */
+export interface SftpModeEvent {
+  sessionId: string
+  mode: SftpBackendMode
+}
 
 /** 远端文件条目（SFTP readdir 结果） */
 export interface RemoteFile {
@@ -1093,6 +1159,13 @@ export interface TunnelConfig {
    * 旧版本（v1.6.5 及之前无校验）已存的 0.0.0.0 配置同样依赖它放行。
    */
   allowLan?: boolean
+  /**
+   * 随所绑定的 connectionId 自动启动。
+   *
+   * 只在 connectionId 存在时有意义：没有绑定连接的隧道属于「临时手动开一个」，
+   * 任何会话连上都去拉它会让用户莫名其妙多出一堆监听端口。
+   */
+  autoStart?: boolean
   createdAt: number
   updatedAt: number
 }
@@ -1113,9 +1186,56 @@ export interface TunnelInput {
    * 避免用户随手填 0.0.0.0 就把本机变成同网段可用的免认证 SOCKS5 出口。
    */
   allowLan?: boolean
+  /** 随所绑定连接自动启动（仅当 connectionId 存在时保存） */
+  autoStart?: boolean
 }
 
-export type TunnelStatus = 'stopped' | 'starting' | 'active' | 'error'
+/**
+ * 远端上一个正在监听的端口（P0-3 快速转发的数据源）。
+ *
+ * targetHost 是经过归一化、可直接当作隧道目标的地址：
+ * - 通配监听（0.0.0.0 / * / ::）说明同网段可达，但隧道目标是相对设备自身的，
+ *   所以归一化为设备自己的回环 127.0.0.1；
+ * - 具体内网 IP 原样保留（服务可能只认这个网卡）；
+ * - 纯 IPv6 回环 [::1] 若同端口另有 IPv4 监听则折叠为 127.0.0.1，仅在独占时保留 ::1。
+ * address 保留归一化后的同值，方便 UI 直接展示；isLoopback 说明它是否只在本机可达。
+ */
+export interface RemoteListeningPort {
+  proto: 'tcp' | 'tcp6'
+  address: string
+  port: number
+  /** 可直接用作隧道目标的地址（已归一化） */
+  targetHost: string
+  pid?: number
+  process?: string
+  isLoopback: boolean
+}
+
+/**
+ * reconnecting：会话意外断开且正在自动重连，隧道挂起等恢复。
+ *
+ * 之所以不直接置 error/stopped：用户什么都没做，只是网络抖了一下；
+ * 重连成功后这些隧道会被自动拉起来，界面需要表达「等一等就好」。
+ */
+export type TunnelStatus = 'stopped' | 'starting' | 'active' | 'reconnecting' | 'error'
+
+/**
+ * 临时转发（会话级快捷转发）的配置快照。
+ *
+ * 只活在内存里，绝不写 tunnels.json：用户点「转发」是为了立刻用一下，
+ * 不是要往隧道列表里塞一堆一次性条目。需要长期保留的走 promote 转存。
+ */
+export interface EphemeralTunnelConfig {
+  name: string
+  type: 'local'
+  bindHost: string
+  bindPort: number
+  targetHost: string
+  targetPort: number
+  /** 远端监听该端口的进程名（探测结果里带过来的，便于界面区分端口用途） */
+  process?: string
+  connectionId?: string
+}
 
 /** 隧道的实时运行状态（主进程维护，事件推送到渲染层） */
 export interface TunnelRuntimeInfo {
@@ -1127,8 +1247,17 @@ export interface TunnelRuntimeInfo {
   startedAt?: number
   /** 已转发的连接数 */
   connectionCount: number
-  /** remote 类型 bindPort=0 时，服务端实际分配的端口 */
+  /** remote 类型 bindPort=0 时，服务端实际分配的端口；临时转发为真实监听端口 */
   actualPort?: number
+  /** 会话级临时转发（不落盘） */
+  ephemeral?: boolean
+  /**
+   * 该运行时已从内存中移除（关闭会话、放弃重连、停掉临时转发时推送）。
+   * 渲染层收到后必须把这条从 Map 里删掉 —— 否则界面会留一条永远点不动的僵尸。
+   */
+  removed?: boolean
+  /** 临时转发的配置快照（用于「保存为持久隧道」与界面展示） */
+  ephemeralConfig?: EphemeralTunnelConfig
 }
 
 /* ------------------------------------------------------------------ *

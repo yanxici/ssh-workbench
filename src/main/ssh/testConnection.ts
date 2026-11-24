@@ -35,9 +35,21 @@ export async function testConnection(input: TestConnectionInput): Promise<TestCo
   let client: Awaited<ReturnType<typeof connectClient>> | null = null
 
   try {
-    const cfg = await buildConnectConfig(input, secret, settings, (fp) => {
-      fingerprint = fp
-    })
+    const cfg = await buildConnectConfig(
+      {
+        host: input.host,
+        port: input.port,
+        username: input.username,
+        authType: input.authType,
+        privateKeyPath: input.privateKeyPath,
+        legacyAlgorithms: input.legacyAlgorithms
+      },
+      secret,
+      settings,
+      (fp) => {
+        fingerprint = fp
+      }
+    )
     client = await connectWithOptionalProxy(cfg, {
       host: input.host,
       port: input.port,

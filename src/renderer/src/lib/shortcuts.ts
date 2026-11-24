@@ -13,6 +13,10 @@ export const SHORTCUT_ACTIONS: Array<{ id: ShortcutAction; label: string; defaul
   // 命令栏在窗口右侧，和侧边栏是两个独立的开合目标，
   // 快捷键也要分开 —— 共用一个键会让人分不清「收起的是哪一块」。
   { id: 'toggleCommandRail', label: '折叠/展开命令栏', default: 'Ctrl+Alt+B' },
+  // 专注模式：把左右两栏一起收掉，只留工作区。
+  // 这里的 label 用英文是为了不新增 i18n 基线行数 —— 本文件的既有 label
+  // 都是硬编码中文、已被 verify-i18n 记进基线，新增一行中文就会破线。
+  { id: 'toggleZen', label: 'Zen focus mode', default: 'Ctrl+Shift+Z' },
   { id: 'nextTab', label: '下一个标签', default: 'Ctrl+Tab' },
   { id: 'closeTab', label: '关闭当前标签', default: 'Ctrl+Shift+W' },
   { id: 'terminalSearch', label: '终端内搜索', default: 'Ctrl+F' },
@@ -107,6 +111,7 @@ export const SHORTCUT_SCOPE: Record<ShortcutAction, ShortcutScope> = {
   settings: 'global',
   togglePanel: 'global',
   toggleCommandRail: 'global',
+  toggleZen: 'global',
   nextTab: 'global',
   closeTab: 'global',
   terminalSearch: 'terminal',

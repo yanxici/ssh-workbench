@@ -41,6 +41,7 @@ import { useToastStore } from '@/stores/toastStore'
 import { COLORS } from '@/lib/icons'
 import { cn } from '@/lib/utils'
 import { call } from '@/lib/ipc'
+import { useI18n } from '@/i18n'
 import { Combobox, Field, Modal, Toggle } from '@/components/ui'
 
 interface FormState {
@@ -68,6 +69,12 @@ interface FormState {
   proxyPort: string
   proxyUsername: string
   proxyPassword: string
+  /**
+   * 兼容老旧设备算法（P0-1）。默认关：它会把 3des-cbc / group1-sha1 这类
+   * 已废弃算法追加到候选列表末尾，只有对端不支持现代算法时才会真正用上。
+   * 串口连接没有这个概念，保存时恒为 undefined。
+   */
+  legacyAlgorithms: boolean
 
   /* ---------------- 串口参数 ---------------- */
 
@@ -120,6 +127,7 @@ const EMPTY: FormState = {
   proxyPort: '1080',
   proxyUsername: '',
   proxyPassword: '',
+  legacyAlgorithms: false,
   serialPath: '',
   serialBaud: '115200',
   serialDataBits: 8,
@@ -238,6 +246,7 @@ export function ConnectionEditor({
 }): React.JSX.Element {
   const save = useConnectionStore((s) => s.save)
   const connections = useConnectionStore((s) => s.connections)
+  const { t } = useI18n()
 
   const [form, setForm] = useState<FormState>(EMPTY)
   const [showPassword, setShowPassword] = useState(false)
@@ -291,6 +300,8 @@ export function ConnectionEditor({
         proxyPort: initial.proxy?.port !== undefined ? String(initial.proxy.port) : '1080',
         proxyUsername: initial.proxy?.username ?? '',
         proxyPassword: '',
+        // 老 JSON 里没有这个字段，Boolean(undefined) 即 false，不必补默认值
+        legacyAlgorithms: Boolean(initial.legacyAlgorithms),
         serialPath: initial.serial?.path ?? '',
         serialBaud: initial.serial ? String(initial.serial.baudRate) : EMPTY.serialBaud,
         serialDataBits: initial.serial?.dataBits ?? EMPTY.serialDataBits,
@@ -311,6 +322,8 @@ export function ConnectionEditor({
     } else {
       setForm({
         ...EMPTY,
+        // 预设类型：欢迎页「新建串口」直接把编辑器开到串口页签，省掉用户切 Tab
+        kind: preset?.kind ?? EMPTY.kind,
         name: preset?.name ?? '',
         host: preset?.host ?? '',
         port: preset?.port !== undefined ? String(preset.port) : EMPTY.port,
@@ -465,6 +478,11 @@ export function ConnectionEditor({
     password: forceClearSecret ? '' : form.password === '' ? undefined : form.password,
     passphrase: forceClearSecret ? '' : form.passphrase === '' ? undefined : form.passphrase,
     proxy: form.kind === 'serial' ? undefined : buildProxy(forceClearSecret),
+    /*
+     * 只写 true，关闭时写 undefined：主进程 saveConnection 对 undefined 的处理是
+     * 「不覆盖」以外的显式清空（见那里 base 展开的注释），这里保持同一语义。
+     */
+    legacyAlgorithms: form.kind === 'serial' ? undefined : form.legacyAlgorithms || undefined,
     // 编辑器不编辑跳板链，但保存时必须原样保留，避免"编辑一次就丢"
     proxyJump: form.kind === 'serial' ? undefined : initial?.proxyJump
   })
@@ -555,7 +573,8 @@ export function ConnectionEditor({
       password: form.password || undefined,
       privateKeyPath: form.privateKeyPath.trim() || undefined,
       passphrase: form.passphrase || undefined,
-      proxy: buildProxy()
+      proxy: buildProxy(),
+      legacyAlgorithms: form.legacyAlgorithms || undefined
     }
     const res = await call(window.api.conn.test(input), { errorTitle: '测试连接异常' })
     if (res) setTestResult(res)
@@ -969,6 +988,25 @@ export function ConnectionEditor({
                 )}
               </div>
             </Field>
+
+            {/*
+             * 老设备兼容算法：只在 SSH 分支出现，串口没有算法协商这回事。
+             * 说明文案走词表（见 i18n/index.ts），开关本身不带副标题 ——
+             * Field 的 hint 已经占了一行，再加一行状态文字只是噪音。
+             */}
+            <Field
+              label={t('conn.legacyAlgo.label')}
+              hint={t('conn.legacyAlgo.hint')}
+              className="col-span-2"
+            >
+              <div className="flex items-center gap-2 pt-0.5">
+                <Toggle
+                  checked={form.legacyAlgorithms}
+                  onChange={(v) => set('legacyAlgorithms', v)}
+                />
+                <span className="font-mono text-2xs text-ink-3">3des-cbc / group1-sha1</span>
+              </div>
+            </Field>
           </>
         )}
 
@@ -1147,7 +1185,7 @@ export function ConnectionEditor({
             </Field>
 
             <Field
-              label="编码"
+              label={t('editor.encoding')}
               hint="设备输出是 GBK 时选 GBK，否则中文会是乱码"
             >
               <div className="flex gap-1">

@@ -80,6 +80,25 @@ export function TerminalSection(): React.JSX.Element {
           onChange={(v) => setTerminal({ rightClickPaste: v })}
         />
       </Row>
+      <Row label={t('terminal.dropUploadMode')} hint={t('terminal.dropUploadMode.hint')}>
+        <Segmented
+          value={settings.terminal.dropUploadMode === 'trzsz' ? 'trzsz' : 'sftp'}
+          options={[
+            { value: 'sftp' as const, label: t('terminal.dropUploadMode.sftp') },
+            { value: 'trzsz' as const, label: t('terminal.dropUploadMode.trzsz') }
+          ]}
+          onChange={(v) => setTerminal({ dropUploadMode: v })}
+        />
+      </Row>
+      <Row
+        label={t('terminal.confirmMultilinePaste')}
+        hint={t('terminal.confirmMultilinePaste.hint')}
+      >
+        <Toggle
+          checked={settings.terminal.confirmMultilinePaste !== false}
+          onChange={(v) => setTerminal({ confirmMultilinePaste: v })}
+        />
+      </Row>
     </>
   )
 }

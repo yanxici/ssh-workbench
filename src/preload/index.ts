@@ -30,6 +30,9 @@ import type {
   DiscoverProgressEvent,
   ErrorEntry,
   ErrorLogStats,
+  ExternalImportPreview,
+  ExternalImportResult,
+  ExternalImportSource,
   FirmwareFileInfo,
   FirmwareLogEvent,
   FirmwareUpgradeResult,
@@ -44,12 +47,15 @@ import type {
   ParsedSshCommand,
   ReconnectEvent,
   RemoteFile,
+  RemoteListeningPort,
   RemoteText,
   SerialPortInfo,
   SessionDataEvent,
   SessionInfo,
   SessionLogFile,
   SessionStatusEvent,
+  SftpBackendMode,
+  SftpModeEvent,
   SshExecResult,
   TaskNotifyPayload,
   TestConnectionInput,
@@ -145,6 +151,28 @@ export const api = {
       mode: ConnImportMode
     ): Promise<IpcResult<ConnImportResult>> =>
       invoke(IPC.CONN_IMPORT_APPLY, path, passphrase, mode),
+    /**
+     * 选择外部客户端的配置目录 / 文件，返回可直接交给 preview 的路径数组。
+     *
+     * 目录（MobaXterm / SecureCRT 的 Sessions、FinalShell 的 conn 目录）由主进程
+     * 递归扫描并登记进白名单，渲染层拿到的只是路径字符串。
+     */
+    extImportPick: (
+      source: ExternalImportSource
+    ): Promise<
+      IpcResult<{ canceled: boolean; paths?: string[]; root?: string; defaultPath?: string }>
+    > => invoke(IPC.CONN_EXT_IMPORT_PICK, source),
+    extImportPreview: (
+      source: ExternalImportSource,
+      paths: string[]
+    ): Promise<IpcResult<ExternalImportPreview>> =>
+      invoke(IPC.CONN_EXT_IMPORT_PREVIEW, source, paths),
+    extImportApply: (
+      source: ExternalImportSource,
+      paths: string[],
+      mode: ConnImportMode
+    ): Promise<IpcResult<ExternalImportResult>> =>
+      invoke(IPC.CONN_EXT_IMPORT_APPLY, source, paths, mode),
     test: (input: TestConnectionInput): Promise<IpcResult<TestConnectionResult>> =>
       invoke(IPC.CONN_TEST, input),
     /** 连接分组重命名：返回整组迁移的连接数 */
@@ -316,6 +344,14 @@ export const api = {
     ): Promise<IpcResult<{ home: string; files: RemoteFile[] }>> =>
       invoke(IPC.SFTP_BOOTSTRAP, sessionId),
     home: (sessionId: string): Promise<IpcResult<string>> => invoke(IPC.SFTP_HOME, sessionId),
+    /**
+     * 当前会话的文件通道后端。
+     *
+     * 打开文件面板时先问一次，避免「降级已经发生但角标要等下一次事件才出现」
+     * 的首帧错位：事件只推未来，当前状态只能主动拿。
+     */
+    mode: (sessionId: string): Promise<IpcResult<SftpBackendMode>> =>
+      invoke(IPC.SFTP_MODE, sessionId),
     mkdir: (sessionId: string, path: string): Promise<IpcResult<void>> =>
       invoke(IPC.SFTP_MKDIR, sessionId, path),
     remove: (sessionId: string, path: string): Promise<IpcResult<void>> =>
@@ -405,7 +441,24 @@ export const api = {
     start: (tunnelId: string, sessionId: string): Promise<IpcResult<TunnelRuntimeInfo>> =>
       invoke(IPC.TUNNEL_START, tunnelId, sessionId),
     stop: (tunnelId: string): Promise<IpcResult<void>> => invoke(IPC.TUNNEL_STOP, tunnelId),
-    states: (): Promise<IpcResult<TunnelRuntimeInfo[]>> => invoke(IPC.TUNNEL_STATES)
+    states: (): Promise<IpcResult<TunnelRuntimeInfo[]>> => invoke(IPC.TUNNEL_STATES),
+    /** 探测当前会话远端在监听的 TCP 端口（串口会话会安静失败） */
+    discoverPorts: (sessionId: string): Promise<IpcResult<RemoteListeningPort[]>> =>
+      invoke(IPC.TUNNEL_DISCOVER_PORTS, sessionId),
+    /** 一键把某个远端端口临时映射到本机（不进 tunnels.json） */
+    quickStart: (
+      sessionId: string,
+      input: { targetHost: string; targetPort: number; process?: string }
+    ): Promise<IpcResult<TunnelRuntimeInfo>> => invoke(IPC.TUNNEL_QUICK_START, sessionId, input),
+    /** 把临时转发原地转成持久隧道（复用现有监听，不留幽灵端口） */
+    promote: (
+      ephemeralId: string,
+      customName?: string
+    ): Promise<IpcResult<{ config: TunnelConfig; runtime: TunnelRuntimeInfo }>> =>
+      invoke(IPC.TUNNEL_PROMOTE, ephemeralId, customName),
+    /** 用默认浏览器打开本机映射端口（URL 由主进程按白名单拼） */
+    openLocal: (protocol: 'http' | 'https', port: number): Promise<IpcResult<void>> =>
+      invoke(IPC.TUNNEL_OPEN_LOCAL, protocol, port)
   },
 
   clip: {
@@ -698,7 +751,9 @@ export const api = {
      * 面板收到就重拉列表 —— 主进程不广播整条记录，否则渲染层要维护
      * 一份与磁盘可能不同步的镜像。主进程侧 300ms 节流。
      */
-    recordChanged: (cb: () => void): (() => void) => subscribe(IPC.EVT_TRANSFER_RECORD_CHANGED, cb)
+    recordChanged: (cb: () => void): (() => void) => subscribe(IPC.EVT_TRANSFER_RECORD_CHANGED, cb),
+    /** 文件通道后端切换（SFTP 子系统缺失 → shell 兼容通道），一次会话只推一次 */
+    sftpMode: (cb: (e: SftpModeEvent) => void): (() => void) => subscribe(IPC.EVT_SFTP_MODE, cb)
   }
 }
 

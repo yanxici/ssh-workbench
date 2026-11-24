@@ -292,9 +292,9 @@ async function main() {
  * hwnd=0 → 几何全 0 → 所有点击投到 (0,0)，12 条断言整片假红，报的却是"菜单弹不出来"。
  */
 const mainPid = Number(process.env.TM_PID || 0) || app.pid
-  const hwndOut = execFileSync(PWSH, ['-NoProfile', '-Command',
-    '$p = Get-Process -Id ' + mainPid + ' -ErrorAction SilentlyContinue; if ($p) { $p.MainWindowHandle } else { 0 }'
-  ], { encoding: 'utf8' }).trim()
+  // 不能用 (Get-Process).MainWindowHandle：带 UAC/输入法覆盖窗的 Windows 环境下，
+  // 50x50 的 UAC_InputIndicatorOverlayWnd 可能排在 Chrome_WidgetWin_1 前面被误取。
+  const hwndOut = osci(['-Action', 'findhwnd', '-X', String(mainPid)])
   const hwnd = String(hwndOut).split(/\r?\n/).pop()
   check('取到应用主窗口句柄', hwnd && hwnd !== '0', { pid: mainPid, hwnd })
   /*

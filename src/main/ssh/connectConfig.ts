@@ -1,6 +1,15 @@
-import { Client, type ClientChannel, type ConnectConfig } from 'ssh2'
-import { createHash } from 'node:crypto'
+import {
+  Client,
+  type CipherAlgorithm,
+  type ClientChannel,
+  type ConnectConfig,
+  type KexAlgorithm,
+  type MacAlgorithm,
+  type ServerHostKeyAlgorithm
+} from 'ssh2'
+import { createHash, getCiphers, getDiffieHellman, getHashes } from 'node:crypto'
 import { promises as fs } from 'node:fs'
+import { createRequire } from 'node:module'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import type { Duplex } from 'node:stream'
@@ -21,6 +30,215 @@ export interface ConnectTarget {
   username: string
   authType: AuthType
   privateKeyPath?: string
+  /** 老设备兼容算法开关（旧固件只支持 group1-sha1 / ssh-dss / 3des-cbc 等） */
+  legacyAlgorithms?: boolean
+}
+
+/**
+ * 老设备兼容算法包（Spec §5.1）。
+ *
+ * 顺序即优先级：当前运行时的 `ssh2` 现代默认集合排在最前，老算法追加在末尾 ——
+ * 这样即使打开了开关，只要对端支持现代算法，仍然优先协商现代算法，不会降级。
+ *
+ * 为什么不能静态写死算法名：
+ * 1. Electron 45 内置 BoringSSL 不含 OpenSSL 的 `chacha20` cipher，静态塞入
+ *    `chacha20-poly1305@openssh.com` 会令 `client.connect()` 同步抛出
+ *    `Unsupported algorithm`；
+ * 2. 不同机器是否编出 `sshcrypto.node` 原生绑定会改变 `DEFAULT_CIPHER` 顺序。
+ *
+ * 因此在模块加载时通过 `createRequire` 读取 `ssh2` 当前运行时的 `DEFAULT_*` 与
+ * `SUPPORTED_*`（按精选老算法白名单过滤，不放行 `arcfour` 等极弱算法），若未来
+ * `ssh2` 调整内部路径，则回退到按 `node:crypto` 实测能力过滤的静态集合。
+ */
+function supportsModp2(): boolean {
+  try {
+    getDiffieHellman('modp2')
+    return true
+  } catch {
+    return false
+  }
+}
+
+const LEGACY_KEX_EXTRA: KexAlgorithm[] = [
+  'diffie-hellman-group-exchange-sha1',
+  'diffie-hellman-group14-sha1',
+  ...(supportsModp2() ? (['diffie-hellman-group1-sha1'] as KexAlgorithm[]) : [])
+]
+const LEGACY_HOSTKEY_EXTRA: ServerHostKeyAlgorithm[] = ['ssh-dss']
+const LEGACY_CIPHER_EXTRA: CipherAlgorithm[] = [
+  'aes256-cbc',
+  'aes192-cbc',
+  'aes128-cbc',
+  '3des-cbc',
+  'aes128-gcm',
+  'aes256-gcm'
+]
+const LEGACY_HMAC_EXTRA: MacAlgorithm[] = [
+  'hmac-md5',
+  'hmac-sha2-256-96',
+  'hmac-sha2-512-96',
+  'hmac-ripemd160',
+  'hmac-sha1-96',
+  'hmac-md5-96'
+]
+
+interface Ssh2ProtocolConstants {
+  DEFAULT_KEX: KexAlgorithm[]
+  SUPPORTED_KEX: KexAlgorithm[]
+  DEFAULT_SERVER_HOST_KEY: ServerHostKeyAlgorithm[]
+  SUPPORTED_SERVER_HOST_KEY: ServerHostKeyAlgorithm[]
+  DEFAULT_CIPHER: CipherAlgorithm[]
+  SUPPORTED_CIPHER: CipherAlgorithm[]
+  DEFAULT_MAC: MacAlgorithm[]
+  SUPPORTED_MAC: MacAlgorithm[]
+}
+
+function mergeWithLegacy<T extends string>(defaults: readonly T[], supported: readonly T[], extra: readonly T[]): T[] {
+  const sup = new Set<T>(supported)
+  const out: T[] = [...defaults]
+  const seen = new Set<T>(out)
+  for (const algo of extra) {
+    if (sup.has(algo) && !seen.has(algo)) {
+      out.push(algo)
+      seen.add(algo)
+    }
+  }
+  return out
+}
+
+function buildFallbackLegacyAlgorithms(): {
+  kex: KexAlgorithm[]
+  serverHostKey: ServerHostKeyAlgorithm[]
+  cipher: CipherAlgorithm[]
+  hmac: MacAlgorithm[]
+} {
+  const ciphers = new Set(getCiphers())
+  const hashes = new Set(getHashes())
+  const cipherSsl: Record<string, string> = {
+    'aes128-gcm@openssh.com': 'aes-128-gcm',
+    'aes256-gcm@openssh.com': 'aes-256-gcm',
+    'aes128-ctr': 'aes-128-ctr',
+    'aes192-ctr': 'aes-192-ctr',
+    'aes256-ctr': 'aes-256-ctr',
+    'chacha20-poly1305@openssh.com': 'chacha20',
+    'aes256-cbc': 'aes-256-cbc',
+    'aes192-cbc': 'aes-192-cbc',
+    'aes128-cbc': 'aes-128-cbc',
+    '3des-cbc': 'des-ede3-cbc',
+    'aes128-gcm': 'aes-128-gcm',
+    'aes256-gcm': 'aes-256-gcm'
+  }
+  const macSsl: Record<string, string> = {
+    'hmac-sha2-256-etm@openssh.com': 'sha256',
+    'hmac-sha2-512-etm@openssh.com': 'sha512',
+    'hmac-sha1-etm@openssh.com': 'sha1',
+    'hmac-sha2-256': 'sha256',
+    'hmac-sha2-512': 'sha512',
+    'hmac-sha1': 'sha1',
+    'hmac-md5': 'md5',
+    'hmac-sha2-256-96': 'sha256',
+    'hmac-sha2-512-96': 'sha512',
+    'hmac-ripemd160': 'ripemd160',
+    'hmac-sha1-96': 'sha1',
+    'hmac-md5-96': 'md5'
+  }
+  return {
+    kex: [
+      'curve25519-sha256@libssh.org',
+      'curve25519-sha256',
+      'ecdh-sha2-nistp256',
+      'ecdh-sha2-nistp384',
+      'ecdh-sha2-nistp521',
+      'diffie-hellman-group-exchange-sha256',
+      'diffie-hellman-group14-sha256',
+      'diffie-hellman-group15-sha512',
+      'diffie-hellman-group16-sha512',
+      'diffie-hellman-group17-sha512',
+      'diffie-hellman-group18-sha512',
+      ...LEGACY_KEX_EXTRA
+    ],
+    serverHostKey: [
+      'ssh-ed25519',
+      'ecdsa-sha2-nistp256',
+      'ecdsa-sha2-nistp384',
+      'ecdsa-sha2-nistp521',
+      'rsa-sha2-512',
+      'rsa-sha2-256',
+      'ssh-rsa',
+      ...LEGACY_HOSTKEY_EXTRA
+    ],
+    cipher: (
+      [
+        'aes128-gcm@openssh.com',
+        'aes256-gcm@openssh.com',
+        'aes128-ctr',
+        'aes192-ctr',
+        'aes256-ctr',
+        'chacha20-poly1305@openssh.com',
+        ...LEGACY_CIPHER_EXTRA
+      ] as CipherAlgorithm[]
+    ).filter((name) => ciphers.has(cipherSsl[name] ?? '')),
+    hmac: (
+      [
+        'hmac-sha2-256-etm@openssh.com',
+        'hmac-sha2-512-etm@openssh.com',
+        'hmac-sha1-etm@openssh.com',
+        'hmac-sha2-256',
+        'hmac-sha2-512',
+        'hmac-sha1',
+        ...LEGACY_HMAC_EXTRA
+      ] as MacAlgorithm[]
+    ).filter((name) => hashes.has(macSsl[name] ?? ''))
+  }
+}
+
+function buildLegacyAlgorithms(): {
+  kex: KexAlgorithm[]
+  serverHostKey: ServerHostKeyAlgorithm[]
+  cipher: CipherAlgorithm[]
+  hmac: MacAlgorithm[]
+} {
+  try {
+    const req = createRequire(__filename)
+    const c = req('ssh2/lib/protocol/constants') as Partial<Ssh2ProtocolConstants>
+    if (
+      Array.isArray(c.DEFAULT_KEX) &&
+      Array.isArray(c.SUPPORTED_KEX) &&
+      Array.isArray(c.DEFAULT_SERVER_HOST_KEY) &&
+      Array.isArray(c.SUPPORTED_SERVER_HOST_KEY) &&
+      Array.isArray(c.DEFAULT_CIPHER) &&
+      Array.isArray(c.SUPPORTED_CIPHER) &&
+      Array.isArray(c.DEFAULT_MAC) &&
+      Array.isArray(c.SUPPORTED_MAC)
+    ) {
+      return {
+        kex: mergeWithLegacy(c.DEFAULT_KEX, c.SUPPORTED_KEX, LEGACY_KEX_EXTRA),
+        serverHostKey: mergeWithLegacy(c.DEFAULT_SERVER_HOST_KEY, c.SUPPORTED_SERVER_HOST_KEY, LEGACY_HOSTKEY_EXTRA),
+        cipher: mergeWithLegacy(c.DEFAULT_CIPHER, c.SUPPORTED_CIPHER, LEGACY_CIPHER_EXTRA),
+        hmac: mergeWithLegacy(c.DEFAULT_MAC, c.SUPPORTED_MAC, LEGACY_HMAC_EXTRA)
+      }
+    }
+  } catch {
+    /* 若未来 ssh2 调整内部路径，退回按 node:crypto 过滤的静态表 */
+  }
+  return buildFallbackLegacyAlgorithms()
+}
+
+export const LEGACY_ALGORITHMS: {
+  kex: KexAlgorithm[]
+  serverHostKey: ServerHostKeyAlgorithm[]
+  cipher: CipherAlgorithm[]
+  hmac: MacAlgorithm[]
+} = buildLegacyAlgorithms()
+
+/**
+ * 判断一条建连报错是否是「算法协商失败」。
+ *
+ * 只有这种失败值得用老算法重试一次：口令错误、端口不通、主机不可达再试
+ * 一遍也是白试，反而会把真正的错误信息盖掉。
+ */
+export function isNegotiationError(msg: string): boolean {
+  return /no matching|Unable to negotiate/i.test(msg)
 }
 
 /** 展开路径中的 ~ */
@@ -79,7 +297,12 @@ export function connectClient(
       })
     }
 
-    client.connect(sock ? { ...cfg, sock } : cfg)
+    try {
+      client.connect(sock ? { ...cfg, sock } : cfg)
+    } catch (err) {
+      clearTimeout(timer)
+      fail(err instanceof Error ? err : new Error(String(err)))
+    }
   })
 }
 
@@ -151,10 +374,11 @@ export function isLegacyFingerprint(fingerprint: string): boolean {
  * 而真正的连接流程一旦发现不匹配就会拒绝握手，拿不到这个值。
  * 所以这里用 hostVerifier 只做记录、不做拦截，握手成功后立刻断开。
  */
-export async function probeHostFingerprint(
+function probeOnce(
   host: string,
   port: number,
-  timeoutMs = 10000
+  timeoutMs: number,
+  legacy: boolean
 ): Promise<string> {
   return new Promise<string>((resolve, reject) => {
     const client = new Client()
@@ -193,6 +417,7 @@ export async function probeHostFingerprint(
       },
       readyTimeout: timeoutMs
     }
+    if (legacy) cfg.algorithms = LEGACY_ALGORITHMS
     // 只等握手：主机密钥交换完成即可拿到指纹，随后（多半是认证被拒）立刻收工。
     client
       .on('handshake', () => {
@@ -200,6 +425,28 @@ export async function probeHostFingerprint(
       })
       .connect(cfg)
   })
+}
+
+/**
+ * 探测某个 host:port 当前的主机指纹（独立握手一次再断开）。
+ *
+ * 先用默认算法握手；如果设备太老、算法根本谈不拢（no matching / Unable to
+ * negotiate），自动换 LEGACY_ALGORITHMS 再试一次。探测只取公钥指纹，既不认证
+ * 也不免密登录，所以这一层自动回退不改变安全模型 —— 它只是让「设置 → 已知
+ * 主机」这种没有连接配置可依的入口也能探到老设备。
+ */
+export async function probeHostFingerprint(
+  host: string,
+  port: number,
+  timeoutMs = 10000
+): Promise<string> {
+  try {
+    return await probeOnce(host, port, timeoutMs, false)
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    if (!isNegotiationError(msg)) throw err
+    return probeOnce(host, port, timeoutMs, true)
+  }
 }
 
 export async function buildConnectConfig(
@@ -219,6 +466,9 @@ export async function buildConnectConfig(
     keepaliveCountMax: 3,
     tryKeyboard: true
   }
+
+  // 老设备兼容：仅在连接显式开启时挂载，且直接复用同一个常量对象
+  if (target.legacyAlgorithms === true) cfg.algorithms = LEGACY_ALGORITHMS
 
   if (target.authType === 'password') {
     if (!secret.password) throw new Error('该连接未保存密码，请编辑连接补全凭据')

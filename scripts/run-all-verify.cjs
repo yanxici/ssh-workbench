@@ -147,6 +147,8 @@ for (const f of target) {
   console.log(`  ${ok ? 'PASS' : 'FAIL'}  ${f}  ${ms}ms`)
   if (!ok) {
     const text = ((r.stdout || '') + (r.stderr || '')).trim().split('\n')
+    const failLines = text.filter((l) => /\bFAIL\b/.test(l))
+    for (const line of failLines.slice(0, 15)) console.log('        [!] ' + line.trim())
     for (const line of text.slice(-12)) console.log('        ' + line)
   }
 }

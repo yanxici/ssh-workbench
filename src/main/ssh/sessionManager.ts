@@ -193,8 +193,30 @@ class SessionManager {
     { connectionId: string; title: string; cols: number; rows: number }
   >()
   private handlers: SessionEvents | null = null
-  /** 会话关闭钩子（供 SFTP 等模块清理挂在会话上的资源） */
-  private onClosed: ((sessionId: string) => void) | null = null
+  /**
+   * 会话关闭钩子（供 SFTP / 隧道等模块清理挂在会话上的资源）。
+   *
+   * reason 必须由这里同步判定后传出去，不能让下游自己去看 record：
+   * teardown 之后 record 已从 sessions 删除、重连状态也随时会变，
+   * 下游（如隧道）在事件回调里再判断「会不会重连」只会读到过期信息 ——
+   * 「等重连自动恢复」与「隧道已停止」的差别就在这一拍。
+   */
+  private onClosed:
+    | ((sessionId: string, reason: { byUser: boolean; willReconnect: boolean }) => void)
+    | null = null
+  /** 会话连上钩子（含自动重连成功），隧道据此恢复挂起与随连自启 */
+  private onConnected:
+    | ((sessionId: string, connectionId: string, isReconnect: boolean) => void)
+    | null = null
+  /** 重连彻底放弃钩子（次数用尽或用户取消），隧道据此清理挂起的临时转发 */
+  private onReconnectGaveUp: ((sessionId: string) => void) | null = null
+  /**
+   * 最近一次读到的「自动重连是否开启」。
+   *
+   * teardown 是同步路径，读不了异步配置，而它恰好是判断「要不要挂起隧道」的
+   * 唯一时机。缓存在这里，值由每次 open / 排重连时读到的配置刷新。
+   */
+  private autoReconnectEnabled = true
   /** 「等待就绪」挂起队列（SFTP/隧道等子系统在握手完成后才能挂载） */
   private readyWaiters = new Map<string, Set<ReadyWaiter>>()
   /** open() 尚未登记会话（还在读连接/凭据）的 id */
@@ -252,8 +274,22 @@ class SessionManager {
     this.handlers = handlers
   }
 
-  setOnClosed(cb: (sessionId: string) => void): void {
+  setOnClosed(
+    cb: (sessionId: string, reason: { byUser: boolean; willReconnect: boolean }) => void
+  ): void {
     this.onClosed = cb
+  }
+
+  /** 注入「会话连上」钩子：SSH 建连成功（含自动重连成功）时触发 */
+  setOnConnected(
+    cb: (sessionId: string, connectionId: string, isReconnect: boolean) => void
+  ): void {
+    this.onConnected = cb
+  }
+
+  /** 注入「重连放弃」钩子：次数用尽、配置关闭自动重连、或用户取消时触发 */
+  setOnReconnectGaveUp(cb: (sessionId: string) => void): void {
+    this.onReconnectGaveUp = cb
   }
 
   list(): SessionInfo[] {
@@ -381,6 +417,8 @@ class SessionManager {
       if (!conn) throw new Error('连接不存在，可能已被删除')
       secret = await getSecret(connectionId)
       settings = await getSettings()
+      // teardown 同步路径要用这个开关判断「断线后还值不值得挂起隧道」
+      this.autoReconnectEnabled = settings.autoReconnect !== false
     } finally {
       this.opening.delete(sessionId)
     }
@@ -452,6 +490,11 @@ class SessionManager {
       await record.transport.open({ cols: record.cols, rows: record.rows })
       // shell 打开完才算真正可用；这一步的 status 仍应是 connecting（有 phase=shell）
       this.emitStatus(record, 'connected')
+      /*
+       * 重连标志必须在 open 返回前取：runReconnect 一 await 完就删 reconnectState，
+       * 下游再问 isReconnecting() 永远是 false。
+       */
+      this.onConnected?.(record.id, connectionId, this.reconnectState.has(record.id))
 
       await touchConnection(connectionId)
       // 延迟探测：起全局节拍器即可，单会话不再各自挂定时器
@@ -940,7 +983,17 @@ class SessionManager {
     if (this.sessions.get(record.id) === record) this.sessions.delete(record.id)
     // 静默关闭（如用户主动关闭）不会 emitStatus，也要拒绝挂起的等待者
     this.settleReadyWaiters(record.id, status, error)
-    this.onClosed?.(record.id)
+    /*
+     * reason 在这里一次算定：byUser 看 closedByUser，willReconnect 复用下面
+     * 启动自动重连的同一组条件（再加上缓存的配置开关）。下游拿到的必须是
+     * 一个已经定死的结论 —— 它读不到 record，也读不到稍后才写的重连状态。
+     */
+    const willReconnect =
+      !record.closedByUser &&
+      record.kind !== 'serial' &&
+      (status === 'disconnected' || status === 'error') &&
+      this.autoReconnectEnabled
+    this.onClosed?.(record.id, { byUser: record.closedByUser, willReconnect })
     if (!silent) this.emitStatus(record, status, error)
 
     /*
@@ -1059,11 +1112,20 @@ class SessionManager {
     } catch {
       return
     }
-    if (settings.autoReconnect === false) return
+    if (settings.autoReconnect === false) {
+      /*
+       * 配置里关了自动重连：这里就是「不会再恢复」的判定点。
+       * 必须通知一次，否则挂起的隧道（reconnecting）永远等不到结局，
+       * 界面上会一直转圈，临时转发的端口也已经释放却还被当成活的。
+       */
+      this.onReconnectGaveUp?.(record.id)
+      return
+    }
 
     const max = Math.max(1, Math.min(settings.autoReconnectMax ?? 5, 20))
     if (attempt > max) {
       this.reconnectState.delete(record.id)
+      this.onReconnectGaveUp?.(record.id)
       this.onReconnect?.({
         sessionId: record.id,
         phase: 'gave-up',
@@ -1158,6 +1220,7 @@ class SessionManager {
     }
     if (settings.autoReconnect === false) {
       this.reconnectState.delete(sessionId)
+      this.onReconnectGaveUp?.(sessionId)
       return
     }
 
@@ -1165,6 +1228,7 @@ class SessionManager {
     const attempt = st.attempt + 1
     if (attempt > max) {
       this.reconnectState.delete(sessionId)
+      this.onReconnectGaveUp?.(sessionId)
       this.onReconnect?.({
         sessionId,
         phase: 'gave-up',
@@ -1195,6 +1259,13 @@ class SessionManager {
     if (!st) return
     if (st.timer) clearTimeout(st.timer)
     this.reconnectState.delete(sessionId)
+    /*
+     * 用户关标签时渲染层会先调 cancelReconnect 再 close：这条会话的隧道
+     * 已经挂在 reconnecting 上等重连，而重连永远不会再来 —— 必须给它们一个
+     * 结局（清理临时转发、持久隧道落 error），否则临时转发的监听会跟着
+     * 应用活到下次启动以外的时间里再也没人收尸。
+     */
+    this.onReconnectGaveUp?.(sessionId)
   }
 
   /** 是否有会话正在自动重连（供测试/诊断） */

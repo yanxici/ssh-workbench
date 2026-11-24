@@ -9,7 +9,8 @@ import { handle } from './handle'
 import { backupStore } from '../store/backups'
 import { createBackup, diffBackup, restoreBackup } from '../ssh/configBackup'
 import { deleteTunnel, listTunnels, saveTunnel } from '../store/repository'
-import { tunnelManager } from '../ssh/portForward'
+import { buildSafeLocalTunnelUrl, tunnelManager } from '../ssh/portForward'
+import { discoverRemotePorts } from '../ssh/remotePorts'
 import { recorder } from '../ssh/recorder'
 import { listSessionLogs, readSessionLog, removeSessionLog } from '../store/sessionLogs'
 
@@ -48,6 +49,30 @@ export function registerBackupTunnelIpc(): void {
   )
   handle(IPC.TUNNEL_STOP, (tunnelId: string) => tunnelManager.stop(tunnelId))
   handle(IPC.TUNNEL_STATES, () => tunnelManager.states())
+  // 探测当前会话远端的 TCP 监听端口（给「一键临时转发」提供候选）
+  handle(IPC.TUNNEL_DISCOVER_PORTS, (sessionId: string) => discoverRemotePorts(sessionId))
+  handle(
+    IPC.TUNNEL_QUICK_START,
+    (
+      sessionId: string,
+      input: { targetHost: string; targetPort: number; process?: string }
+    ) => tunnelManager.startQuickForward(sessionId, input)
+  )
+  handle(IPC.TUNNEL_PROMOTE, (ephemeralId: string, customName?: string) =>
+    tunnelManager.promoteQuickForward(ephemeralId, customName)
+  )
+  /*
+   * 打开临时转发对应的本机页面。
+   *
+   * URL 一律由主进程用白名单端口拼出来，绝不接受渲染层传完整 URL：
+   * shell.openExternal 会把任何协议交给系统处理，等于把「用默认程序打开」
+   * 变成一个任意协议执行入口（file: / 自定义 scheme 都能被拖进来）。
+   */
+  handle(IPC.TUNNEL_OPEN_LOCAL, async (protocol: string, port: number) => {
+    const safe = protocol === 'https' ? 'https' : protocol === 'http' ? 'http' : null
+    if (!safe) throw new Error('不支持的协议：' + String(protocol))
+    await shell.openExternal(buildSafeLocalTunnelUrl(safe, port))
+  })
 
   /* ---------------- 会话日志（录制 / 回放） ---------------- */
   handle(IPC.LOG_LIST, () => listSessionLogs())

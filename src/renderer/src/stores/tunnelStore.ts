@@ -1,7 +1,14 @@
 import { create } from 'zustand'
-import type { TunnelConfig, TunnelInput, TunnelRuntimeInfo } from '@shared/types'
+import type {
+  RemoteListeningPort,
+  TunnelConfig,
+  TunnelInput,
+  TunnelRuntimeInfo
+} from '@shared/types'
+import { translate, type I18nKey } from '@/i18n'
 import { call } from '@/lib/ipc'
 import { useSessionStore, type SessionUi } from './sessionStore'
+import { useSettingsStore } from './settingsStore'
 import { useToastStore } from './toastStore'
 
 /**
@@ -9,12 +16,21 @@ import { useToastStore } from './toastStore'
  * 配置持久化在主进程（tunnels.json），运行状态由主进程事件推送。
  */
 
+/** store 里没有 hook 上下文，词条只能按当前设置的语言直接取 */
+function t(key: I18nKey, vars?: Record<string, string | number>): string {
+  return translate(key, useSettingsStore.getState().settings.language ?? 'zh-CN', vars)
+}
+
 interface TunnelState {
   tunnels: TunnelConfig[]
   /** 运行状态：tunnelId -> info */
   runtimes: Record<string, TunnelRuntimeInfo>
   loaded: boolean
   keyword: string
+  /** 远端监听端口探测结果：sessionId -> 端口列表（只按需拉取，不轮询） */
+  discoveredBySession: Record<string, RemoteListeningPort[]>
+  /** 正在探测的会话；同一时刻只探测一个，避免连着点把会话打爆 */
+  discoveringSessionId: string | null
 
   load: () => Promise<void>
   save: (input: TunnelInput) => Promise<TunnelConfig | null>
@@ -23,6 +39,16 @@ interface TunnelState {
   stop: (id: string) => Promise<void>
   applyRuntime: (info: TunnelRuntimeInfo) => void
   setKeyword: (kw: string) => void
+  /** 探测某个 SSH 会话的远端监听端口 */
+  discoverPorts: (sessionId: string) => Promise<void>
+  /** 把某个监听端口做成会话级临时转发（不起持久配置） */
+  quickStart: (sessionId: string, port: number) => Promise<TunnelRuntimeInfo | null>
+  /** 把临时转发原地转存为持久隧道 */
+  promote: (ephemeralId: string, name?: string) => Promise<TunnelConfig | null>
+  /** 用系统浏览器打开本机转发端口 */
+  openLocal: (port: number, protocol: 'http' | 'https') => Promise<void>
+  /** 会话结束时清掉它的探测结果 */
+  clearSessionDiscovery: (sessionId: string) => void
 }
 
 /** 为隧道挑选运行会话：优先其关联连接的在线会话，其次当前活动会话，再次任意在线会话 */
@@ -43,6 +69,8 @@ export const useTunnelStore = create<TunnelState>()((set, get) => ({
   runtimes: {},
   loaded: false,
   keyword: '',
+  discoveredBySession: {},
+  discoveringSessionId: null,
 
   load: async () => {
     const list = await call(window.api.tunnel.list(), { errorTitle: '加载隧道列表失败' })
@@ -130,10 +158,77 @@ export const useTunnelStore = create<TunnelState>()((set, get) => ({
     await call(window.api.tunnel.stop(id), { errorTitle: '停止隧道失败' })
   },
 
+  // 主进程用 removed 通知「这条运行时已经消失」（临时转发被回收 / 持久隧道被删除），
+  // 不能只当成一次普通状态更新，否则面板上会留一条永远停在最后状态的幽灵行。
   applyRuntime: (info) =>
-    set((s) => ({ runtimes: { ...s.runtimes, [info.tunnelId]: info } })),
+    set((s) => {
+      const runtimes = { ...s.runtimes }
+      if (info.removed) delete runtimes[info.tunnelId]
+      else runtimes[info.tunnelId] = info
+      return { runtimes }
+    }),
 
-  setKeyword: (keyword) => set({ keyword })
+  setKeyword: (keyword) => set({ keyword }),
+
+  discoverPorts: async (sessionId) => {
+    set({ discoveringSessionId: sessionId })
+    const list = await call(window.api.tunnel.discoverPorts(sessionId), {
+      errorTitle: t('tunnel.discoverFailed')
+    })
+    set((s) => ({
+      discoveringSessionId: s.discoveringSessionId === sessionId ? null : s.discoveringSessionId,
+      discoveredBySession: list
+        ? { ...s.discoveredBySession, [sessionId]: list }
+        : s.discoveredBySession
+    }))
+  },
+
+  quickStart: async (sessionId, port) => {
+    const found = (get().discoveredBySession[sessionId] ?? []).find((p) => p.port === port)
+    const info = await call(
+      window.api.tunnel.quickStart(sessionId, {
+        targetHost: found?.targetHost ?? '127.0.0.1',
+        targetPort: port,
+        process: found?.process
+      }),
+      { errorTitle: t('tunnel.quickFailed') }
+    )
+    if (!info) return null
+    get().applyRuntime(info)
+    return info
+  },
+
+  promote: async (ephemeralId, name) => {
+    const res = await call(window.api.tunnel.promote(ephemeralId, name), {
+      errorTitle: t('tunnel.promoteFailed')
+    })
+    if (!res) return null
+    get().applyRuntime(res.runtime)
+    await get().load()
+    useToastStore.getState().push({
+      kind: 'success',
+      title: t('tunnel.promoted', { name: res.config.name })
+    })
+    return res.config
+  },
+
+  openLocal: async (port, protocol) => {
+    await call(window.api.tunnel.openLocal(protocol, port), {
+      errorTitle: t('tunnel.openFailed')
+    })
+  },
+
+  clearSessionDiscovery: (sessionId) =>
+    set((s) => {
+      if (!(sessionId in s.discoveredBySession)) return {}
+      const next = { ...s.discoveredBySession }
+      delete next[sessionId]
+      return {
+        discoveredBySession: next,
+        discoveringSessionId:
+          s.discoveringSessionId === sessionId ? null : s.discoveringSessionId
+      }
+    })
 }))
 
 /** 用于 Toast 的端点描述 */

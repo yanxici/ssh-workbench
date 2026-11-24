@@ -274,6 +274,16 @@ if (!gotLock) {
       onTransferProgress(event)
     })
 
+    /*
+     * 文件通道降级通知。
+     *
+     * 会话确认走 shell 兼容通道时推给渲染层落一个角标 —— 用户至少要知道
+     * 此刻的「上传/下载」不是 SFTP 语义（没有远端跳过判断、没有 mtime 保留）。
+     */
+    sftpManager.setModeHandler((event) => {
+      getMainWindow()?.webContents.send(IPC.EVT_SFTP_MODE, event)
+    })
+
     tunnelManager.setStatusHandler((info) => {
       getMainWindow()?.webContents.send(IPC.EVT_TUNNEL_STATUS, info)
     })
@@ -304,11 +314,31 @@ if (!gotLock) {
       getMainWindow()?.webContents.send(IPC.EVT_DISCOVER_PROGRESS, event)
     })
 
-    // 会话关闭时清理其上的 SFTP 通道、运行中的隧道与监控
-    sessionManager.setOnClosed((sessionId) => {
+    /*
+     * 会话关闭：清理其上的 SFTP 通道、运行中的隧道与监控。
+     *
+     * reason 由 sessionManager 同步判定（byUser / willReconnect）后传进来 ——
+     * 隧道的去留完全取决于这两值：还能重连就挂起等恢复，用户自己关了就停止。
+     * 下游拿不到 record，也没法事后从重连状态反推（那条记录已经删了）。
+     */
+    sessionManager.setOnClosed((sessionId, reason) => {
       sftpManager.clearSession(sessionId)
-      tunnelManager.onSessionClosed(sessionId)
+      tunnelManager.onSessionClosed(sessionId, reason)
       metricsSampler.onSessionClosed(sessionId)
+    })
+
+    /*
+     * 会话连上（含自动重连成功）：恢复挂起的隧道 + 拉起绑定该连接的 autoStart 隧道。
+     * 放在下一个事件循环里跑：这条钩子处在建连路径的同步段，
+     * 里面要等 waitUntilReady / 拉隧道配置，同步执行会把建连卡住。
+     */
+    sessionManager.setOnConnected((sessionId, connectionId, isReconnect) => {
+      void tunnelManager.onSessionConnected(sessionId, connectionId, isReconnect)
+    })
+
+    // 重连彻底放弃（次数用尽 / 配置关闭 / 用户取消）：给挂起的隧道一个结局
+    sessionManager.setOnReconnectGaveUp((sessionId) => {
+      tunnelManager.onReconnectGaveUp(sessionId)
     })
 
     /*

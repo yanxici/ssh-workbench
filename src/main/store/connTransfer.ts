@@ -98,6 +98,8 @@ interface ExportedConn {
   proxyJump?: string[]
   /** 私钥引用（keys 表的键） */
   keyRef?: string
+  /** 老设备兼容算法（仅 SSH） */
+  legacyAlgorithms?: boolean
   password?: string
   passphrase?: string
 }
@@ -212,7 +214,9 @@ async function buildPayload(opts: ConnExportOptions): Promise<{
       proxyJump: jumps.length > 0 ? jumps : undefined,
       keyRef,
       password: secret.password,
-      passphrase: secret.passphrase
+      passphrase: secret.passphrase,
+      // 串口没有算法协商：老设备开关只对 SSH 有意义
+      legacyAlgorithms: isSerial ? undefined : c.legacyAlgorithms === true ? true : undefined
     })
   }
 
@@ -410,6 +414,7 @@ export async function applyImport(
       color: src.color,
       remark: src.remark,
       proxy: !isSerial && src.proxy ? { ...src.proxy, password: undefined } : undefined,
+      legacyAlgorithms: !isSerial && src.legacyAlgorithms === true ? true : undefined,
       lastUsedAt: hit?.lastUsedAt,
       createdAt: hit?.createdAt ?? now,
       updatedAt: now
@@ -591,7 +596,8 @@ function cleanPayload(raw: unknown): CleanPayload {
         : undefined,
       keyRef: keyRef && keys.has(keyRef) ? keyRef : undefined,
       password: str(c.password, 1024),
-      passphrase: str(c.passphrase, 1024)
+      passphrase: str(c.passphrase, 1024),
+      legacyAlgorithms: c.legacyAlgorithms === true ? true : undefined
     })
   }
   return {

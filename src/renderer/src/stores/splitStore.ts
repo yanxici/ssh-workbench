@@ -34,6 +34,15 @@ interface SplitState {
   /** owner sessionId -> 树 */
   trees: Record<string, PaneNode>
   /**
+   * 同步输入开关：owner sessionId -> 是否开启。
+   *
+   * 按**标签**存而不是按会话存：同步是「这一屏里所有格子一起收字」的临时状态，
+   * 焦点在哪一格不影响它属于哪个标签。刻意不持久化 —— 下次启动的标签是新的
+   * sessionId，恢复出来的开关会指向不存在的标签，等于给下一次开机埋一个
+   * 「敲字进了四台机器」的惊喜。
+   */
+  syncByTab: Record<string, boolean>
+  /**
    * 正在拖分隔条。TerminalView 的 fit 会查这个开关直接跳过 ——
    * 拖动期间每帧 fit 会让 xterm 重排整屏，画面抖得没法用。
    */
@@ -47,6 +56,10 @@ interface SplitState {
   closeOtherTabs: (ownerId: string) => void
   setSplitRatio: (ownerId: string, splitId: string, ratio: number) => void
   setDragging: (dragging: boolean) => void
+  /** 切换某标签的同步输入；单窗格时直接拒绝（没有「其他格子」可同步） */
+  toggleSync: (ownerId: string) => void
+  /** 关掉某标签的同步输入（关分屏 / 关标签时自动调用） */
+  clearSync: (ownerId: string) => void
   /** 会话列表变了之后清掉指向已消失会话的格子 */
   reconcile: () => void
   /** 从持久化结构恢复某标签的分屏（由 App 在会话连上后调用） */
@@ -117,6 +130,7 @@ function persist(trees: Record<string, PaneNode>): void {
 
 export const useSplitStore = create<SplitState>()((set, get) => ({
   trees: {},
+  syncByTab: {},
   draggingSplit: false,
   refitTick: 0,
 
@@ -165,6 +179,12 @@ export const useSplitStore = create<SplitState>()((set, get) => ({
     const out = { ...trees }
     if (!next || isLeaf(next)) delete out[ownerId]
     else out[ownerId] = next
+    /*
+     * 缩回单窗格 = 没有「其他格子」可同步了，开关必须跟着消失。
+     * 留着它会变成一颗哑弹：下次在同一标签里再分屏，用户以为自己开的是
+     * 一次新的同步，实际上上一次的开启状态还在，敲的字直接进了所有窗格。
+     */
+    if (!next || isLeaf(next)) get().clearSync(ownerId)
 
     // 焦点接管：关掉的那格如果是焦点，交给剩下的第一格
     if (useSessionStore.getState().activeId === sessionId) {
@@ -212,6 +232,25 @@ export const useSplitStore = create<SplitState>()((set, get) => ({
     if (!dragging) persist(get().trees)
   },
 
+  toggleSync: (ownerId) => {
+    const { trees, syncByTab } = get()
+    const node = trees[ownerId]
+    // 单窗格没有「其他格子」，开了只会让用户以为同步生效了
+    if (!node || isLeaf(node)) return
+    const next = { ...syncByTab }
+    if (next[ownerId]) delete next[ownerId]
+    else next[ownerId] = true
+    set({ syncByTab: next })
+  },
+
+  clearSync: (ownerId) => {
+    const { syncByTab } = get()
+    if (!syncByTab[ownerId]) return
+    const next = { ...syncByTab }
+    delete next[ownerId]
+    set({ syncByTab: next })
+  },
+
   reconcile: () => {
     const { trees } = get()
     const alive = new Set(useSessionStore.getState().sessions.map((s) => s.id))
@@ -224,6 +263,8 @@ export const useSplitStore = create<SplitState>()((set, get) => ({
       }
       if (!cur || isLeaf(cur)) {
         changed = true
+        // 会话掉线后树被收缩成单格：同步开关同样失效（理由见 closePane）
+        if (get().syncByTab[ownerId]) get().clearSync(ownerId)
         continue
       }
       if (cur !== node) changed = true

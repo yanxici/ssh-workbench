@@ -1,4 +1,4 @@
-# OS 级鼠标点击助手（供 verify-tabmenu-os.cjs 调用）
+﻿# OS 级鼠标点击助手（供 verify-tabmenu-os.cjs 调用）
 # 用法: pwsh -NoProfile -File _osclick.ps1 -Action click -X 100 -Y 200 -Button left
 #       pwsh -NoProfile -File _osclick.ps1 -Action dclick -X 100 -Y 200   # 原生双击（同进程内两次 down/up）
 #       pwsh -NoProfile -File _osclick.ps1 -Action key -X <hwnd> -Y 27     # 真按 ESC（-Y 是虚拟键码）
@@ -6,6 +6,7 @@
 #       pwsh -NoProfile -File _osclick.ps1 -Action unpin -X <hwnd>
 #       pwsh -NoProfile -File _osclick.ps1 -Action save            # 保存当前鼠标位置
 #       pwsh -NoProfile -File _osclick.ps1 -Action restore -X 1 -Y 2
+#       pwsh -NoProfile -File _osclick.ps1 -Action findhwnd -X <pid> # 找指定进程真正的主窗口句柄（避开 50x50 UAC/IME 覆盖窗）
 param(
   [string]$Action = 'click',
   [int]$X = 0,
@@ -17,8 +18,14 @@ param(
 )
 Add-Type @"
 using System;
+using System.Text;
 using System.Runtime.InteropServices;
 public class OsMouse {
+  public delegate bool EnumWindowsProc(IntPtr h, IntPtr l);
+  [DllImport("user32.dll")] public static extern bool EnumWindows(EnumWindowsProc p, IntPtr l);
+  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+  [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
+  [DllImport("user32.dll")] public static extern int GetClassName(IntPtr h, StringBuilder sb, int n);
   [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
   [DllImport("user32.dll")] public static extern bool GetCursorPos(out POINT p);
   [DllImport("user32.dll")] public static extern void mouse_event(uint flags, uint dx, uint dy, uint data, UIntPtr extra);
@@ -33,6 +40,26 @@ public class OsMouse {
   [DllImport("user32.dll")] public static extern bool ClientToScreen(IntPtr h, ref POINT p);
   public struct POINT { public int X, Y; }
   public struct RECT { public int Left, Top, Right, Bottom; }
+  public static long FindMainHwnd(uint targetPid) {
+    long bestChrome = 0; long bestChromeArea = -1;
+    long bestAny = 0; long bestAnyArea = -1;
+    EnumWindows((h, l) => {
+      uint pid; GetWindowThreadProcessId(h, out pid);
+      if (pid != targetPid || !IsWindowVisible(h)) return true;
+      RECT cr; GetClientRect(h, out cr);
+      long area = (long)cr.Right * (long)cr.Bottom;
+      if (area <= 0) return true;
+      var cb = new StringBuilder(128);
+      GetClassName(h, cb, 128);
+      string cls = cb.ToString();
+      if (cls == "Chrome_WidgetWin_1" && cr.Right >= 200 && cr.Bottom >= 200) {
+        if (area > bestChromeArea) { bestChromeArea = area; bestChrome = h.ToInt64(); }
+      }
+      if (area > bestAnyArea) { bestAnyArea = area; bestAny = h.ToInt64(); }
+      return true;
+    }, IntPtr.Zero);
+    return bestChrome != 0 ? bestChrome : bestAny;
+  }
 }
 "@
 $LEFTDOWN = 0x0002; $LEFTUP = 0x0004; $RIGHTDOWN = 0x0008; $RIGHTUP = 0x0010
@@ -58,6 +85,11 @@ function Assert-Top([int]$hnum) {
 }
 
 switch ($Action) {
+  'findhwnd' {
+    # 避开 Process.MainWindowHandle 误取 50x50 UAC_InputIndicatorOverlayWnd / 输入法浮窗：
+    # 枚举该 PID 全部可见顶层窗口，优先取客户区面积最大的 Chrome_WidgetWin_1。
+    [OsMouse]::FindMainHwnd([uint32]$X)
+  }
   'save' {
     $p = New-Object OsMouse+POINT
     [OsMouse]::GetCursorPos([ref]$p) | Out-Null
