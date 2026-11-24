@@ -19,8 +19,16 @@
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
+const { generateKeyPairSync } = require('node:crypto')
 const esbuild = require('esbuild')
-const { Server, utils } = require('ssh2')
+const { Server } = require('ssh2')
+
+// 用 Node 原生 RSA PKCS#1 密钥一次性生成并复用：ssh2@1.17.0 的 utils.generateKeyPairSync('ed25519')
+// 存在约 1/256 概率产出 Malformed OpenSSH private key 的上游 bug，12+ 台测试服连起极易偶发 CI 红灯。
+const TEST_HOST_KEY = generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey.export({
+  type: 'pkcs1',
+  format: 'pem'
+})
 
 const ROOT = path.join(__dirname, '..')
 const OUT_DIR = path.join(ROOT, '.tsc-verify')
@@ -103,8 +111,7 @@ const uid = () => Math.random().toString(36).slice(2)
  * conc 非空时统计全局在飞 exec 通道数。
  */
 function makeServer({ delayMs = 0, conc = null }) {
-  const hostKey = utils.generateKeyPairSync('ed25519').private
-  const server = new Server({ hostKeys: [hostKey] }, (client) => {
+  const server = new Server({ hostKeys: [TEST_HOST_KEY] }, (client) => {
     client.on('error', () => {})
     client.on('authentication', (ctx) => {
       if (ctx.method === 'password' && ctx.username === 'u' && ctx.password === 'p') ctx.accept()

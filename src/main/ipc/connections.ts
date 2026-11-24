@@ -213,8 +213,9 @@ export function registerConnectionIpc(): void {
   })
 
   handle(IPC.CONN_HAS_SECRET, (id: string) => hasSecret(id))
-  handle(IPC.CONN_PARSE_SSH_CMD, (text?: string) => {
-    const fromClip = typeof text === 'string' && text ? text : clipboard.readText()
+  handle(IPC.CONN_PARSE_SSH_CMD, async (text?: string) => {
+    // eslint-disable-next-line @typescript-eslint/await-thenable -- Electron 33 同步返回 string、45 返回 Promise；verify-clipboard 强制保留 await 护栏
+    const fromClip = typeof text === 'string' && text ? text : await clipboard.readText()
     return parseSshCommand(fromClip)
   })
 }
