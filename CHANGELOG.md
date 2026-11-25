@@ -5,6 +5,20 @@ All notable changes to SSH Workbench will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.3] - 2026-11-25
+
+<!-- release-notes:start -->
+### 这一版更新了什么
+
+- **修复 ZMODEM 传输点「中断」后终端卡死与日志正文泄到终端**：此前 `zmodem.js` 默认仅发 5 个 `CAN` (`0x18`)，Linux 端 `lrzsz` (`sz`) 在流式发帧时先吃掉第 1 个 `CAN` 后剩下的 4 个不足 5 个，导致远端 `sz` 停在原始模式把 `Ctrl-C` 与所有按键全部吞掉；现统一发送标准 **10× `CAN` + 10× `BS`** 序列（并在 350ms 后仍在吐 raw 数据时自动补发兜底），同时在 5 秒抑制窗内拦截原始模式裸 `\n` 日志分片与二进制乱码、放行远端退回 shell 后的正常提示符，中断后自动将焦点还给终端。
+- **修复多文件 `sz` 实时增长日志卡 100%、高延迟链路误杀与传输列表无实时进度**：放开超过 `ZFILE` 初始大小的连续日志写入并支持 `ZFIN` 后夹带 `\r\n`/提示符再收 `OO`；修复 150ms 续传限流误杀整批传输与不可恢复异常冻在「进行中」的问题；侧栏「传输」列表与全屏「传输记录」面板接入 ZMODEM 实时进度、批次序号（如 `1/4`）与行内进度条，且每行仅单次订阅避免重复渲染。
+- **ZMODEM 全链路稳定性与安全加固**：接收落盘队列引入 2 路在途背压并改为主进程异步串行 `appendFile`，写盘失败立即中止不再继续堆积；看门狗超时放弃、`detachZmodem` 关标签与用户取消均正确释放 `handleOffer`、落盘句柄及 0 字节占位文件；主进程落盘用 `claimedPaths` + `wx` 排他创建堵住同名并发 TOCTOU 竞态，`safeFileName` 补全 Windows 保留设备名、控制字符（含 `0x7F`）、尾随点空格与 200 字符截断；上传单文件超过 256MB 前置拒绝防主进程 OOM；底层发送失败立即向渲染层报错不再干等 20 秒超时；后台标签触发确认弹窗准确显示对应会话名称。
+<!-- release-notes:end -->
+
+### Fixed
+
+- **ZMODEM 接收/发送/主进程全链路加固**（`src/renderer/src/lib/zmodem.ts`、`src/main/ipc/zmodem.ts`、`src/main/ssh/sessionManager.ts`、`src/preload/index.ts`、`src/renderer/src/components/terminal/TerminalView.tsx`、`src/renderer/src/components/terminal/ZmodemOverlay.tsx`、`src/renderer/src/components/files/TransferTab.tsx`、`src/renderer/src/components/transfer/TransferPanel.tsx`）：涵盖 10×CAN+10×BS 中止与补发、`isPostAbortJunk` 抑制窗、增长日志与高延迟限流重装、落盘背压与异步串行写入、看门狗/取消/卸载全路径释放 `abortOffer` 与 `saveFinish`、节流尾部刷新（trailing flush）、未知大小进度口径、单文件发送进度、窗口 `dialogParent()` 空指针保护及 `TransferTab` 单订阅去重；新增 `scripts/verify-zmodem-hardening.cjs`（48/48 通过），全量 ZMODEM/串口/trzsz/E2E 回归通过。
+
 ## [2.4.2] - 2026-11-25
 
 <!-- release-notes:start -->

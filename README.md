@@ -12,20 +12,20 @@ Windows 10/11 (x64) only. Pick one of the three packages — **use the [Gitee mi
 
 | Package | File name | Best for |
 | --- | --- | --- |
-| Installer (recommended) | `ssh-workbench-Setup-2.4.2.exe` | Installs into the system, supports in-app auto-update |
-| Portable | `ssh-workbench-2.4.2-portable.exe` | Run from a USB stick / jump host, writes no registry keys |
-| Zip bundle | `ssh-workbench-2.4.2-win.zip` | Unzip and run; easiest to mirror onto an internal share |
+| Installer (recommended) | `ssh-workbench-Setup-2.4.3.exe` | Installs into the system, supports in-app auto-update |
+| Portable | `ssh-workbench-2.4.3-portable.exe` | Run from a USB stick / jump host, writes no registry keys |
+| Zip bundle | `ssh-workbench-2.4.3-win.zip` | Unzip and run; easiest to mirror onto an internal share |
 
 - Always latest: <https://github.com/yanxici/ssh-workbench/releases/latest>
-- Pinned: <https://github.com/yanxici/ssh-workbench/releases/tag/v2.4.2>
+- Pinned: <https://github.com/yanxici/ssh-workbench/releases/tag/v2.4.3>
 - Integrity: `latest.yml` in the same release carries the sha512 of each artifact.
 
 **Mainland China**
 
 1. Primary: <https://gitee.com/w3554334905/ssh-workbench/releases> — mirrored in sync with GitHub, no proxy needed.
-2. Pinned: `https://gitee.com/w3554334905/ssh-workbench/releases/download/v2.4.2/` + the file name above.
-3. GitHub + proxy prefix (third-party relay, availability not guaranteed): `https://gh-proxy.com/https://github.com/yanxici/ssh-workbench/releases/download/v2.4.2/` + file name.
-4. Internal mirror (most reliable): copy `ssh-workbench-2.4.2-win.zip` to a company share or artifact store and link it here — `<internal mirror URL>`.
+2. Pinned: `https://gitee.com/w3554334905/ssh-workbench/releases/download/v2.4.3/` + the file name above.
+3. GitHub + proxy prefix (third-party relay, availability not guaranteed): `https://gh-proxy.com/https://github.com/yanxici/ssh-workbench/releases/download/v2.4.3/` + file name.
+4. Internal mirror (most reliable): copy `ssh-workbench-2.4.3-win.zip` to a company share or artifact store and link it here — `<internal mirror URL>`.
 
 > In-app auto-update now uses an automatic multi-channel feed: without a proxy it tries the official Gitee mirror first and falls back to GitHub Releases and built-in mirrors (verifying the first-party sha512 before downloading from any third-party relay); with an update proxy configured it prefers GitHub first for differential updates. You can also pick a specific channel or custom feed URL under Settings → Updates.
 
@@ -138,9 +138,10 @@ Architecture, directory layout and roadmap (Chinese): [DESIGN.md](./DESIGN.md)
 
 ## Version
 
-Current: **v2.4.2**
+Current: **v2.4.3**
 
 Recent updates:
+- **v2.4.3** — Hardened the entire ZMODEM pipeline and fixed abort terminal deadlocks: switched all abort paths to the standard 10×CAN + 10×BS sequence (with follow-up guard) so remote `lrzsz` exits raw mode cleanly while blocking in-flight raw-mode log text from leaking onto the terminal; fixed growing log files stalling at 100%, high-RTT resync throttle false aborts, receive backpressure and async serialized disk writes, `wx` TOCTOU-safe naming with Windows reserved-device sanitization, 256MB upload guard, trailing progress flush, and live ZMODEM progress bars with batch counters in TransferTab and TransferPanel.
 - **v2.4.2** — Fixed multi-file ZMODEM `sz` batch downloads (e.g. `sz robottest*`) aborting after the first file or corrupting per-file state: unified the receive state machine (`primeReceiveSession`) to handle multi-frame `ZDATA` (`ZCRCW`/`ZCRCE`), 0-byte empty files (`ZEOF(0)` without `ZDATA`), `_file_info` cleanup on mismatched `ZEOF`, inter-file retransmits, and deferred `ZRINIT` until disk flush/finish completes, plus added batch index display (`i/N`) in the transfer overlay.
 - **v2.4.1** — Fixed the built-in remote editor `<textarea>` collapsing to ~3 rows with blank space below (and collapsing short files) due to `modal-body` (`flex: 1`) + `h-full` blocking flex stretch; exempted xterm DOM `.xterm-cursor-blink` from `.motion-off *` so terminal cursor blinking keeps working when Windows reduced motion or UI motion-off is active; fixed blank white taskbar icons on Windows unpacked/portable builds by binding `AppUserModelID` only when a matching Start Menu shortcut exists.
 - **v2.4.0** — Embedded SSH resilience, terminal workflow & precision instrument shell: per-connection legacy SSH algorithms (SHA-1/CBC/DSS) with one-click reconnect recovery; automatic BusyBox/POSIX Shell file-channel fallback when `sftp-server` is absent; tunnel reconnect auto-restore, connection auto-start, remote listening port discovery (`ss` / `netstat` / `/proc/net/tcp(6)`) and one-click ephemeral quick-forwarding; drag-and-drop SFTP upload straight to terminal `cwd`, editable multiline paste guard with Markdown fence stripping, one-click import from `~/.ssh/config`, MobaXterm, Xshell, SecureCRT & FinalShell, split-pane sync input and background tab unread dots; unified 36px monochrome instrument chrome, 4 curated high-contrast themes (7→4 with v3 silent migration), quick-launch welcome view and `Ctrl+Shift+Z` Zen focus mode.
