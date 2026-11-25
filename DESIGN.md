@@ -1,7 +1,7 @@
 # SSH Workbench — 整体方案与设计文档
 
 > 轻量级 SSH 客户端 + 嵌入式技术支持工作台
-> 更新时间：2026-11-12 ｜ 阶段：**v2.0.0**，P0–P4 已实现，串口控制台已并入。
+> 更新时间：2026-11-25 ｜ 阶段：**v2.4.1**，P0–P7（含串口控制台、客户端手感升级、嵌入式 SSH 韧性、终端效率迁移与精密仪器风外壳）已全部落地。
 >
 > v1.1–v1.5：连接分组管理、大规模连接性能优化、断线自动重连、命令中心范围筛选、侧栏文件面板右键下载、分组 Combobox、命令卡文本溢出修复、应用内自动更新、SFTP 批量目录读取、文件面板跟随终端 cwd。
 >
@@ -10,149 +10,157 @@
 > v1.9：右侧命令栏列数跟栏宽走、卡片去图标与命令行、自绘提示浮层；发布链路补文档同步门禁。
 >
 > v2.0：**串口控制台**（§5.17）—— 传输层抽象、串口会话、按 USB 身份认设备、拔插自动恢复、命令「适用环境」标记。
+>
+> v2.1–v2.2：**客户端手感与传输可靠化**（§5.18）—— 设计 token、虚拟滚动、面板骨架、WebGL 自愈降级、行级输出高亮、任务完成通知、嵌套分屏（最多 4 格）、`trzsz`、串口在线改波特率/BREAK/入站裸 LF 归一/内置 TFTP 与 U-Boot 刷机引导、断线自动续传与传输记录面板。
+>
+> v2.3：**交互动效、远程编辑器与更新通道**（§5.19）—— 交互动效层与 i18n 基座、零遥测隐私断言、智能 `Ctrl+C/V` 与终端鼠标手感、自适应输出合帧、零依赖升级内置远程编辑器；发布线 v2.3.2 补齐国内 Gitee 免代理自动更新通道与 `sha512` 防篡改校验。
+>
+> v2.4：**嵌入式 SSH 韧性 + 终端效率迁移 + 精密仪器风外壳**（§5.20–§5.22）—— 老旧设备 SSH 兼容算法与一键重连、无 `sftp-server` 自动降级纯 Shell/BusyBox 通道、隧道断线自愈/随连自启/远端端口发现与临时转发；拖放文件直传 `cwd`、多行/危险粘贴确认框、5 家外部客户端导入、分屏同步输入与后台未读点；36px 单色精密顶栏、主题精简 7→4（v3 静默迁移）、快速启动欢迎页与 `Ctrl+Shift+Z` Zen 专注模式。
 
 ---
 
 ## 1. 项目定位与范围
 
-面向嵌入式设备技术支持场景的桌面工具：快速连上现场设备、执行常用制式命令、归档排查过程。
+面向嵌入式设备技术支持场景的桌面工具：快速连上现场设备、执行常用制式命令、安全传输文件与固件、归档排查过程。
 
-**明确不做**：AI 日志分析。
+**明确不做**：AI 日志分析、遥测与崩溃上报（由 `verify:privacy` 硬门禁守护）。
 
-**串口只做 Console 救急**（v2.0.0 起，原「不做串口终端」的边界在 §5.17 改写）：不做十六进制收发、不做协议调试器、不做 XMODEM/YMODEM 传文件、不做断线期间的缓冲回放。判断标准是一条 —— Console 里敲命令，不用另开工具。
+**串口只做 Console 救急与刷机引导**（v2.0.0–v2.2.0，见 §5.17）：不做十六进制收发、不做协议调试器、不做 XMODEM/YMODEM 传文件、不做断线期间的缓冲回放、不开放串口文件系统浏览（串口只有单条物理字节流，无多路复用通道；传文件走终端内 ZMODEM `rz`/`sz` 或内置 TFTP）。判断标准是一条 —— Console 里敲命令与刷机，不用另开工具。
 
 ## 2. 技术选型与决策记录
 
-| 层 | 选型 | 理由 |
+本项目采用**双线维护**（全部业务代码逻辑双向同步，仅底层桌面与样式栈分轨）：
+- **正式发布线（`yanxici/ssh-workbench`）**：守在稳定低体积栈（Electron 33 / React 18 / xterm 5.5 / Tailwind CSS 3 / Vite 5 / electron-builder 25，NSIS 安装包约 **80 MB**，另含 Gitee 国内免代理自动更新通道）。
+- **实验升级线（`yanxici/ssh-workbench-upgrade-x`）**：验证前沿依赖栈（Electron 45 / React 19 / xterm 6 / Tailwind CSS 4 / Vite 7 / electron-builder 26.8，NSIS 安装包约 **112 MB**）。
+
+| 层 | 选型（发布线 / 升级线） | 理由 |
 |---|---|---|
-| 桌面框架 | **Electron 33 + electron-vite** | 经评估后确定（见下方决策记录）；Node 22 环境零额外前置，ssh2 生态成熟 |
-| 前端 | React 18 + TypeScript + Vite | 组件生态完整，类型贯通主/渲染进程 |
-| UI | Tailwind CSS（语义色变量）+ lucide-react | 主题切换只换 CSS 变量（7 套配色 × 明暗，见 §5.7）；图标按名字动态解析 |
-| 终端 | @xterm/xterm + addon-fit / addon-search / addon-web-links | 事实标准；SSH 与串口共用同一个终端组件 |
-| 串口 | serialport 13（`@serialport/bindings-cpp`）+ iconv-lite | bindings-cpp 提供 **NAPI v8 预编译**，Electron 33（ABI 130）与 Node 24 直接加载，不需要 rebuild；GBK / GB18030 解码靠 iconv-lite 流式处理 |
-| 文件传输 | zmodem.js（`rz` / `sz`）+ ssh2 SFTP 分块读写 | 终端内传文件；SFTP 支持暂停续传 |
-| SSH | ssh2（主进程） | 支持密码 / 私钥 / Agent / ProxyJump / SFTP / forwardOut，纯 JS 可运行 |
-| 状态管理 | Zustand | 轻、无样板代码 |
-| 本地存储 | **JSON 文件**（`userData/data/`） | 零 native 依赖（better-sqlite3 需按 Electron ABI 重建，团队机器易装不上）；数据量小；可读可改、方便备份。封装在 repository 层，将来换 SQLite 只动这一层 |
-| 凭据 | Electron `safeStorage`（Windows DPAPI / macOS Keychain / Linux libsecret）+ 内存降级 | 密码、私钥口令永不落明文；无需 keytar 原生依赖 |
+| 桌面框架 | **Electron 33 + electron-vite 2** / **Electron 45 + electron-vite 5** | 零系统 WebView2 外部依赖（内网/精简版 Win10 开箱即用），ssh2 生态成熟 |
+| 前端 | **React 18** / **React 19** + TypeScript 5.7 + **Vite 5 / 7** | 组件生态完整，类型贯通主/渲染进程 |
+| UI | **Tailwind CSS 3 / 4**（语义色 CSS 变量）+ **lucide-react 0.469 / 1.72** + `@tanstack/react-virtual` | 主题切换只换 R G B 三通道 CSS 变量（4 套精选高对比配色 × 明暗，见 §5.7）；超长列表真实虚拟滚动 |
+| 终端 | **@xterm/xterm 5.5 / 6.0** + `addon-fit` / `addon-search` / `addon-web-links` / `addon-webgl` | 事实标准；SSH 与串口共用同一终端组件；WebGL 崩溃时自愈降级软件渲染 |
+| 串口 | serialport 13（`@serialport/bindings-cpp`）+ iconv-lite | bindings-cpp 提供 **NAPI v8 预编译**，Electron 33/45 与 Node 22/24 直接加载，无需 rebuild；GBK / GB18030 由 iconv-lite 流式解码 |
+| 文件传输 | ssh2 SFTP 分块读写 + **`shellFs` 纯 Shell/BusyBox 降级** + `zmodem.js` + **`trzsz`** + **内置 RFC 1350 TFTP 服务端** | 覆盖现代 Linux、裁剪版 OpenWrt/BusyBox、跳板机内网与 U-Boot 刷机全场景 |
+| SSH | ssh2 1.17（主进程） | 支持密码 / 私钥（PEM/OpenSSH/PuTTY `.ppk`）/ Agent / ProxyJump / SOCKS5 / HTTP CONNECT / SFTP / 端口转发 / 老旧算法兼容包（按运行时加密库能力动态构建） |
+| 状态管理 | Zustand 5 | 轻、按域拆分 20+ 独立 store、无样板代码 |
+| 本地存储 | **JSON 文件**（`userData/data/`） | 零 native 依赖；原子写（临时文件 + rename + 写队列）；可读可改、方便备份 |
+| 凭据 | Electron `safeStorage`（Windows DPAPI / macOS Keychain / Linux libsecret）+ 内存降级 | 密码、私钥口令、代理密码永不落明文 |
 
-### 决策记录：为什么是 Electron 而不是 Tauri
+### 决策记录：为什么坚持 Electron，暂不重构为 Tauri / GPUI（OxideTerm 路线）
 
-原需求 Tauri 2 优先，评估后改为 Electron，理由：
-1. 本机无 Rust 工具链与 MSVC Build Tools（Tauri 的硬前置，约 4–5GB 安装量，可能需管理员权限）；
-2. Tauri 需用 rustsh/russh-sftp 重写全部 SSH/SFTP/隧道逻辑，交付周期显著拉长；
-3. Electron 冷启动约 1–2s、安装包约 90MB，对内部技术支持工具属可接受区间；
-4. **架构上保留了迁移弹性**：SSH 与全部系统能力收敛在主进程 + preload 桥（`window.api`）之后，渲染层不直接接触任何 Node/Electron API。将来若迁 Tauri，只需重写 main/preload 两层，5000+ 行渲染层代码不动。
+项目初期曾评估 Tauri 2，v2.4.0 完成后再次对照 OxideTerm（1.x 为 Tauri + Rust + Web；2.x 为纯 Rust + GPUI）复盘，结论仍是**保持 Electron（发布线稳守 Electron 33）**：
+1. **资产体量与测试护城河**：当前业务代码约 **6.2 万行**（渲染层 3.76 万行、主进程 2.11 万行、共享与桥接 3.2 千行）外加 **3.5 万行 / 95 套自动化回归脚本**；迁纯 Rust + GPUI 等同 100% 推倒重写，迁 Tauri 也需重写全部 2.1 万行主进程逻辑且原有 JS 测试基本失效；
+2. **嵌入式老算法兼容**：Rust 生态的 `russh` + `ring` 偏现代密码学，对老 Dropbear / 工业交换机必需的 `group1-sha1` / `ssh-dss` / `3des-cbc` / `hmac-md5` 支持很弱；
+3. **Windows 现场离线环境约束**：现场工控机 / LTSC / 跳板机常缺失或存在老旧 WebView2 Runtime（若带 Fixed-Version WebView2 体积立刻涨回 130MB+）；GPUI 则重度依赖 DX12 显卡，在 RDP 与虚拟机上风险高，而 Electron 已内置 GPU 崩溃自动降级软件渲染；
+4. **演进弹性与局部加速**：所有系统能力收敛在 `window.api` 之后，渲染层零 Node 权限；若未来某单一热点（如超大日志检索）真出现 CPU 瓶颈，优先以单个 **Rust N-API（`napi-rs`）原生插件**挂载，而非推倒整套桌面栈。
 
 ## 3. 目录结构
 
 ```
 ssh-workbench/
 ├─ electron.vite.config.ts        # 三端构建配置（main / preload / renderer）
-├─ electron-builder.yml           # 打包配置（win nsis + portable / mac dmg / linux AppImage）
-├─ build/ · resources/            # 多尺寸 icon.ico / icon.png（scripts/make-icon.cjs 生成）
-├─ scripts/                       # make-icon.cjs、verify-*.cjs 自检脚本、check-integrity.ps1、release.ps1、probe-* 一次性排查脚本
+├─ electron-builder.yml           # 打包配置（win nsis + portable + zip）
+├─ build/ · resources/            # 多尺寸 icon.ico / icon.png（scripts/make-icon.cjs 生成）+ app-update.yml
+├─ docs/superpowers/              # v2.4.0 P0/P1/P2 设计规格、实施计划与交接归档（升级线）
+├─ scripts/                       # make-icon.cjs、run-all-verify.cjs、95 套 verify-*.cjs、e2e-ui-sftp.cjs、
+│                                 # check-integrity.ps1、sync-gitee-release.ps1（发布线）、extract/release-notes.cjs
 ├─ eslint.config.mjs              # ESLint 扁平配置（三档：主进程类型感知 / 渲染层 + Hooks / 脚本）
-├─ tailwind.config.js             # 语义色 -> CSS 变量映射
+├─ tailwind.config.js             # 发布线 TW3 语义色 -> CSS 变量映射（升级线由 TW4 @theme 承载）
 ├─ src/
-│  ├─ shared/                     # 三端共享（唯一契约来源）
+│  ├─ shared/                     # 三端共享（唯一契约来源，10 个模块）
 │  │  ├─ types.ts                 #   全部数据模型 + IPC 请求/响应类型
-│  │  └─ ipc.ts                   #   IPC 通道常量
-│  ├─ main/                       # Electron 主进程（全部系统能力）
-│  │  ├─ index.ts                 #   窗口、生命周期、--smoke 自检（v1.6.1 起不再装 IPC）
+│  │  ├─ ipc.ts                   #   173 个 IPC 通道常量（invoke + evt）
+│  │  ├─ themeCompat.ts           #   v2.4.0 主题 ID 兼容归一化与 4 套有效主题表
+│  │  ├─ commandEnv.ts            #   命令适用环境（ssh / serial）过滤
+│  │  ├─ serialBaud.ts / serialDisplay.ts / serialTiming.ts  # 串口波特率、展示名与发送节奏常量
+│  │  └─ bindHost.ts / remotePath.ts / arpVendor.ts          # 端口绑定、远端路径规范、ARP 厂商表
+│  ├─ main/                       # Electron 主进程（91 文件，~2.1 万行）
+│  │  ├─ index.ts                 #   窗口、生命周期、GPU 崩自愈降级软件渲染、事件转发
+│  │  ├─ smoke.ts                 #   --smoke 冒烟与 DOM/视觉/压测探针（已从 index.ts 拆出）
 │  │  ├─ windowRef.ts             #   主窗口引用（对话框父窗口；避免 ipc/* 反向依赖 index）
-│  │  ├─ updater.ts               #   自动更新状态机（electron-updater，主进程单点维护）
-│  │  ├─ ipc/                     #   IPC 注册按域拆分（v1.6.1），index.ts 只调 registerAllIpc()
-│  │  │  ├─ index.ts              #     registerAllIpc()：按序调用 12 个域
-│  │  │  ├─ handle.ts             #     IPC 包装（异常 -> { ok:false }）+ 通道中文标题
-│  │  │  ├─ errors.ts             #     错误日志 / 渲染层上报 / 自动重连取消
-│  │  │  ├─ connections.ts        #     连接 CRUD / 分组 / 测试 / 导入导出 / 私钥选择
-│  │  │  ├─ sessions.ts           #     会话开关 / 写入 / 尺寸 / 广播
-│  │  │  ├─ commands.ts           #     常用命令 + 命令历史
-│  │  │  ├─ settings.ts           #     设置 / 数据目录 / 已知主机指纹 / 剪贴板
-│  │  │  ├─ sftp.ts               #     SFTP 全部通道（含上传文件夹、传输控制）
-│  │  │  ├─ zmodem.ts             #     ZMODEM 收发热通道（目录令牌 + 文件名净化）
-│  │  │  ├─ localFs.ts            #     本地文件系统
-│  │  │  ├─ diagnostics.ts        #     诊断巡检 + 报告 + 排障包 + 批量执行
-│  │  │  ├─ devices.ts            #     档案 / 监控 / 固件 / 发现 / 通用 exec
-│  │  │  ├─ backupTunnel.ts       #     配置备份 + 隧道 + 会话日志
-│  │  │  └─ windowUpdate.ts       #     窗口控制 + 应用内更新
+│  │  ├─ updater.ts               #   自动更新状态机（发布线配套 updaterChannel.ts 支持 Gitee 免代理多源回退）
+│  │  ├─ app/settingsService.ts   #   设置修改统一入口（含副作用协调）
+│  │  ├─ window/                  #   icon / notifier（系统任务完成通知）/ taskbar（任务栏进度）/ appUserModelId
+│  │  ├─ tftp/server.ts           #   内置 RFC 1350 TFTP 只读服务端（blksize / tsize 协商，刷机引导用）
+│  │  ├─ transport/               #   传输层抽象（Transport / sshTransport / serialTransport / memoryTransport /
+│  │  │                           #   serialResolve / serialPorts / serialWatcher / serialLoader）
+│  │  ├─ ipc/                     #   IPC 注册按域拆分（18 个文件），index.ts 调 registerAllIpc()
+│  │  │  ├─ index.ts / handle.ts  #     统一注册、异常包装为 { ok:false }、中文标题映射
+│  │  │  ├─ connections.ts / sessions.ts / serial.ts / commands.ts / settings.ts / errors.ts
+│  │  │  ├─ sftp.ts / zmodem.ts / trzsz.ts / transferRecord.ts / localFs.ts / tftp.ts
+│  │  │  └─ diagnostics.ts / devices.ts / backupTunnel.ts / windowUpdate.ts
 │  │  ├─ store/
 │  │  │  ├─ jsonStore.ts          #   原子写 JSON 存储（临时文件 + rename + 写队列）
-│  │  │  ├─ repository.ts         #   纯 re-export barrel（v1.6.3 拆分后只剩 70 行）
-│  │  │  ├─ repo/                 #   持久化按域拆分（v1.6.3）
-│  │  │  │  ├─ connections.ts     #     连接 + 分组 + 凭据语义
-│  │  │  │  ├─ commands.ts        #     常用命令 + 排序 + 导入导出
-│  │  │  │  ├─ history.ts         #     命令历史（2000 条上限）
-│  │  │  │  ├─ settings.ts        #     应用设置 + 一次性外观迁移
-│  │  │  │  ├─ diagSections.ts    #     自定义巡检项
-│  │  │  │  ├─ profiles.ts        #     客户 / 设备档案
-│  │  │  │  ├─ tunnels.ts         #     端口转发定义
-│  │  │  │  └─ knownHosts.ts      #     已知主机指纹
-│  │  │  └─ vault.ts              #   凭据保险箱（safeStorage 加密）
+│  │  │  ├─ pathGuard.ts          #   主进程路径白名单守卫（对话框授予的路径令牌校验）
+│  │  │  ├─ repository.ts + repo/ #   8 个数据域（connections / commands / history / settings / diagSections / profiles / tunnels / knownHosts）
+│  │  │  ├─ connTransfer.ts       #   本工具加密备份导出 / 导入
+│  │  │  ├─ externalImport.ts     #   5 家外部客户端导入（ssh_config / MobaXterm / Xshell / SecureCRT / FinalShell）
+│  │  │  ├─ transferRecord.ts     #   传输历史落盘与启动僵尸记录清理（sweepStale）
+│  │  │  └─ vault.ts / backups.ts / reports.ts / bundle.ts / errorLog.ts / sessionLogs.ts / localFs.ts
 │  │  ├─ ssh/
-│  │  │  ├─ sftpManager.ts        #   SFTP 管理 + 传输队列（分块读写、暂停/续传/取消、keepRoot 目录上传）
-│  │  │  ├─ connectConfig.ts      #   连接配置构建（认证/指纹校验）+ 指纹探测 + 冲突记录 + 错误翻译
-│  │  │  ├─ sessionManager.ts     #   会话管理（跳板链/shell/合帧转发/延迟探测）
-│  │  │  └─ testConnection.ts     #   测试连接
-│  │  ├─ ssh/ 其余               #   exec / batchExec / diagnostics / metrics / firmware / netScan / portForward
-│  │  ├─ util/                    #   parseSshCommand、socks5、proxySockets、zip、lineDiff、mdns、arp 等纯函数
-│  │  └─ data/seedCommands.ts     #   内置常用命令（42 条，首次运行注入）
+│  │  │  ├─ connectConfig.ts      #   连接配置构建、运行时动态 LEGACY_ALGORITHMS、指纹探测自动老算法回退
+│  │  │  ├─ sessionManager.ts     #   会话生命周期、跳板链、自适应合帧、自动重连钩子（onClosed/onConnected/onReconnectGaveUp）
+│  │  │  ├─ sftpManager.ts        #   SFTP 分块续传队列 + 无 sftp-server 双确认降级路由
+│  │  │  ├─ shellFs.ts            #   纯 Shell/BusyBox 文件与流式二进制传输降级实现
+│  │  │  ├─ portForward.ts        #   -L/-R/-D 隧道 + 断线挂起恢复 + 随连自启 + 临时转发去重与原地过户
+│  │  │  ├─ remotePorts.ts        #   BusyBox 兼容远端监听端口探测（ss -> netstat -> /proc/net/tcp(6)）
+│  │  │  ├─ recorder.ts           #   asciinema .cast + 剥 ANSI 纯文本 .log 双路独立录制
+│  │  │  ├─ trzszBridge.ts / trzszDialogs.ts  # trzsz 文本传输桥接与对话框
+│  │  │  └─ exec.ts / batchExec.ts / diagnostics.ts / metrics.ts / firmware.ts / netScan.ts / configBackup.ts / testConnection.ts
+│  │  ├─ util/                    #   adaptiveFlush / parseSshCommand / privateKey / socks5 / proxySockets / zip / lineDiff / mdns / arp / tcpProbe 等
+│  │  └─ data/                    #   seedCommands.ts（内置常用命令）+ diagTemplates.ts（31 项内置巡检模板）
 │  ├─ preload/
-│  │  ├─ index.ts                 # contextBridge 暴露 window.api（类型化）
-│  │  └─ index.d.ts               # Window 全局类型声明
-│  └─ renderer/                   # React 渲染层
-│     ├─ index.html
+│  │  ├─ index.ts / index.d.ts    # contextBridge 暴露类型化 window.api
+│  └─ renderer/                   # React 渲染层（133 文件，~3.76 万行）
 │     └─ src/
-│        ├─ App.tsx               # 布局总装 + 全局快捷键 + 事件订阅 + 拖拽执行
-│        ├─ styles/index.css      # 主题变量（暗/亮）+ 组件类（btn/input/menu/modal）
-│        ├─ theme/colorThemes.ts  # 7 套配色 × 明暗（界面 CSS 变量 + xterm 主题同源）
-│        ├─ lib/                  # utils / ipc 解包助手 / 图标白名单
-│        │  ├─ fuzzy.ts           #   零依赖模糊匹配（子串 + 子序列，带命中区间）
-│        │  ├─ commandSearch.ts   #   命令检索：字段加权 / 中英同义 / 使用热度 / 范围索引
-│        │  ├─ layout.ts          #   栏宽规格表（上下限 / 拖拽换算 / 夹取）
-│        │  ├─ shortcuts.ts       #   快捷键动作表与默认键位
-│        │  ├─ shellCwd.ts        #   终端 cwd 推断：输入行追踪 + cd 解析 + OSC 7（零依赖纯逻辑）
-│        │  ├─ dirLoader.ts       #   同帧目录请求合并成一条 SFTP_LIST_MANY IPC
-│        │  ├─ dirCache.ts        #   目录结果 TTL 缓存（stale-while-revalidate）
-│        │  └─ zmodem.ts          #   ZMODEM 会话（Sentry 接管字节流、分块保存）
-│        ├─ stores/               # zustand：settings/layout/connection/session/command/execution/sftp/cwd/toast/ui 等
-│        │                        #   cwdStore 按 sessionId 隔离终端 cwd（不进持久化，会话关闭即清）
-│        │                        #   sftpStore 是上传/下载的唯一执行链路（v1.6.1 收敛），面板只渲染 UI
+│        ├─ App.tsx               # 布局总装 + 全局快捷键 + Zen 快捷键 + 事件订阅 + 拖拽执行
+│        ├─ i18n/index.ts         # 中英双语外壳字典与 translate/useI18n（基座 + 增量迁移）
+│        ├─ styles/index.css      # 主题兜底变量 + 36px 单色精密外壳类 + token 行类 + 动效层
+│        ├─ theme/colorThemes.ts  # 4 套高对比配色 × 明暗（精密默认 / Gruvbox / Solarized / Dracula）
+│        ├─ lib/                  # 纯逻辑函数（均可用 esbuild 独立单测）：
+│        │  ├─ fuzzy.ts / commandSearch.ts / commandWall.ts / groupOrder.ts
+│        │  ├─ shellCwd.ts / cwdFollow.ts / dirLoader.ts / dirCache.ts / uploadDir.ts
+│        │  ├─ terminalUx.ts / terminalDrop.ts / pasteGuard.ts / tabUnread.ts / editorText.ts
+│        │  ├─ paneTree.ts / paneRegistry.ts / zenState.ts / layout.ts / ime.ts
+│        │  ├─ highlight.ts / highlightRuntime.ts / notifyPlan.ts / taskNotify.ts
+│        │  └─ shortcuts.ts / shortcutConflict.ts / zmodem.ts / zmodemRecord.ts / panelPrefetch.ts / useTokenFlag.ts
+│        ├─ stores/               # 23 个 zustand store（含 splitStore / transferStore / trzszStore / tftpStore / cwdStore 等）
 │        └─ components/
-│           ├─ layout/            #   TitleBar / ActivityBar / SideNav / MainWorkspace / CommandRail / TabBar / StatusBar / PaneResizer / UpdateBadge
-│           ├─ connections/       #   ConnectionSidebar / ConnectionEditor
-│           ├─ terminal/          #   TerminalView（xterm 集成）/ ZmodemOverlay
-│           ├─ files/             #   FileExplorer / SessionFileTree / 双栏 Local/RemotePane / TransferProgressDock
-│           │                     #   useUploadTarget.ts = 「先确认目标目录再弹文件框」的共用状态机
-│           ├─ commands/          #   CommandPanel / CommandCenter / CommandEditor / Highlight
-│           ├─ panels/            #   HistoryPanel
-│           ├─ settings/          #   SettingsPanel（仅布局总装，118 行）
-│           │                     #   sectionUi.tsx（Section / Row / Segmented 原子）
-│           │                     #   Appearance / Terminal / Behavior / Layout / Shortcut /
-│           │                     #   Danger / KnownHosts / ErrorLog / Update 各分区组件
-│           ├─ execution/         #   VariablePromptDialog / DangerConfirmDialog
-│           └─ ui/                #   Modal / ConfirmDialog / ContextMenu / Toast / Combobox / 表单件
+│           ├─ layout/            #   TitleBar(36px) / ActivityBar(44px) / SideNav / MainWorkspace / CommandRail / TabBar /
+│           │                     #   StatusBar(26px) / PaneResizer / UpdateBadge / WelcomeQuickLaunch
+│           ├─ connections/       #   ConnectionSidebar / ConnectionEditor / ConnTransferDialog（双模式导入）
+│           ├─ terminal/          #   TerminalView / PasteConfirmDialog / SerialBootBar / ZmodemOverlay
+│           ├─ files/             #   FileExplorer / SessionFileTree / LocalPane / RemotePane / RemoteEditorDialog /
+│           │                     #   ShellModeBadge / TransferProgressDock / TransferTab / UploadTargetDialog / useUploadTarget
+│           ├─ commands/          #   CommandPanel / CommandCenter / CommandEditor / CommandCard / CommandCardTip / Highlight
+│           ├─ transfer/          #   TransferPanel（传输记录面板）
+│           ├─ panels/            #   HistoryPanel / SessionLogsPanel / LogPlayerDialog / TunnelPanel / TunnelEditor / PanelSkeleton
+│           ├─ settings/          #   SettingsPanel + sectionUi + 13 个分区（含 Appearance / Terminal / OutputHighlight / Notify / Transfer / Experimental / Update）
+│           ├─ backup / batch / diagnostics / discovery / firmware / metrics / profiles / execution / ui
 ```
 
 ## 4. 架构与数据流
 
 ```
-渲染层 (React)              preload 桥               主进程 (Node)                 远端设备
-─────────────              ─────────────             ─────────────                 ────────
-window.api.xxx  ──invoke──▶ contextBridge ──ipc──▶  ipcMain.handle
+渲染层 (React)              preload 桥               主进程 (Node)                 远端设备 / 串口
+─────────────              ─────────────             ─────────────                 ───────────────
+window.api.xxx  ──invoke──▶ contextBridge ──ipc──▶  ipcMain.handle (173 通道)
                                                      ├─ repository ─▶ JSON 文件
-                                                     ├─ vault ─▶ 系统凭据加密
-                                                     └─ sessionManager ──ssh2──▶  SSH/SFTP
-xterm.write  ◀──webContents.send── EVT_SESSION_DATA ◀── shell data（8ms 合帧）
+                                                     ├─ vault ─▶ safeStorage 加密
+                                                     ├─ sftpManager ─▶ SFTP 子系统 / shellFs 降级
+                                                     └─ sessionManager ─▶ Transport
+                                                                           ├─ SshTransport (ssh2)
+                                                                           └─ SerialTransport (serialport)
+xterm.write  ◀──webContents.send── EVT_SESSION_DATA ◀── 自适应合帧（8ms → 20/32ms, 256KB 强刷）
 ```
 
 要点：
-- **渲染进程零 Node 权限**：所有能力经 `window.api`（`IpcResult<T>` 统一包装，主进程异常永不越过 IPC 边界）；
-- **高频数据合帧**：shell 输出在主进程按 8ms 窗口合并后成批推送，`StringDecoder` 保证跨帧多字节字符不断裂；
-- **输入路径**：xterm `onData` → `session:write` → shell.write；尺寸变化经 `ResizeObserver → fit → session:resize` 同步到远端 PTY。
-- **反向路径（cwd 跟随）**：xterm `onData` 同时喂给 `shellCwd` 追踪器推断回车后的目录；`onData` 里解析出的 OSC 7 与 `sessionManager` 转发的 OSC 7 谁先到算谁，结果写 `cwdStore[sessionId]`，`FileExplorer` 订阅后按需批量拉目录（§5.11）。这条链路只读观察字节流，不向 PTY 注入任何东西。
-- **更新链路**（§5.12）：主进程 `updater.ts` 是唯一状态源 → `EVT_UPDATE_STATUS` 推给渲染层 → `UpdateBadge` / `UpdateSection` 纯展示；命令方向是 `update:check / download / install`。渲染层不自己比版本号。
+- **渲染进程零 Node 权限**：所有能力经 `window.api`（`IpcResult<T>` 统一包装，主进程异常永不越过 IPC 边界）；文件/外部配置导入路径经主进程对话框签发白名单令牌校验；
+- **自适应高频数据合帧**（`adaptiveFlush.ts`，v2.3.1）：常规交互保持 8ms 低延迟；遇 `cat`/`dmesg` 洪峰自动升档至 20–32ms 并设 256KB 立即强刷上限，空闲 80ms 自动回落 8ms；解码下沉到 `Transport`（SSH 走 UTF-8，串口走 `iconv-lite` 流式 GBK/GB18030/UTF-8）；
+- **输入路径与分屏广播**：xterm `onData` → `session:write`（开启分屏同步输入时经 `session:broadcast` 同步写到同标签所有格）→ `transport.write`；尺寸变化经 `ResizeObserver → fit → session:resize` 同步到远端 PTY；
+- **反向路径（cwd 跟随）**：xterm `onData` 同时喂给 `shellCwd` 追踪器推断回车后的目录；`onData` 里解析出的 OSC 7 与 `sessionManager` 转发的 OSC 7 谁先到算谁，结果写 `cwdStore[sessionId]`，`FileExplorer` 订阅后按需批量拉目录（§5.11）。这条链路只读观察字节流，不向 PTY 注入任何东西；
+- **文件通道双轨路由**（§5.20）：`sftpManager` 默认优先挂载原生 SFTP；遇到无 `sftp-server` 的嵌入式设备经错误特征 + `echo` 探针双确认后自动切入 `shellFs` 通道并广播 `EVT_SFTP_MODE`，渲染层亮出 `Shell 兼容` 徽标；
+- **更新链路**（§5.12）：主进程 `updater.ts` 是唯一状态源 → `EVT_UPDATE_STATUS` 推给渲染层 → `UpdateBadge` / `UpdateSection` 纯展示；发布线叠加 `updaterChannel.ts` 支持 `Gitee → GitHub → gh-proxy.com → ghfast.top` 自动回退与官方 `sha512` 校验。
 
 ## 5. 常用命令执行流水线（重点模块）
 
@@ -259,11 +267,16 @@ xterm.write  ◀──webContents.send── EVT_SESSION_DATA ◀── shell da
 - **过渡统一 `≤ 150ms`，禁 `transition-all`**：一律写成具体属性（`transition-[width]`、`transition-[left]`、`transition-colors`），避免隐式动画无关属性；
 - **动画只改 `opacity` / `transform` / `backgroundColor`**，不改 `box-shadow`（`pulse-soft` 改 opacity、`flash-ok` 改 backgroundColor，均合规）。
 
-### 5.5 外观外壳与面板骨架（UI 重构落地）
+### 5.5 外观外壳与面板骨架（v2.4.0 单色精密仪器风升级）
 
-**外壳五段**（`src/renderer/src/components/layout/`）：`TitleBar` 44px 绿底 `#27c93f`（品牌字色 `on-brand`）、`ActivityBar` 48px（激活项用绝对定位 `inset-y-1.5 left-0 w-0.5 bg-brand` 指示线，不用边框，避免影响布局宽度）、`SideNav` 280px（由 `activityView` 决定内容，`sidebarVisible` 为假直接返回 null）、`MainWorkspace`（`bg-app` 纯色，所有会话保持挂载仅切 `display`）、`StatusBar` 28px（含 Git 分支，用 `exec.run(sessionId, 'git rev-parse --abbrev-ref HEAD 2>/dev/null')` 取，`HEAD` 游离态不显示）。
+**外壳五段**（`src/renderer/src/components/layout/`）：
+- `TitleBar`：**36px**（`h-9`，与 `--size-titlebar: 36px` 同口径）单色中性面板底（`bg-panel`）+ 1px 下边框；取消旧版 44px 高饱和绿底，品牌色从「面」降级为「点」（Logo 徽标、激活标签顶部 2px 指示线、活动栏激活条）；右上角含命令中心、设置、**Zen 专注模式切换**、`UpdateBadge` 与窗口控制；
+- `ActivityBar`：**44px** 窄轨（旧版 48px），激活项用绝对定位 `inset-y-1.5 left-0 w-0.5 bg-brand` 指示线；
+- `SideNav`：默认 280px（可拖 220–520px），由 `activityView` 决定内容；
+- `MainWorkspace`：`bg-app` 纯色，无活动会话时渲染快速启动欢迎页 `WelcomeQuickLaunch`，有会话时所有会话保持挂载仅切 `display`，支持单标签最多 4 格嵌套分屏与流式 `h-7` 分屏同步输入条；
+- `StatusBar`：**26px**（`h-[26px]`，与 `--size-statusbar: 26px` 同口径）+ 等宽数字 `tabular-nums`，含 Git 分支、延迟、传输进度与终端行列数。
 
-**品牌绿使用边界**：仅 `--c-brand` 三处 —— TitleBar 背景、ActivityBar 激活指示线、命令中心左范围索引的选中指示线。其余「选中」一律用 `--c-select`（`#e0f2fe`），「强调」用 `--c-accent`（`#2563eb`）。绿色一旦扩散到按钮底色就会失去「品牌」含义。
+**品牌色使用边界**：每套主题拥有独立 `--c-brand`（不再硬编码 `#27c93f`），且严格收敛在「点/线」语义——Logo 徽标底光、激活标签顶部 2px 线、活动栏左边缘 2px 条、连接行 hover 左竖条、命令中心范围指示线与 Zen 激活图标。品牌色上的文字统一走 `--c-on-brand`（所有 8 组明暗变体实测 WCAG ≥ 4.5:1）。其余「选中」用 `--c-select`，「交互强调」用 `--c-accent`。
 
 **面板骨架类**（`styles/index.css` `@layer components`，六个侧栏面板共用，切换时不跳动）：
 
@@ -302,11 +315,11 @@ xterm.write  ◀──webContents.send── EVT_SESSION_DATA ◀── shell da
 
 **卡片视觉**：常态 `border-edge bg-app hover:bg-hover`，选中 `border-accent/50 bg-select`。不用 `bg-raised`（#fafafa）压 `bg-panel`（#f8f9fa）—— 两层只差 1.5%，126 个按钮会糊成一片没有边界；白底 + 实边框才读得出「这是一堆可以按的东西」。右上角单槽互斥：平时显示角标（收藏 / 需确认 / 有变量），悬停交叉淡入操作（收藏 / 编辑），只改 `opacity`，不产生位移。
 
-### 5.7 配色主题（v1.0.0）
+### 5.7 配色主题（v1.0.0 → v2.4.0 精简 7→4）
 
-- `src/renderer/src/theme/colorThemes.ts` 定义 `COLOR_THEMES`：VS Code 浅色（默认）、Workbench、Dracula、Nord、Solarized、One Dark、Gruvbox，每套都有 `dark` / `light` 两个 `ThemeVariant` = 界面 CSS 变量 `vars` + xterm `terminal` 主题，**界面与终端同源**，切换时不会出现终端与外壳配色脱节；
-- 设置项分两层：`settings.theme` 决定明暗（dark / light / 跟随系统），`settings.colorTheme` 在其上换整套配色；
-- 回归：`node scripts/verify-theme.cjs`。
+- `src/renderer/src/theme/colorThemes.ts` 定义 4 套高对比且各自拥有独立 `brand`/`accent`/`select` 的精选主题：**精密默认（`vscode`）**、**Gruvbox（`gruvbox`）**、**Solarized（`solarized`）**、**Dracula（`dracula`）**，每套均含 `dark` / `light` 两个 `ThemeVariant`（8 组变体全部实测 `ink/app`、`ink/panel`、`on-brand/brand` 对比度 ≥ 4.5:1），界面 CSS 变量与 xterm 调色板同源联动；外观设置画廊为 2×2 四宫格；
+- 原 7 套中高度同质化的 `workbench` / `nord` / `onedark` 在 v2.4.0 退役，由 `src/shared/themeCompat.ts` 与 `UI_SHELL_VERSION = 3` 静默迁移回 `vscode`（且绝不覆写用户已选的 `dark`/`light`/`system` 明暗偏好）；
+- 回归：`node scripts/verify-p2-theme-zen.cjs`、`node scripts/verify-theme-tw4.cjs`。
 
 ### 5.8 SFTP 传输进度与暂停 / 续传 / 取消
 
@@ -483,6 +496,40 @@ v1.6.1 收敛成：
 
 **回归**：`scripts/verify-serial.cjs`（102 项，内存假实现 + 假端口：换行归一、入站裸 LF 补 CR 且 `raw` 与源字节一致、跨帧 CR|LF 不被拆成 CRCRLF、GBK 解码、DTR 只动 DTR、拔线 → `waiting-device` → 插回自动恢复、发送节奏的逐字符 / 行间 / 混排 / 关闭清队列、切波特率真的走 `port.update` 且越界回落、BREAK 先 true 后 false 且只碰 `brk`）、`scripts/verify-session-log.cjs`（24 项，临时 userData 跑真实 `createWriteStream`：`.cast`/`.log` 成对、ANSI 剥离、一行一个墙上时间戳、输入前缀、两个开关的边界、双向截断互不影响、删一份连带删另一份）、`verify-serial-native.cjs`、`serial-spike-main.cjs` / `serial-spike-packaged.cjs`（打包后原生模块能否加载）、`.github/workflows/serial-spike.yml`；`verify-conn-transfer.cjs` 补串口导出 / 导入 / USB 身份找回 / 待确认 / 参数非法五组用例。
 
+### 5.18 客户端手感、嵌套分屏、高亮、通知与传输可靠化（v2.1.0–v2.3.0）
+
+- **设计 token、虚拟滚动与骨架屏（v2.1.0–v2.1.2）**：收敛 `--duration-*` / `--ease-out-expo` / `--size-rail(248px)` / `--size-statusbar(26px)` / `--size-titlebar(36px)`，引入 `@tanstack/react-virtual` 与面板级实验开关（`ExperimentalSection`）；`PanelSkeleton` + `panelPrefetch` 消除面板切换白屏；终端 WebGL 渲染新增 GPU 崩溃自愈降级（写盘 `softwareRender: true` 下次启动强制回落 DOM），并修复 canvas 字体串前导空格导致的 WebGL 字形缩小真根因（`lib/canvasFont.ts`）。
+- **行级输出高亮与任务完成通知（v2.1.3–v2.1.4）**：`highlight.ts` / `highlightRuntime.ts` 实现规则编译与终端行级着色，设置页自带实时试匹配；`notifyPlan.ts` / `taskNotify.ts` + 主进程 `window/notifier.ts` 实现长任务完成系统通知、去重与按连接粒度静音（标签右键切换）。
+- **嵌套分屏树（v2.1.5 / v2.1.7）**：`paneTree.ts` / `paneRegistry.ts` / `splitStore.ts` 支持单标签最多 4 格递归二分（水平/垂直），分隔条拖拽比例按连接持久化；嵌套格不另占顶栏标签位；标签右键与终端右键共享同一条分屏/关闭分屏链路；标签栏右键菜单通过 `createPortal` 挂到 `document.body` 彻底脱离 `-webkit-app-region: drag` 区域（由 OS 级鼠标点击回归 `verify-tabmenu-os.cjs` / `verify-tabbar-os.cjs` 守门）。
+- **trzsz 与传输可靠化（v2.1.6 / v2.2.1）**：接入 `trzsz` 文本传输协议（`trzszBridge.ts`）；`sftpManager` 新增弱网断线自动续传（90s 重连恢复窗口 + 64KB 尾部指纹校验 + 防并发续传零洞）；新增 `transferRecord.ts` 与 `TransferPanel.tsx` 持久化传输历史，启动时 `sweepStale()` 清理僵尸 `running` 记录；串口新增内置 RFC 1350 TFTP 只读服务端（`tftp/server.ts`）与 U-Boot 刷机引导条（`SerialBootBar.tsx`）。
+- **动效层、i18n 基座与隐私守卫（v2.3.0）**：`styles/index.css` 落地卡片轻抬 / 12ms 错峰入场 / 连接行左指示条 / 分组箭头旋转与 `.motion-off` 一键静止；`src/renderer/src/i18n/index.ts` 建立中英双语字典基座（配合 `verify-i18n.cjs` 棘轮）；新增 `verify-privacy.cjs` 断言零遥测 SDK、零 `crashReporter` 与出站域名白名单。
+
+### 5.19 终端手感、自适应合帧、远程编辑器与国内更新通道（v2.3.1–v2.3.2）
+
+- **终端智能 `Ctrl+C/V` 与鼠标手感（`terminalUx.ts`）**：默认快捷键改为 `Ctrl+C` / `Ctrl+V`（有选区复制且保持选区，无选区透传 `\x03`；`Ctrl+V` `preventDefault()` 杜绝双份粘贴）；新增可选「选中即复制」「右键快速复制粘贴」（`Shift+右键` 仍呼出完整菜单）、捕获阶段拦截 `Ctrl+滚轮` 单终端临时缩放（10–28px，`Ctrl+0` 复位）及右键导出终端纯文本缓冲（`IPC.SESSION_EXPORT_BUFFER`）。
+- **大流量自适应合帧（`src/main/util/adaptiveFlush.ts`）**：替代旧版固定 8ms 合帧；常态保持 8ms，遇到 `cat`/`dmesg` 洪峰自动升档 20ms → 32ms 并设 256KB 立即强刷上限，空闲 80ms 立刻回落 8ms。
+- **零依赖内置远程编辑器升级（`editorText.ts` + `RemoteEditorDialog.tsx`）**：不引入 CodeMirror/Monaco，零依赖补齐同步行号栏、`Ctrl+F`/`Ctrl+H` 页内查找替换、`Ctrl+S` 原地保存不关窗、编码与行列状态条、`Tab`/`Shift+Tab` 缩进及未保存误关二次确认。
+- **国内免代理自动更新通道（发布线 v2.3.2，`updaterChannel.ts`）**：通过 Gitee 公开 API 解析最新 tag 与发行说明，以 `latest.yml` 附件存在作为发布完成判据，交由 `electron-updater` 的 `generic` provider 并强制 `disableDifferentialDownload = true` 绕开 Gitee CDN 对 Range 返回 200 全量的旧阻塞；无代理时按 `Gitee → GitHub → gh-proxy.com → ghfast.top` 自动回退，第三方加速站回退强制校验官方一跳源 `sha512` 防篡改。
+
+### 5.20 嵌入式 SSH 韧性（v2.4.0 P0）
+
+- **老旧嵌入式设备 SSH 兼容算法（`connectConfig.ts`）**：每连接可选 `legacyAlgorithms?: boolean`（默认关闭，串口忽略）；`LEGACY_ALGORITHMS` 不再静态硬编码，而是在模块加载时通过 `createRequire(__filename)('ssh2/lib/protocol/constants')` 与 `node:crypto` 实测能力动态构建（现代默认算法严格排在最前，老算法按运行时支持表追加末尾；自动规避 Electron BoringSSL 缺失 `chacha20` 与 `modp2` 引发的同步抛错与 `Unknown DH group`）；`probeHostFingerprint` 遇到算法协商失败自动老算法重试一次；终端报错浮层提供一键「启用老设备兼容算法并重连」，保存时凭据传 `undefined` 完整保留既有登录密码与代理密码。
+- **无 `sftp-server` 自动降级纯 Shell/BusyBox 通道（`shellFs.ts` + `sftpManager.ts`）**：遇到裁剪掉 SFTP 子系统的 OpenWrt / Buildroot / BusyBox 设备时，必须通过 `isSftpSubsystemUnavailableError`（排除 `MaxSessions` 瞬时 `channel open failure` 与断线误降级）+ `echo __SWB_SH_OK__` 探针**双重确认**才切入 `shellFs` 通道，并通过 `IPC.EVT_SFTP_MODE` 在文件面板/文件树/双栏顶部展示 `ShellModeBadge`；所有远端命令走 `shQuote` 转义，删除入口走 `assertSafeRemovePath` 禁删根路径与空白路径；支持列表解析（`parseLsOutput`）、远程编辑（保留 `.bak` 与失败回滚）及原始二进制流上传下载。
+- **隧道断线自愈、随连自启与远端端口一键发现（`portForward.ts` + `remotePorts.ts`）**：`sessionManager` 区分 `onClosed({ byUser, willReconnect })` / `onConnected` / `onReconnectGaveUp`；意外断线且将重连时活跃隧道进入 `reconnecting` 挂起态并在重连后恢复，用户手动停掉的记入 `manuallyStopped` 保持停止；持久隧道支持绑定连接 `autoStart` 随连自启；新增 BusyBox 兼容三级端口探测（`ss` → `netstat` → `/proc/net/tcp(6)`，保留纯 `[::1]` 并合并双栈监听）与会话级临时转发（`startQuickForward` 幂等去重、失败清理运行时表、冲突自动换空闲口、`promoteQuickForward` 原地不断流转存为常用隧道、`buildSafeLocalTunnelUrl` 白名单放行 HTTP 端口打开浏览器）。
+
+### 5.21 终端效率与多客户端一键迁移（v2.4.0 P1）
+
+- **拖放 OS 文件直传终端 `cwd`（`terminalDrop.ts` + `TerminalView.tsx`）**：默认 SFTP（或已降级的 `shellFs`）直传至 `cwdStore` 当前目录（`keepRoot: true`），按住 `Alt` 或在设置中可切 `trzsz`；`countDraggedFiles(dt)` 通过 `files.length → items(kind==='file') → types.includes('Files')` 三级回退兼容 Windows `dragover` 保护模式（且不影响命令卡片拖拽），`onDragLeave` 校验 `currentTarget.contains(relatedTarget)` 消除提示层闪烁。
+- **多行/危险粘贴可编辑确认框（`pasteGuard.ts` + `PasteConfirmDialog.tsx`）**：右键粘贴、`Ctrl+V`、原生 `paste` 三处入口统一走 `requestPaste`；多行或含回车触发危险词时弹窗预览，支持一键剥离 Markdown 代码围栏、去掉末尾回车、直接编辑命令且危险词警告实时联动，textarea 的 `Ctrl+Enter` 配齐 `isImeComposing(e)` 守卫。
+- **5 家外部客户端一键预览导入（`externalImport.ts` + `ConnTransferDialog.tsx`）**：支持 `~/.ssh/config`（含 `ProxyJump`）、MobaXterm（`.mxtsessions`）、Xshell（`.xsh` 含 UTF-16LE BOM）、SecureCRT（`.ini` 十六进制端口）与 FinalShell；先扫描预览统计、去重策略（跳过/覆盖）再写库，加密密码不做破解；选择路径严格经主进程 `pathGuard` 白名单令牌校验。
+- **分屏同步输入与后台标签未读圆点（`splitStore.ts` + `tabUnread.ts`）**：多格分屏时顶部显示流式 `h-7` 同步输入条（`MainWorkspace` 改为 `flex-col` 不遮挡上方终端头），开启后走 `session.broadcast()` 广播输入，缩回单格自动关闭；后台非激活标签收到实质输出（过滤纯控制序列 + 切走后 500ms 宽限期）时在标签上点亮 6px 静态未读圆点，切回即清。
+
+### 5.22 单色精密外壳、主题精简、欢迎页与 Zen 专注模式（v2.4.0 P2）
+
+- **单色精密外壳与主题去同质化**：顶栏 44px 绿底 → 36px 单色中性画布、活动栏 48px → 44px、状态栏 28px → 26px，品牌色降级为点/线；7 套主题精简为 4 套高对比且各自拥有独立品牌色的精选主题，老配置由 `UI_SHELL_VERSION = 3` 静默迁移（详见 §5.5、§5.7）。
+- **快速启动欢迎页（`WelcomeQuickLaunch.tsx`）**：空工作区展示最近 8 条连接（`useMemo` 缓存）、新建 SSH、新建串口（传 `{ kind: 'serial' }` 直达串口表单）、设备发现与命令中心入口。
+- **非破坏性 Zen 专注模式（`zenState.ts` + `layoutStore.ts`）**：`Ctrl+Shift+Z` 或标题栏按钮一键收起左右双栏并记录切换前的 `zenSnapshot`，再次切换按快照精准还原；Zen 期间任何手动展栏入口（侧栏开关、命令栏开关、活动栏 `setActivityView` / `toggleActivityView`）统一经 `panePatch` 自动退出 Zen 并清快照，杜绝半开残留态。
+
 ## 6. 安全设计
 
 
@@ -491,13 +538,16 @@ v1.6.1 收敛成：
 | 凭据存储 | safeStorage 加密后写入 `secrets.json`；系统加密不可用时仅内存持有 |
 | 主机指纹 | 首次连接记录 OpenSSH 风格 `SHA256:base64` 指纹；严格模式下指纹变化直接拒绝，并把「记录值 / 设备当前值」一并带出来。更新入口三处（设置 / 连接编辑器 / 终端报错层），统一走「探测 → 展示旧新对比 → 用户确认 → 写回」，不静默信任（§5.14） |
 | 指纹记录兼容 | 老记录可能是历史错误格式 `SHA256:<64位hex>`；校验时两种格式都比对，命中一次即静默迁移成标准格式，不需要用户手工清理 |
-| 危险命令 | 命令级标记 + 全局关键词双保险，发送前强制二次确认 |
+| 老旧 SSH 算法隔离 | 默认关闭，仅按连接显式开启；开启后现代算法仍严格排在最前，老算法仅作兜底追加末尾（§5.20） |
+| 危险命令与粘贴防误触 | 命令级标记 + 全局关键词双保险；多行粘贴或含回车危险命令强制弹出可编辑确认框，危险词随编辑实时重算（§5.21） |
 | 复制连接 | 刻意不复制凭据 |
-| IPC 边界 | 通道白名单 + 统一错误包装，渲染层无任意 IPC 能力 |
-| 更新包完整性 | 走 `electron-updater` 内建的 sha512 校验（`latest.yml` 里的 hash）+ `allowDowngrade = false` 防降级；更新元数据来自 `resources/app-update.yml` 固定的 owner/repo，不接受运行时传入的任意 URL |
-| 更新链路只读观察 | 目录跟随只解析 xterm 收到的字节流，**不向 PTY 注入 hook**、不改远端环境（否则会在终端留可见回显、污染用户 shell） |
-| 串口设备身份 | 存了 USB 身份（serialNumber / pnpId）却对不上时**不退化到 COM 号**，宁可报错让用户重选 —— 避免把命令敲到占用了同一 COM 号的其他设备上（§5.17） |
-| 串口 DTR | 自动复位默认关；串口连接隐藏「测试连接」，避免反复开关端口触发 DTR 把设备重启 |
+| IPC 边界与路径白名单 | 173 个通道白名单 + 统一错误包装；文件/外部客户端导入路径经主进程 `pathGuard` 校验对话框签发路径，渲染层无任意磁盘读取权限 |
+| Shell 降级防误删 | `shellFs` 所有路径经 `shQuote` 单引号转义；删除操作经 `assertSafeRemovePath` 禁止空路径、`/` 与 `.` / `..` |
+| 本地隧道打开白名单 | `buildSafeLocalTunnelUrl` 仅允许 `http://127.0.0.1:<port>` 形式打开系统浏览器，杜绝任意 scheme 注入 |
+| 零遥测隐私守卫 | 无任何统计/崩溃上报 SDK、`crashReporter` 出现 0 次、出站域名仅限白名单更新主机，由 `npm run verify:privacy` 硬门禁把关 |
+| 更新包完整性 | `electron-updater` 内建 sha512 校验 + `allowDowngrade = false`；发布线 Gitee/第三方加速站回退时额外比对官方一跳源 `sha512` 一致才允许下载 |
+| 目录跟随只读观察 | 只解析 xterm 字节流，**不向 PTY 注入 hook**、不改远端环境 |
+| 串口设备身份与 DTR | 存了 USB 身份（serialNumber / pnpId）却对不上时**不退化到 COM 号**；DTR 自动复位默认关；BREAK 释放无条件执行且不碰 DTR/RTS（§5.17） |
 
 ## 7. 分期路线
 
@@ -526,13 +576,50 @@ v1.6.1 收敛成：
 | **P4-h**（v1.6.1~v1.6.3） | **可维护性专项**：IPC 按域拆分（§5.15）、上传/下载链路收敛进 store（§5.16）、引入 ESLint、拆掉最后两个上帝文件（`repository` 764→70、`SettingsPanel` 959→118） | ✅ 完成 |
 | **P5-a**（v1.9.0） | **命令栏排布**：列数跟栏宽走（§5.6）、卡片去图标与命令行、自绘提示浮层、发布链路补文档同步门禁 | ✅ 完成 |
 | **P5-b**（v2.0.0） | **串口控制台**：传输层抽象（`Transport`）、串口会话、按 USB 身份认设备、拔插自动恢复、命令「适用环境」标记、串口连接导出导入（§5.17） | ✅ 完成 |
-| **待办** | 插件系统（JS 脚本扩展命令/诊断/报告模板） | ⏳ 未开始 |
+| **P5-c**（v2.1.0–v2.2.1） | **客户端手感与传输可靠化**：设计 token / 虚拟滚动 / 骨架屏 / WebGL 自愈降级 / 输出高亮 / 任务通知 / 嵌套分屏 / `trzsz` / 串口在线改波特率与 BREAK / 内置 TFTP 与 U-Boot 引导 / 断线自动续传与传输记录面板（§5.18） | ✅ 完成 |
+| **P6**（v2.3.0–v2.3.2） | **动效、远程编辑器与更新通道**：交互动效层与 i18n 基座 / 零遥测隐私断言 / 智能 `Ctrl+C/V` 与鼠标手感 / 自适应合帧 / 零依赖内置远程编辑器 / 发布线 Gitee 国内免代理自动更新通道（§5.19） | ✅ 完成 |
+| **P7**（v2.4.0） | **嵌入式 SSH 韧性 + 终端效率迁移 + 精密仪器风外壳**：老旧算法兼容与一键重连、无 SFTP 自动降级 `shellFs`、隧道自愈/自启与远端端口发现、拖放直传 `cwd`、多行粘贴安全确认、5 家外部客户端导入、分屏同步输入与未读点、36px 单色外壳、7→4 主题精简、快速启动欢迎页与 Zen 专注模式（§5.20–§5.22） | ✅ 完成 |
+| **待办** | 插件系统（JS 脚本扩展命令/诊断/报告模板）；串口共享流文件浏览（如需，基于 `shellFs` 另做显式挂载协议） | ⏳ 未开始 |
 | **已有独立安装包，暂无自动更新** | macOS（dmg）/ Linux（AppImage）不出更新元数据，`electron-updater` 当前只接了 Windows NSIS | ⏳ 未开始 |
-| **已确认不做** | 安全与审计（除已实现的主机指纹/凭据加密/危险命令确认外不再扩展)、工单集成、VNC/RDP 入口、网络诊断工具、命令栏浮动形态、Gitee 更新源（理由见 §9） | ⏭️ 用户明确不需要 |
+| **已确认不做** | AI 日志分析、遥测上报、工单集成、VNC/RDP 入口、网络诊断工具、命令栏浮动形态 | ⏭️ 用户明确不需要 |
 
-> P3-a 附注：新增通用能力 `window.api.exec.run(sessionId, cmd, timeout)`（任意面板可执行一次性命令）；连接编辑器状态上收到 `uiStore`，支持任意面板带预设呼出（设备发现 →「新建连接」即用此能力）。
+> P3-a 附注：新增通用能力 `window.api.exec.run(sessionId, cmd, timeout)`（任意面板可执行一次性命令）；连接编辑器状态上收到 `uiStore`，支持任意面板带预设呼出（设备发现 →「新建连接」、欢迎页 →「新建串口」均用此能力）。
 
 ### 7.0 版本更新记录
+
+#### v2.4.1（2026-11-25）
+
+| 分类 | 内容 |
+|---|---|
+| **远程编辑器塌陷修复** | `RemoteEditorDialog.tsx` 编辑区移除 `modal-body` 改用 `flex h-[56vh] min-h-0 overflow-hidden`，移除 `<textarea>` 的 `h-full` 改由 Flexbox `stretch` 与行号栏等高对齐，短/长文件及展开查找替换条均不再塌陷；补齐 `verify-remote-editor.cjs` 与 `e2e-ui-sftp.cjs` 渲染几何断言 |
+| **终端光标闪烁修复** | `styles/index.css` 将 `.motion-off *` 改为 `.motion-off *:not(.xterm-cursor-blink)`，开启系统「减少动态效果」或关闭界面动效时不再误杀 xterm DOM 光标闪烁动画；`verify-motion.cjs` 补静态与真 Electron 断言 |
+| **解压/便携版白图标修复** | 新增 `src/main/window/appUserModelId.ts`：打包版仅当开始菜单存在 AUMID、目标 exe 与图标均匹配的 `.lnk`（NSIS 安装版）时才绑定固定 `AppUserModelID`，解压 zip 与便携版直接沿用 exe 多尺寸图标不再退化白图标；新增 `verify-taskbar-aumid.cjs`（22 项） |
+| **发布线 Gitee 同步优化** | 发布线取消海外 GitHub Actions CI 跨境上传 Gitee（避免 600s 超时），改由本机拉取 GitHub 同字节正式产物直传 `scripts/sync-gitee-release.ps1`；同步更新主界面门面图 `docs/ui/overview.png` |
+
+#### v2.4.0（2026-11-24）
+
+| 分类 | 内容 |
+|---|---|
+| **P0 嵌入式 SSH 韧性** | ① 每连接老旧算法兼容（运行时动态构建 `LEGACY_ALGORITHMS`，兼容 Electron BoringSSL 无 `chacha20`/`modp2` 与不同 `ssh2` 原生绑定）+ 报错浮层一键启用并重连 + 指纹探测自动回退；② 无 `sftp-server` 经错误判别 + `echo` 探针双确认自动降级 `shellFs.ts`（文件树/双栏/远程编辑/固件/备份全可用，顶部显示 `ShellModeBadge`）；③ 隧道断线挂起恢复、`manuallyStopped` 记忆、`autoStart` 随连自启、BusyBox 远端监听端口探测（`remotePorts.ts`）与临时转发幂等去重/原地不断流过户 |
+| **P1 终端效率与迁移** | ① OS 文件拖入终端默认直传当前 `cwd`（`terminalDrop.ts` 三级计数兼容 Windows `dragover` 保护模式，`Alt`/设置可切 `trzsz`）；② 多行/危险粘贴可编辑预览框（`pasteGuard.ts` + `PasteConfirmDialog.tsx`，剥离 Markdown 围栏、危险词实时联动、IME 守卫）；③ `externalImport.ts` 支持 `~/.ssh/config`、MobaXterm、Xshell（UTF-16LE）、SecureCRT（十六进制端口）与 FinalShell 一键预览导入；④ 分屏顶部流式 `h-7` 同步输入条（`splitStore.syncByTab`）与后台标签 6px 未读输出圆点（`tabUnread.ts`） |
+| **P2 单色外壳与专注台** | ① 取消 44px 绿标题栏，收敛为 36px 中性顶栏 + 44px 窄活动栏 + 26px 等宽状态栏，品牌色降级为点/线；② 7 套主题精简为 4 套高对比主题（精密默认 / Gruvbox / Solarized / Dracula，8 组变体全部 WCAG ≥ 4.5:1），`themeCompat.ts` + `UI_SHELL_VERSION = 3` 静默迁移退役 ID 且不动明暗偏好；③ 空工作区升级为 `WelcomeQuickLaunch` 快速启动欢迎页；④ 新增 `Ctrl+Shift+Z` 非破坏性 Zen 专注模式（所有展栏入口走 `panePatch` 自动退 Zen） |
+| **双线同步与验证** | 升级线（Electron 45 / TW4）与发布线（Electron 33 / TW3，保留 v2.3.2 Gitee 通道）均已发版 `v2.4.0`；新增 7 套专项回归（`verify-legacy-algo` / `verify-shellfs` 165 / `verify-tunnel-resilience` 143 / `verify-paste-guard` 49 / `verify-external-import` 55 / `verify-split-sync` 29 / `verify-p2-theme-zen`），修复 `_osclick.ps1` 句柄枚举避开 UAC 50×50 覆盖窗与 `verify-batch-exec` 的 `ssh2` ed25519 密钥偶发失败 |
+
+#### v2.3.0–v2.3.2（2026-11-19 ~ 2026-11-23）
+
+| 分类 | 内容 |
+|---|---|
+| **v2.3.0 动效与基座** | 卡片悬停轻抬/按下回弹、命令墙 12ms 错峰入场、连接行左品牌竖条、分组箭头旋转、设置一键静止动效（跟随系统偏好）；抽离 `i18n/index.ts` 外壳字典基座；新增 `verify-privacy.cjs` 零遥测守卫 |
+| **v2.3.1 终端与编辑器** | 终端默认改用智能 `Ctrl+C`/`Ctrl+V`、可选选中即复制与右键粘贴、单终端 `Ctrl+滚轮` 缩放、导出终端缓冲 `.txt`；`adaptiveFlush.ts` 8–32ms 自适应合帧；零依赖升级 `RemoteEditorDialog`（行号、`Ctrl+F/H`、`Ctrl+S` 原地保存、编码/行列条、`Tab` 缩进、未保存提醒） |
+| **v2.3.2 更新通道（发布线）** | 新增 `updaterChannel.ts` 与 `scripts/sync-gitee-release.ps1`：国内免代理默认走 Gitee 公开 API + `generic` provider（关闭差量下载规避 200 Range）并按 `Gitee → GitHub → gh-proxy.com → ghfast.top` 自动回退，第三方加速站回退强制校验官方 `sha512` |
+
+#### v2.1.0–v2.2.1（2026-11-14 ~ 2026-11-18）
+
+| 分类 | 内容 |
+|---|---|
+| **v2.1.x 客户端手感** | 设计 token + 虚拟列表 + 骨架屏 + WebGL 自愈降级（修复 canvas 字体前导空格 bug）+ 行级输出高亮 + 任务完成通知与按连接静音 + 嵌套分屏树（最多 4 格）+ `trzsz` 文件传输 + 标签栏右键菜单 Portal 脱离 drag-region 及 OS 级点击回归 |
+| **v2.2.0 串口刷机闭环** | 串口在线改波特率（`port.update()` 不复位 DTR）、发 BREAK、入站裸 LF 补 CRLF、`cast` + 纯文本 `.log` 双路录制、内置 RFC 1350 TFTP 服务端与 U-Boot 刷机引导条 |
+| **v2.2.1 传输加固** | ZMODEM 续传防卡死、SFTP 断线 90s 自动续传（64KB 尾指纹校验、修复并发续传零洞）、远程编辑原子写防损坏、新增传输记录面板（`TransferPanel`） |
 
 #### v2.0.0（2026-11-12）
 
@@ -560,7 +647,7 @@ v1.6.1 收敛成：
 | **量化** | 129 条命令里被截断的从 **93 条**降到 **0~1 条**；名字可用宽度 54px → 70~81px；每行 4.9 字单行 → 7 字两行 |
 | **范围** | 只改右侧命令栏。Ctrl+K 命令中心与底部横排（`layout=horizontal`）保持原样 |
 | **回归** | 新增 `verify-command-wall.cjs`（37 项，断言刻意选「旧实现必红」的判据，如四列时下键步长必须是 4 而非写死的 3）与 `perf-command-wall.cjs`（20 项，真实应用 + 完整 IPC，渲染真实 129 条命令，340 / 400 / 600 三档宽度验列数与等高）。`verify-layout.cjs` 默认栏宽快照跟到 400 |
-| **发布链路** | 新增 `verify-docs-sync.cjs`（`npm run test:docs`）：README `Current:` / README.zh-CN `当前版本：` / CHANGELOG 本版条目 / 两份 README「最近更新」**首条**必须是本版且正文 ≥ 60 字符 / CHANGELOG 的 [<ver>] 段能抽出 ≥ 200 字符的 Release 正文（`scripts/release-notes.cjs`，仓库内已无 `release-notes-v*.md`）。起因：v1.9.0 发出后 GitHub 上 README 还写 v1.8.1、CHANGELOG 没有 1.9.0 —— 发版日志有 CI 硬门禁所以从没漏过，README / CHANGELOG 只是 checklist 里的 checkbox，等于没有 |
+| **发布链路** | 新增 `verify-docs-sync.cjs`（`npm run test:docs`）：README `Current:` / README.zh-CN `当前版本：` / CHANGELOG 本版条目 / 两份 README「最近更新」**首条**必须是本版且正文 ≥ 60 字符 / CHANGELOG 本版条目 ≥ 200 字符（Release 正文发版时从这里现抽）。起因：v1.9.0 发出后 GitHub 上 README 还写 v1.8.1、CHANGELOG 没有 1.9.0 —— 发版日志有 CI 硬门禁所以从没漏过，README / CHANGELOG 只是 checklist 里的 checkbox，等于没有 |
 
 #### v1.6.3（2026-10-29）
 
@@ -777,15 +864,17 @@ env -u ELECTRON_RUN_AS_NODE ./node_modules/electron/dist/electron.exe . --smoke 
 - **串口会话只提供终端**：指标、诊断、固件、备份、批量、SFTP、隧道全部只对 SSH 会话开放 —— 它们都建立在「远端跑一条命令」上，串口没有 `client`；
 - **串口换行只影响发送**：`newline` 配置作用于 `write()`，粘贴多行内容仍按原样发送；HEX 模式不存在，所以没有「不转换」的第三种选择；
 - **串口设备身份可能缺失**：廉价 CH340 的 `pnpId` 只有 VID/PID，同型号两台无法区分；Linux 的 `/dev/ttyUSB*` 常常完全没有身份字段，此时只能按 COM 号认设备，拔插后可能连到别的设备上（界面不会替你兜底）；
-- 快捷键已可自定义（含 Ctrl+K 命令中心），默认组合：Ctrl+N 新建连接 / Ctrl+K 命令中心 / Ctrl+, 设置 / Ctrl+B 折叠侧栏 / Ctrl+Alt+B 折叠命令栏 / Ctrl+Tab 切换标签 / Ctrl+Shift+W 关标签 / Ctrl+Shift+C/V 复制粘贴 / Ctrl+F 终端搜索；
-- 大量输出（如 `cat` 大文件）时合帧窗口可考虑自适应放大（当前固定 8ms）；
+- 快捷键已可自定义（含 `Ctrl+K` 命令中心与作用域感知冲突检测），默认组合：`Ctrl+N` 新建连接 / `Ctrl+K` 命令中心 / `Ctrl+,` 设置 / `Ctrl+B` 折叠侧栏 / `Ctrl+Alt+B` 折叠命令栏 / `Ctrl+Shift+Z` Zen 专注模式 / `Ctrl+Tab` 切换标签 / `Ctrl+Shift+W` 关标签 / `Ctrl+C`/`Ctrl+V` 智能复制粘贴（v2.3.1 起取代 `Ctrl+Shift+C/V`）/ `Ctrl+F` 终端搜索 / `Ctrl+滚轮` 与 `Ctrl+0` 单终端临时缩放；
+- 大量输出合帧窗口已在 v2.3.1 升级为自适应（`adaptiveFlush.ts`：常规 8ms → 洪峰 20/32ms + 256KB 强刷上限，空闲 80ms 回落 8ms）；
+- **Electron BoringSSL 老算法边界（v2.4.0 实测）**：Electron 内置 BoringSSL 不支持 OpenSSL 的 `chacha20` cipher 与 `modp2`（`diffie-hellman-group1-sha1`）。`connectConfig.ts` 已在加载期按当前运行时的 `ssh2` / `node:crypto` 实测能力动态过滤 `LEGACY_ALGORITHMS`，确保绝不同步抛出 `Unsupported algorithm` 或在协商时崩于 `Unknown DH group`；只支持 `group1-sha1` 且不支持 `group14-sha1` / `group-exchange-sha1` 的极老设备在 BoringSSL 下仍无法握手；
+- **外部客户端加密密码不破解（v2.4.0）**：MobaXterm / Xshell / SecureCRT / FinalShell 导出文件里由各客户端加密的密码不做逆向解密，导入后仅搬运地址、端口、用户名、私钥与分组，首次连接需手输一次密码；
 - 中英同义表 `SYNONYMS` 是手工维护的 22 组，新增命令分组时不会自动扩展 —— 需要新词时改表并跑 `scripts/verify-synonyms.cjs`；
 - 连接分组拖拽排序已实现（v1.3.0），支持分组间拖放和组内排序，空分组会在下次加载时保留；
 - 断线自动重连（v1.3.0）使用指数退避策略（1s / 2s / 4s / 8s / 16s 上限），最多尝试 5 次后需要用户手动重连；错误日志在终端内可见。
 - **`<button>` 里的 column flex 一定要钉宽度**（v1.4.3/v1.4.4 连续踩两次）：浏览器给 `<button>` 的 UA 样式含 `align-items: flex-start`，交叉轴子项宽度由内容决定，`truncate` 的 `overflow: hidden` 拿不到受约束宽度、不参与收缩，长文本直接顶出边界。只加 `min-width: 0` 无效，必须 `w-full min-w-0` 一起上。新增任何「按钮内多行文本」结构都要复查这一条；
 - **分组/枚举类输入不要用原生 `<datalist>`**（v1.4.4）：datalist 会拿输入框当前值做子串过滤，预填默认值时用户几乎看不到其他候选，且无关闭开关。统一用 `Combobox`（`src/renderer/src/components/ui/index.tsx`），浮层走 `fixed` + 实测坐标定位，避免被 modal 的 `overflow-hidden` 裁切。
 - **自动更新只对 NSIS 安装版生效**（v1.5.0）：portable 与 zip 解压版没有安装上下文，`electron-updater` 无法自我替换，`isUpdateVisible()` 直接不显示更新入口，只能靠安装包覆盖升级；
-- **Gitee 作为更新源不可用**（评估后搁置，用户 2026-10-26 定「先暂时不搞」）：`electron-updater` 的 `providerFactory.js` 无 gitee 分支（写 `publish.provider: gitee` 打包期直接抛 `Unsupported provider: gitee`）；Gitee Release 附件 CDN 对 `Range` 返回 **200 全量**而非 206，`isUrlProbablySupportMultiRangeRequests(url) = !url.includes('s3.amazonaws.com')` 会把 gitee URL 判成支持多 Range，导致差分下载必失败并回落全量重下（且无断点续传）；附件下载地址是带 `token` / `ts` 的时效签名，不能固化进 `latest.yml`。唯一干净通道是 Gitee raw 路径（实测 206 + `Accept-Ranges: bytes`），但 82MB exe 进 git 历史不可接受。当前发布链路仍是 `publish.provider: github` / owner `yanxici` / repo `ssh-workbench`；
+- **Gitee 国内更新通道（v2.3.2 / v2.4.1 勘误：已在发布线落地）**：早期评估曾因 `electron-updater` 无内置 gitee provider 且 Gitee CDN 对 Range 返回 200 全量而搁置；发布线 v2.3.2 通过 `updaterChannel.ts` 改走「Gitee 公开 API 解析最新 tag + `generic` provider + `disableDifferentialDownload = true` 关闭差量 + `latest.yml` 压轴上传 + 官方 `sha512` 校验」成功打通，并支持自动回退 GitHub 与加速站。由于海外 GitHub runner 跨境上传 80MB 安装包至 Gitee 易触发 600s 超时，v2.4.1 起发布线取消 CI 内跨境上传，改为发版后在国内本机拉取 GitHub 同字节正式产物运行 `scripts/sync-gitee-release.ps1` 直传；
 - **文件面板跟随有边界**（v1.5.1）：只认单行 `cd` / `pushd` 与 OSC 7；`alias` 改写的 `cd`、环境里带函数的 `cd`、以及远端未配 OSC 7 时的脚本内 `cd` 都跟不到，此时面板停在上一个目录。`Ctrl-U` / `Ctrl-W` / 方向键等编辑后整行被保守丢弃，也是「宁可不动，不跳错」的取舍；
 - **目录缓存的失效时机**（v1.5.1）：TTL 到期、显式 `refresh()`、会话关闭、以及上传/删除/改名/新建等写操作 —— 若是**远端其它人**改了目录内容，面板要等 TTL 到期才看到。
 - **lint 覆盖的是 `src/`，不是全部**（v1.6.2）：`npm run lint` 只跑 `src/**/*.{ts,tsx}`；`scripts/*.cjs` 要单独 `npm run lint:scripts`（`npm run lint:all` 一次跑完）。`npm run check` 只做 typecheck + src lint。
@@ -796,54 +885,34 @@ env -u ELECTRON_RUN_AS_NODE ./node_modules/electron/dist/electron.exe . --smoke 
 
 ## 10. 开发自检
 
-纯函数逻辑用 esbuild 打包成单文件后由 node 直接断言，不引入测试框架：
+纯函数逻辑用 esbuild 打包成单文件后由 node 直接断言，不引入测试框架；**全量一键运行器**为 `node scripts/run-all-verify.cjs`（`npm run test:verify`，当前纳入 **93（升级线）/ 95（发布线）** 套活跃回归脚本，已接入 CI `Build and Release` 硬门禁）：
 
 ```bash
-node scripts/verify-command-search.cjs   # 模糊匹配 / 字段加权 / 排序 / 范围索引 / 适用环境过滤（57 项）
-node scripts/verify-synonyms.cjs         # 中英同义扩展 + 别名检索回归（28 项）
-node scripts/verify-layout.cjs           # 双栏宽度夹取 / 拖拽换算 / 方向 / 升级兼容（77 项）
-node scripts/verify-group-order.cjs      # 分组顺序与拖拽落点（18 项）
-node scripts/verify-theme.cjs            # 配色主题（P4-a）
-node scripts/verify-transfer-progress.cjs # SFTP 进度 / 暂停续传 / 取消（P4-b）
-node scripts/verify-shellcwd.cjs         # cd / pushd / ~ / 引号 / bracketed paste / 编辑丢弃 + OSC 7（v1.5.1）
-node scripts/verify-cwdstore.cjs         # cwd 按 sessionId 隔离、会话关闭清理（v1.5.1）
-node scripts/verify-cwdfollow.cjs        # 跟随决策：初始 Tab / 序号消费 / 关开关与断线 / 重开补跳（v1.5.1 修复）
-node scripts/verify-dirloader.cjs        # 同帧请求合并、按会话分段、切会话丢弃（v1.5.1）
-node scripts/verify-dircache.cjs         # TTL 缓存 / stale-while-revalidate / 写操作失效（v1.5.1）
-node scripts/verify-upload-folder.cjs    # 上传文件夹：保留目录名 / 铺平 / 空目录 / 扫描统计（v1.6.0，22 项）
-node scripts/verify-hostkey.cjs          # 主机指纹格式 / 旧格式兼容 / 不误判（v1.6.0，14 项）
-node scripts/verify-repository-split.cjs # 数据层行为：凭据三态 / 分组默认 / 历史上限 / 超时钳制（v1.6.3，48 项）
-node scripts/verify-release-notes.cjs    # 发版日志链路：CI 不得用 --notes 占位符 / 必须 --notes-file / 本版日志长度（v1.8.1）
-node scripts/verify-docs-sync.cjs        # 文档同步：README 当前版本 / CHANGELOG 本版条目 / 最近更新首条（v1.9.0，6 项）
-node scripts/verify-command-wall.cjs     # 命令栏列数跟栏宽走 / 卡片宽度 / 方向键步长（v1.9.0，37 项）
-node scripts/perf-command-wall.cjs       # 真实 129 条命令渲染：三档宽度列数 / 全部等高 40px / 截断 ≤1 条（v1.9.0，20 项）
-node scripts/verify-serial.cjs           # 串口链路：换行归一 / GBK / DTR 只动 DTR / 拔线等待 → 插回恢复（v2.0.0，50 项）
-node scripts/verify-serial-native.cjs    # 原生模块能否在当前 Node ABI 下加载（v2.0.0）
-node scripts/verify-conn-transfer.cjs    # 导出导入：凭据 / 私钥去重 / 跳板重映射 / 串口 USB 身份 / 3000 条规模（v2.0.0 补串口用例）
-for f in scripts/verify-zmodem*.cjs; do node "$f"; done  # ZMODEM 协议 / 解码 / 渲染层 / 端到端（P4-c，4 个脚本）
+npm run check                            # typecheck:node + typecheck:web + eslint（提交前必跑）
+npm run test:verify                      # 一键跑全量 verify-*.cjs（支持 --only=<关键词> / --list）
+npm run test:p0                          # v2.4.0 P0 三件套：legacy-algo / shellfs(165) / tunnel-resilience(143)
+npm run verify:privacy                   # 零遥测 / 零 crashReporter / 出站域名白名单
+npm run verify:i18n                      # 中文硬编码行棘轮守卫
+node scripts/verify-paste-guard.cjs      # 拖放计数(含 Windows dragover 保护模式) + 粘贴预览与围栏剥离(49 项)
+node scripts/verify-external-import.cjs  # 5 家外部客户端导入解析与去重(55 项)
+node scripts/verify-split-sync.cjs       # 分屏同步输入与后台标签未读点(29 项)
+node scripts/verify-p2-theme-zen.cjs     # 4 套主题 WCAG 4.5:1 / v3 静默迁移 / Zen 模式状态机
+node scripts/verify-taskbar-aumid.cjs    # Windows 解压版/便携版条件绑定 AppUserModelID（22 项）
+node scripts/verify-ime-guard.cjs        # Enter/Ctrl+Enter IME 组合态守卫棘轮（16 处全覆盖）
+node scripts/verify-docs-sync.cjs        # README / CHANGELOG 版本号与最近更新同步（6 项）
+node scripts/verify-updater-channel.cjs  # 发布线 Gitee/GitHub 多通道更新与 sha512 校验（34 项）
+node scripts/e2e-ui-sftp.cjs             # 真 Electron CDP UI 级 SFTP 全流程 E2E（20 项）
+node scripts/verify-tabbar-os.cjs        # 标题栏/标签栏 OS 级真机鼠标点击回归（EnumWindows 精准取主窗 HWND）
+node scripts/verify-tabmenu-os.cjs       # 标签右键菜单 OS 级真机点击回归
 ```
 
-需要真实 Electron 主进程才能跑的（会拉起 `ipcMain`）：
+需要真实 Electron 主进程才能跑的代表脚本（会拉起 `ipcMain`）：
 
 ```bash
-npm run test:ipc          # 141 个通道三层对账：静态注册点 / 运行时注册数 / 失败包装与越权拒绝（v1.6.1）
-npx electron scripts/perf-new-features.cjs   # 新功能链路：通道注册 + 目录扫描 + 指纹探测失败路径（v1.6.0）
+npm run test:ipc          # 173 个通道三层对账：静态注册点 / 运行时注册数 / 失败包装与越权拒绝
 ```
 
-打包产物核对（先起 exe 带 CDP 端口，再跑下面这些）：
-
-```bash
-node scripts/probe-packaged-features.cjs <port>  # preload 新 API 是否真进包 / IPC 通道连通 / 设置分区渲染
-node scripts/probe-ipc-domains.cjs <port>        # 17 个 IPC 域各挑一个代表通道
-node scripts/probe-settings-sections.cjs <port>  # 设置面板 10 个分区逐个展开，确认不是空壳
-```
-
-耗时类基线（不是断言，用来对比回归）：
-
-```bash
-node scripts/stress-cwd.cjs      # 目录批量请求 IPC 次数 + shellCwd 解析吞吐（139 万行/秒）
-npm run test:stress:e2e          # 真实 Electron：30 次连续目录读取 中位 17.1ms / p95 30.0ms / 61.5 FPS
-```
+其余历史专项回归（`verify-command-search`、`verify-synonyms`、`verify-layout`、`verify-group-order`、`verify-transfer-progress`、`verify-shellcwd/cwdstore/cwdfollow`、`verify-dirloader/dircache`、`verify-upload-folder`、`verify-hostkey`、`verify-repository-split`、`verify-release-notes`、`verify-command-wall`、`verify-serial`、`verify-session-log`、`verify-conn-transfer`、`verify-highlight*`、`verify-notify*`、`verify-split-e2e`、`verify-trzsz*`、`verify-terminal-ux`、`verify-adaptive-flush`、`verify-remote-editor`、`verify-design-tokens`、`verify-motion`、`verify-zmodem*`）均由 `run-all-verify.cjs` 自动调度。
 
 发版前另有一条硬性检查（Windows 专有，见 §8.1）：
 
@@ -862,25 +931,25 @@ env -u ELECTRON_RUN_AS_NODE ./node_modules/electron/dist/electron.exe . \
 
 除截图外还做 **DOM 级断言**（截图看不出「是不是列表」，而这正是用户抱怨的点）：
 
-| 字段 | 断言内容 | 当前基线 |
+| 字段 | 断言内容 | 当前基线（v2.4.0） |
 |---|---|---|
-| `shellProbe` | 外壳五段尺寸、品牌绿与主题实际落地值 | `titlebar.h: 44`、`activitybar.w: 48`、`sidebar.w: 280`、`statusbar.h: 28`、`main.w: 572`、`titlebarBg: rgb(39, 201, 63)`、`brandBgCount: 3`、`themeClass: 'light'`、`appBg: '255 255 255'`、`sidebarBg: 'rgb(248, 249, 250)'` |
-| `visualProbe` | 视觉硬约束的运行时证据（不靠人眼看截图） | `blurCount: 0`、`longTransitionCount: 0`、`transitionAllCount: 0`、`animatedCount: 1`（仅 `slide-up`） |
-| `switchProbe` | 切到「命令历史」后侧栏仍在、主区宽度正确、面板头 32px | `asidePresent: true`、`asideWidth: 280`、`pane: 'history'`、`headH: 32`、`railPresent: true`、`railWidth: 380`、`cols: 3` |
-| `collapseProbe` | 再点同一项 = 收起侧栏，主区撑满 | `asidePresent: false`、`mainWidth: 852`、`railWidth: 380` |
-| `filesProbe` | 文件面板 Tab / 引导态 / 面板头高 / 节点数 | `tabs: 2`、`hasHead: true`、`headH: 32`、`hasGuide: true`、`hasConnectCta: true`、`nodeCount: 22`（只统计 `[data-pane="files"]` 内，keep-alive 后侧栏还挂着另外两个面板） |
-| `wallProbe` | 无搜索词时命令中心是分组网格而非列表 | `gridCount: 10`、`cols: 3`、`cardCount: 126`、`groupCount: 10` |
+| `shellProbe` | 外壳五段尺寸、单色精密外壳与主题实际落地值 | `titlebar.h: 36`、`activitybar.w: 44`、`sidebar.w: 280`、`statusbar.h: 26`、`main.w: 555`、`titlebarIsBrand: false`、`brandBgCount: 2`、`themeClass: 'light motion-off'`、`appBg: '255 255 255'`、`sidebarBg: 'rgb(248, 249, 250)'` |
+| `visualProbe` | 视觉硬约束的运行时证据（不靠人眼看截图） | `blurCount: 0`、`longTransitionCount: 0`、`transitionAllCount: 0`、`animatedCount: 0`（`.motion-off` 时） |
+| `switchProbe` | 切到「命令历史」后侧栏仍在、主区宽度正确、面板头 32px | `asidePresent: true`、`asideWidth: 280`、`pane: 'history'`、`headH: 32`、`railPresent: true`、`railWidth: 400`、`cols: 4` |
+| `collapseProbe` | 再点同一项 = 收起侧栏，主区撑满 | `asidePresent: false`、`mainWidth: 835`、`railWidth: 400` |
+| `filesProbe` | 文件面板 Tab / 引导态 / 面板头高 / 节点数 | `tabs: 2`、`hasHead: true`、`headH: 32`、`hasGuide: true`、`hasConnectCta: true` |
+| `wallProbe` | 无搜索词时命令中心是分组网格而非列表 | `gridCount: 10`、`cols: 3`、`groupCount: 10` |
 | `listProbe` | 输入关键字后退回列表 | `gridCount: 0`、`rowCount: 3` |
-| `panelWallProbe` | 右侧命令栏常驻、按钮墙三列 | `found: true`、`railPresent: true`、`railWidth: 380`、`gridCount: 10`、`cols: 3`、`cardCount: 126` |
-| `wallColsProbe` | 拖宽命令栏 / 复位时**列数恒为 3**（可变列数会让「第三行右边那个」的空间记忆失效） | `railDefault: {railWidth: 380, mainWidth: 572, cols: 3}`、`railWide: {railWidth: 560, mainWidth: 392, cols: 3}`、`railReset: {railWidth: 380, mainWidth: 572, cols: 3}` |
-| `railToggleProbe` | 活动栏底部开关收起 / 展开命令栏 | `railCollapsed: {railPresent: false, mainWidth: 952}`、`railExpanded: {railPresent: true, railWidth: 380, cols: 3, cardCount: 126}` |
+| `panelWallProbe` | 右侧命令栏常驻、默认 400px 宽四列 | `found: true`、`railPresent: true`、`railWidth: 400`、`cols: 4` |
+| `wallColsProbe` | 拖宽命令栏 / 复位时列数随宽度自适应（`<360` 三列、`<480` 四列、`>=480` 五列） | `railDefault: {railWidth: 400, cols: 4}`、`railWide: {railWidth: 580, cols: 5}`、`railReset: {railWidth: 400, cols: 4}` |
+| `railToggleProbe` | 活动栏底部开关收起 / 展开命令栏 | `railCollapsed: {railPresent: false, mainWidth: 955}`、`railExpanded: {railPresent: true, railWidth: 400, cols: 4}` |
 | `resizerProbe` | 分隔条真实拖拽 → 提交 → 双击复位 | `beforeDrag: 280` → `afterDrag: 370` → `afterReset: 280` |
-| `iconProbe` | 窗口图标路径能解析、文件非空，**且 ico 里含 16/24/32 小尺寸** | 开发：`{iconBytes: 43888, icoSizes: [256,128,64,48,32,24,16], smallSizesOk: true, packaged: false}`；打包：同上但 `fromResources: true`、`packaged: true` |
-| `tabStripProbe` | 标签栏容器必须满高（`h-full`），否则绿栏上下各留一条绿边，标题栏被切成三条色带 | `barH: 44`、`stripH: 44`、`stripGapTop: 0`、`tabCount: 3`、`tabH: 44`、`tabGapTop: 0` |
-| `stressProbe` | 压测：45 个动作（Ctrl+K 开关 ×30、活动栏切视图 ×15）期间的帧间隔 | `frames: 124~141`、`avgFrameMs: 19.2~21.9`、`maxFrameMs: 78~111`、`longFrames: 4~10`、`over100: 0~2`、`actions: 45`、`errors: 0`、`valid: true` |
-| `perfProbe` | DOM 规模不随连接数爆掉 | `totalNodes: 395`、`sidebarNodes: 192`、`sidebarRows: 12` |
-| `expandProbe` | 展开 2917 条的 XCMD 组后仍受分页约束 | `rowsAfterExpand: 72`（12 默认组 + 60 分页） |
-| `commandCenterOpenMs` | Ctrl+K 到浮层可见的轮询实测耗时 | `13 ~ 200 ms`（首次含冷加载） |
+| `iconProbe` | 窗口图标路径能解析、文件非空，**且 ico 里含 16/24/32 小尺寸** | `{iconBytes: 43888, icoSizes: [256,128,64,48,32,24,16], smallSizesOk: true}` |
+| `tabStripProbe` | 标签栏容器必须满高（`h-full`），贴齐 36px 顶栏 | `barH: 36`、`stripH: 35`（含 1px 底边）、`stripGapTop: 0` |
+| `stressProbe` | 压测：45 个动作（Ctrl+K 开关 ×30、活动栏切视图 ×15）期间的帧间隔 | `over100: 0`、`actions: 45`、`errors: 0`、`valid: true` |
+| `perfProbe` | DOM 规模不随连接数爆掉 | 2929 条连接下仍保持千级节点、`frameMs < 1` |
+| `expandProbe` | 展开 2917 条的 XCMD 组后仍受分页约束 | 分页截断不爆 DOM |
+| `commandCenterOpenMs` | Ctrl+K 到浮层可见的轮询实测耗时 | `< 200 ms` |
 | `keepAliveProbe` | 切走过的面板仍挂载但隐藏（保留滚动/折叠/搜索状态） | `panes: ['connections','files','history']`、`visible: ['connections']`、`hiddenCount: 2` |
 | `sharpProbe` | 无残留模糊层 | `blurLayers: []` |
 
