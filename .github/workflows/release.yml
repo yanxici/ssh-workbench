@@ -211,29 +211,11 @@ jobs:
           }
           gh release upload $tag @assets --clobber
 
-      # 可选：同步到 Gitee 国内同源更新通道。
-      # 在仓库 Secrets 配置 GITEE_TOKEN（Gitee 私人令牌，勾选 projects）后自动生效；
-      # 未配置时跳过，不阻塞 GitHub 发版。
-      - name: Sync release to Gitee (optional domestic update channel)
-        continue-on-error: true
-        shell: pwsh
-        env:
-          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
-        run: |
-          if (-not $env:GITEE_TOKEN) {
-            Write-Host "未配置 secrets.GITEE_TOKEN，跳过 Gitee 同步（可手工运行 scripts/sync-gitee-release.ps1）"
-            exit 0
-          }
-          $ver = "${{ steps.version.outputs.value }}" -replace '^v',''
-          $notesFile = "release-notes-v$ver.generated.md"
-          pwsh -NoProfile -File scripts/sync-gitee-release.ps1 `
-            -Version $ver `
-            -DistDir "${{ steps.publish.outputs.dir }}" `
-            -NotesFile $notesFile
-          if ($LASTEXITCODE -ne 0) {
-            Write-Host "::warning::Gitee 国内通道同步失败（不影响 GitHub Release），请稍后手工补跑 scripts/sync-gitee-release.ps1"
-            exit $LASTEXITCODE
-          }
+      # Gitee 国内通道同步改为本机执行（不再在海外 GitHub Runner 上跑）：
+      # 从美国 Runner 向 Gitee 传 80MB+ 安装包极慢且常在 600s 超时，还会留下无附件的空壳发行版。
+      # GitHub Release 完成后在本机执行：
+      #   pwsh -NoProfile -File scripts/sync-gitee-release.ps1 -Version <ver>
+      # 脚本会自动从 GitHub Release 拉取同字节产物并在国内网络直传 Gitee。
 
       - name: Upload build artifact (for debugging)
         uses: actions/upload-artifact@v4
