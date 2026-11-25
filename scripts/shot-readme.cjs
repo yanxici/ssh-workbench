@@ -90,8 +90,8 @@ const conn = (id, name, host, port, group, color, tags) => ({
 })
 
 ;(async () => {
-  // 优先占 22：侧栏会显示 host:port，22 读起来像真实机器，临时高位端口像测试残留
-  const port = await listen(22).catch(() => listen(0))
+  // 优先占 22，其次 2222（常见本机/容器 SSH 端口），避免落到随机高位端口像测试残留
+  const port = await listen(22).catch(() => listen(2222)).catch(() => listen(0))
   fs.writeFileSync(
     path.join(DATA, 'connections.json'),
     JSON.stringify(
