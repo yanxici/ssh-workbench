@@ -5,6 +5,22 @@ All notable changes to SSH Workbench will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.1] - 2026-11-25
+
+<!-- release-notes:start -->
+### 这一版更新了什么
+
+- **修复内置远程编辑器文本框塌陷**：此前编辑区容器将 `modal-body`（`flex: 1`）与 `h-[56vh]` 混用，叠加 `<textarea>` 的 `h-full` 在未定高弹窗中阻断了 flex stretch，导致长文件编辑区只显示约 3 行、下方大片空白，短文件弹窗也会跟着塌陷。现已改为标准弹性布局，短文件、长文件以及展开查找/替换与关闭确认条时，编辑区与行号栏均保持等高撑满且不裁切底栏。
+- **修复终端光标不闪烁**：当 Windows 系统开启「减少动态效果」（`prefers-reduced-motion: reduce`，常见于远程桌面或性能模式）或关闭设置中的「界面动效」时，全局 `.motion-off *` 规则会把 xterm DOM 渲染器的 `.xterm-cursor-blink` 动画一并归零，导致终端光标在开启 `cursorBlink` 时也不闪。现在仅对 `.xterm-cursor-blink` 做豁免，继续由设置项「光标闪烁」独立控制。
+- **修复 Windows 解压版 / 便携版任务栏白图标**：打包版不再无条件绑定固定 `AppUserModelID`，改为仅在开始菜单存在指向当前可执行文件的有效快捷方式（NSIS 安装版）时绑定；解压版 zip 与便携版直接沿用 exe 内嵌多尺寸图标与窗口图标，不再退化成白色空白文档图标。
+<!-- release-notes:end -->
+
+### Fixed
+
+- **远程编辑器高度塌陷**（`RemoteEditorDialog.tsx`）：移除编辑区容器上的 `modal-body` 改用 `flex h-[56vh] min-h-0 overflow-hidden`，移除 `<textarea>` 上的 `h-full` 改由 Flexbox `stretch` 与行号栏等高对齐，并为行号栏、查找/替换条与关闭确认条补齐 `shrink-0`；补充 `verify-remote-editor.cjs` 静态契约断言与 `e2e-ui-sftp.cjs` 短/长文件真实渲染几何断言。
+- **终端 DOM 光标闪烁被 `.motion-off` 误杀**（`styles/index.css`）：将 `.motion-off *` 调整为 `.motion-off *:not(.xterm-cursor-blink)`，保持关闭界面动效的语义不变，同时保留 xterm DOM 渲染器 `blink_block_*` / `blink_bar_*` / `blink_underline_*` 关键帧动画；`verify-motion.cjs` 补充静态与真实 Electron 运行时断言。
+- **Windows 解压版 / 便携版任务栏白图标**（`src/main/window/appUserModelId.ts`、`src/main/index.ts`、`src/main/smoke.ts`）：新增 `resolveWindowsAppUserModelId` / `configureWindowsAppUserModelId`，仅当开始菜单存在 AUMID、目标 exe 与自定义图标均匹配当前进程的 `.lnk` 时才调用 `app.setAppUserModelId`；新增 `scripts/verify-taskbar-aumid.cjs`（22 项断言）。
+
 ## [2.4.0] - 2026-11-24
 
 <!-- release-notes:start -->

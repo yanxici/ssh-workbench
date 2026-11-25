@@ -12,20 +12,20 @@
 
 | 包 | 文件名 | 适合谁 |
 | --- | --- | --- |
-| 安装版（推荐） | `ssh-workbench-Setup-2.4.0.exe` | 装进系统，支持应用内自动更新 |
-| 便携版 | `ssh-workbench-2.4.0-portable.exe` | 拷 U 盘 / 跳板机直接用，不写注册表 |
-| 免安装压缩包 | `ssh-workbench-2.4.0-win.zip` | 解压即用，适合放进内网共享盘分发 |
+| 安装版（推荐） | `ssh-workbench-Setup-2.4.1.exe` | 装进系统，支持应用内自动更新 |
+| 便携版 | `ssh-workbench-2.4.1-portable.exe` | 拷 U 盘 / 跳板机直接用，不写注册表 |
+| 免安装压缩包 | `ssh-workbench-2.4.1-win.zip` | 解压即用，适合放进内网共享盘分发 |
 
 - 最新版固定入口：<https://github.com/yanxici/ssh-workbench/releases/latest>
-- 指定版本：<https://github.com/yanxici/ssh-workbench/releases/tag/v2.4.0>
+- 指定版本：<https://github.com/yanxici/ssh-workbench/releases/tag/v2.4.1>
 - 校验：同目录 `latest.yml` 里带 sha512，下载后可自行核对。
 
 **国内下载**
 
 1. 主入口：<https://gitee.com/w3554334905/ssh-workbench/releases> —— 三个包与 GitHub 同源同步，直连可用。
-2. 指定版本：`https://gitee.com/w3554334905/ssh-workbench/releases/download/v2.4.0/` + 上面的文件名。
-3. GitHub 备用（加速前缀）：<https://gh-proxy.com/https://github.com/yanxici/ssh-workbench/releases/download/v2.4.0/> + 文件名（第三方中转，可用性不由本项目保证）。
-4. 内网分发（最稳）：把 `ssh-workbench-2.4.0-win.zip` 放到公司共享盘或制品库，链接填在这里 —— `<内部镜像地址待填>`。
+2. 指定版本：`https://gitee.com/w3554334905/ssh-workbench/releases/download/v2.4.1/` + 上面的文件名。
+3. GitHub 备用（加速前缀）：<https://gh-proxy.com/https://github.com/yanxici/ssh-workbench/releases/download/v2.4.1/> + 文件名（第三方中转，可用性不由本项目保证）。
+4. 内网分发（最稳）：把 `ssh-workbench-2.4.1-win.zip` 放到公司共享盘或制品库，链接填在这里 —— `<内部镜像地址待填>`。
 
 > 应用内自动更新默认走「自动（优先国内）」多通道：未配代理时优先从 Gitee 国内同源镜像检查与下载，不通自动回退 GitHub 官方与内置加速站（且回退第三方代理时强制校验官方 sha512）；配了更新代理则优先走 GitHub 差量更新。也可在设置 → 软件更新中手动指定通道或点「从 Gitee 下载」。
 
@@ -137,9 +137,10 @@ Windows 下为 `%APPDATA%/ssh-workbench/data/`（设置面板里可以看到具�
 
 ## 版本
 
-当前版本：**v2.4.0**
+当前版本：**v2.4.1**
 
 最近更新：
+- **v2.4.1** —— 修复内置远程编辑器在长/短文件下 `<textarea>` 塌陷成 ~3 行高、下方大片空白的问题；修复系统开启「减少动态效果」或关闭界面动效时 `.motion-off *` 误杀 xterm DOM 光标闪烁动画的问题；修复 Windows 解压版/便携版因无条件绑定 `AppUserModelID` 导致任务栏显示白图标的问题。
 - **v2.4.0** —— 嵌入式 SSH 韧性、终端效率迁移与精密仪器风外壳升级：新增老旧设备 SSH 兼容算法开关与一键重连恢复；无 `sftp-server` 设备自动降级纯 Shell/BusyBox 通道；隧道断线自动恢复、随连接自启、远端监听端口一键发现与会话级临时转发；终端拖放文件直传 `cwd`、可编辑多行粘贴确认框、多客户端（`ssh_config`/MobaXterm/Xshell/SecureCRT/FinalShell）一键导入、分屏同步输入与后台标签未读点；外壳收敛为 36px 单色精密顶栏 + 44px 活动栏、主题精简 7→4（v3 静默迁移）、快速启动欢迎页与 `Ctrl+Shift+Z` Zen 专注模式（完整保留主仓技术栈与 Gitee 国内免代理更新通道）。
 - **v2.3.2** —— 新增国内免代理应用内自动更新通道：默认「自动」模式优先走 Gitee 同源镜像（通过公开 API 解析最新 tag 并关闭差量规避 Range 200），失败按 `Gitee → GitHub → gh-proxy.com → ghfast.top` 自动回退并在第三方回退时校验官方 `sha512`；设置 → 软件更新支持自选更新通道与内网目录、展示当前命中通道；补充 Gitee Release 同步脚本与 CI 可选同步步骤。
 - **v2.3.1** —— 终端默认改用智能 `Ctrl+C` / `Ctrl+V`（有选区复制、无选区透传 `SIGINT`），新增可选「选中即复制」与「右键快速复制粘贴」（`Shift+右键` 出菜单）、单标签 `Ctrl+滚轮` 临时缩放（`Ctrl+0` 复位）、右键导出终端缓冲纯文本、大流量输出 8–32ms 自适应合帧；零依赖升级内置远程编辑器（行号、`Ctrl+F/H` 查找替换、`Ctrl+S` 原地保存、编码与行列状态条、`Tab` 缩进、未保存误关提醒）；修复终端右键「发送文件…」静默失效。

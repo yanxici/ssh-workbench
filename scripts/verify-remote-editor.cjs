@@ -47,6 +47,15 @@ async function main() {
     'WP5: RemoteEditorDialog 在 window 上绑定 keydown 以防按钮禁用后失焦',
     /window\.addEventListener\(\s*'keydown'/.test(dialogSrc)
   )
+  check(
+    '编辑区容器不混用 modal-body（flex:1 会覆盖 h-[56vh] 导致高度塌陷）',
+    !/className="[^"]*\bmodal-body\b[^"]*\bh-\[56vh\]/.test(dialogSrc) &&
+      /className="[^"]*\bflex\b[^"]*\bh-\[56vh\][^"]*\bmin-h-0\b[^"]*\boverflow-hidden\b/.test(dialogSrc)
+  )
+  check(
+    '编辑器 textarea 不使用 h-full 阻断 flex stretch',
+    !/<textarea[\s\S]{0,300}\bh-full\b/.test(dialogSrc)
+  )
 
   const bundle = path.join(OUT, 'remote-editor.cjs')
   await esbuild.build({

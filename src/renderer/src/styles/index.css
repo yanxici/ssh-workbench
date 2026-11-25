@@ -622,8 +622,13 @@
 
    用通配而不是逐个类名：漏一个类就是「关掉之后还有个地方在动」，
    而这种漏在验收时几乎看不出来（要逐屏逐交互去试）。
-   代价是连颜色过渡也一起停 —— 那正是「完全静止」该有的样子。 */
-.motion-off *,
+   代价是连颜色过渡也一起停 —— 那正是「完全静止」该有的样子。
+
+   唯一豁免 .xterm-cursor-blink：终端光标闪烁由设置项 terminal.cursorBlink 独立控制；
+   xterm DOM 渲染器靠 CSS @keyframes 实现光标闪烁（WebGL 走 JS 定时器不受这里影响），
+   若一并置为 animation: none，系统开启「减少动态效果」或关闭界面动效时，
+   终端光标会在用户明确开启 cursorBlink 的情况下悄无声息地停闪。 */
+.motion-off *:not(.xterm-cursor-blink),
 .motion-off *::before,
 .motion-off *::after {
   transition: none !important;

@@ -2,6 +2,7 @@ import { app, BrowserWindow } from 'electron'
 import { existsSync, promises as fs, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { pickIconPath } from './window/icon'
+import { getAppliedAppUserModelId } from './window/appUserModelId'
 
 /**
  * 冒烟自检：--smoke / SSHW_SMOKE=1 启动 → 渲染完成后截图与 DOM 断言 →
@@ -1043,7 +1044,8 @@ export function runSmoke(win: BrowserWindow): void {
             fromResources: iconPath ? iconPath.startsWith(process.resourcesPath ?? '\u0000') : false,
             icoSizes,
             smallSizesOk: [16, 24, 32].every((n) => icoSizes.includes(n)),
-            packaged: app.isPackaged
+            packaged: app.isPackaged,
+            appUserModelId: getAppliedAppUserModelId()
           }
 
           await clickActivity('连接')

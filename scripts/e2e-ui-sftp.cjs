@@ -167,6 +167,17 @@ window.__e2e = {
   prompt(v){ const i = this.modalInput(); if(!i) return 'no-input'; this.setValue(i, v); const b = Array.from(document.querySelectorAll('.modal button')).find(x => x.textContent.trim() === '确定'); if(!b) return 'no-confirm'; b.click(); return 'ok' },
   confirmDanger(){ const bs = Array.from(document.querySelectorAll('.modal button')); const b = bs.find(x => (x.className||'').includes('btn-danger')) || bs.find(x => x.textContent.trim() === '删除'); if(!b) return 'no-btn'; b.click(); return 'ok' },
   editorTextarea(){ return Array.from(document.querySelectorAll('textarea')).find(t => !t.closest('.xterm')) || null },
+  editorLayout(){
+    const t = this.editorTextarea();
+    if (!t || !t.parentElement) return null;
+    const body = t.parentElement;
+    const gutter = body.firstElementChild;
+    return {
+      bodyH: Math.round(body.getBoundingClientRect().height),
+      gutterH: gutter ? Math.round(gutter.getBoundingClientRect().height) : 0,
+      taH: Math.round(t.getBoundingClientRect().height)
+    };
+  },
   editorContent(){ const t = this.editorTextarea(); return t ? t.value : null },
   editorType(v){ const t = this.editorTextarea(); if(!t) return 'no-editor'; this.setValue(t, v); return 'ok' },
   editorSave(){ const b = Array.from(document.querySelectorAll('.modal button')).find(x => /保存到远端|保存并关闭/.test(x.textContent)); if(!b) return 'no-save'; b.click(); return 'ok' },
@@ -485,7 +496,12 @@ async function main() {
   const edLoaded = await waitFor(async () => (await page.evalJs('window.__e2e.editorContent()')) !== null, 10000)
   const edContent = await page.evalJs('window.__e2e.editorContent()')
   const edSame = edContent === fs.readFileSync(srcFile, 'utf8')
-  await page.evalJs(`window.__e2e.editorType('e2e payload v2 (edited in UI)\\n')`)
+  const edLayoutShort = await page.evalJs('window.__e2e.editorLayout()')
+  const edPayload = 'e2e payload v2 (edited in UI)\n' + Array.from({ length: 60 }, (_, i) => `line ${i + 2}`).join('\n') + '\n'
+  await page.evalJs(`window.__e2e.editorType(${JSON.stringify(edPayload)})`)
+  await sleep(120)
+  const edLayoutLong = await page.evalJs('window.__e2e.editorLayout()')
+  const layoutOk = (l) => !!l && l.taH >= 200 && Math.abs(l.taH - l.bodyH) <= 2 && Math.abs(l.taH - l.gutterH) <= 2
   await page.evalJs(`window.__e2e.editorSave()`)
   const edSaved = await waitFor(() => {
     try {
@@ -496,6 +512,11 @@ async function main() {
   }, 15000)
   const bakOk = remoteExists('/e2e/one.txt.bak')
   check('双击打开远端文件 → 读到原文', edOpen === 'ok' && edLoaded && edSame, `同内容=${edSame}`)
+  check(
+    '编辑器布局：短文件与长文件下 textarea 均撑满编辑区并与行号栏等高',
+    layoutOk(edLayoutShort) && layoutOk(edLayoutLong),
+    `short=${JSON.stringify(edLayoutShort)} long=${JSON.stringify(edLayoutLong)}`
+  )
   check('编辑器保存 → 远端更新 + .bak 备份', edSaved && bakOk, `bak=${bakOk}`)
   await page.evalJs('window.__e2e.closeModal()')
   await sleep(600)

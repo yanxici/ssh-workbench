@@ -150,8 +150,8 @@ async function main() {
   check('.btn 过渡列含 transform（Tailwind 3 按下缩放走 transform）', btnUtil.includes('transform]'))
   check('.btn-icon 按下缩到 0.94', cssBlock(css, '.btn-icon {').includes('active:scale-[0.94]'))
 
-  const off = cssBlock(css, '.motion-off *,')
-  check('.motion-off 通配关掉 transition 与 animation', off.includes('transition: none !important') && off.includes('animation: none !important'), off.slice(0, 140))
+  const off = cssBlock(css, '.motion-off *:not(.xterm-cursor-blink),')
+  check('.motion-off 通配关掉 transition 与 animation 且豁免 .xterm-cursor-blink', off.includes('transition: none !important') && off.includes('animation: none !important'), off.slice(0, 160))
   const offLift = cssBlock(css, '.motion-off .motion-lift,')
   /* 只关 transition 不归零 transform，等于把动画换成瞬移 —— 必须显式清掉 */
   check('.motion-off 把位移与投影归零', offLift.includes('transform: none !important') && offLift.includes('box-shadow: none !important'))
@@ -212,6 +212,11 @@ async function main() {
     "out.hasOffClass = document.documentElement.classList.contains('motion-off')",
     "const lift = mk('motion-lift')",
     "const btn = document.querySelector('.btn') || mk('btn')",
+    "const curStyle = document.createElement('style')",
+    "curStyle.textContent = '@keyframes _probe_blink { 50% { opacity: 0; } } .xterm-cursor.xterm-cursor-blink { animation: _probe_blink 1s step-end infinite; }'",
+    "document.head.appendChild(curStyle)",
+    "const cur = mk('xterm-cursor xterm-cursor-blink')",
+    "const wall = mk('motion-in')",
     "document.documentElement.classList.remove('motion-off')",
     'out.liftTransition = getComputedStyle(lift).transitionProperty',
     'out.btnTransition = getComputedStyle(btn).transitionProperty',
@@ -220,6 +225,8 @@ async function main() {
     'out.liftOff = getComputedStyle(lift).transitionProperty',
     'out.btnOff = getComputedStyle(btn).transitionProperty',
     'out.liftOffTransform = getComputedStyle(lift).transform',
+    'out.wallOffAnim = getComputedStyle(wall).animationName',
+    'out.cursorOffAnim = getComputedStyle(cur).animationName',
     "out.btnTag = btn.tagName + '|' + String(btn.className).slice(0, 80)",
     'out.btnOffAll = getComputedStyle(btn).transition',
     'out.htmlClass = document.documentElement.className',
@@ -230,6 +237,9 @@ async function main() {
     'out.sheets = document.styleSheets.length',
     "document.documentElement.classList.remove('motion-off')",
     'lift.remove()',
+    'cur.remove()',
+    'wall.remove()',
+    'curStyle.remove()',
     'return out',
     '})()',
   ].join('\n')
@@ -244,6 +254,8 @@ async function main() {
   check('挂上 .motion-off 后卡片过渡归零', probe.liftOff === 'none', probe.liftOff)
   check('挂上 .motion-off 后 .btn 过渡归零', probe.btnOff === 'none', probe)
   check('挂上 .motion-off 后位移归零', probe.liftOffTransform === 'none', probe.liftOffTransform)
+  check('挂上 .motion-off 后界面入场动画归零', probe.wallOffAnim === 'none', probe.wallOffAnim)
+  check('挂上 .motion-off 后终端光标闪烁动画保留', probe.cursorOffAnim === '_probe_blink', probe.cursorOffAnim)
 
   console.log('\n结果：' + pass + ' 通过 / ' + fail + ' 失败')
   finish(fail === 0 ? 0 : 1)

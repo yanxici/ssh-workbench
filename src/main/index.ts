@@ -1,7 +1,7 @@
 import { app, BrowserWindow, Menu, shell } from 'electron'
 import { appendFileSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { electronApp, is, optimizer } from '@electron-toolkit/utils'
+import { is, optimizer } from '@electron-toolkit/utils'
 import { IPC } from '@shared/ipc'
 import { registerAllIpc } from './ipc'
 import { getSettings, seedCommandsIfNeeded } from './store/repository'
@@ -23,6 +23,7 @@ import { runSmoke } from './smoke'
 import { setRecordChangeHandler, sweepStale } from './store/transferRecord'
 import { onTransferProgress } from './window/taskbar'
 import { pickIconPath } from './window/icon'
+import { configureWindowsAppUserModelId } from './window/appUserModelId'
 
 /* ------------------------------------------------------------------ *
  *  启动日志与全局异常 —— 排查"静默退出"的关键抓手
@@ -197,7 +198,8 @@ if (!gotLock) {
   void app.whenReady().then(async () => {
     log('app ready')
     bootLog('app ready')
-    electronApp.setAppUserModelId('com.sshworkbench.app')
+    const appliedAumid = configureWindowsAppUserModelId()
+    log('aumid:', appliedAumid ?? 'skipped (unpacked/no matching Start Menu shortcut)')
     app.on('browser-window-created', (_, window) => {
       optimizer.watchWindowShortcuts(window)
     })

@@ -316,7 +316,7 @@ export function RemoteEditorDialog({
         </div>
 
         {findOpen && (
-          <div className="flex flex-col gap-1.5 border-b border-edge bg-panel px-3 py-2 text-xs">
+          <div className="flex shrink-0 flex-col gap-1.5 border-b border-edge bg-panel px-3 py-2 text-xs">
             <div className="flex items-center gap-1.5">
               <Search size={12} className="shrink-0 text-ink-3" />
               <input
@@ -410,7 +410,7 @@ export function RemoteEditorDialog({
         )}
 
         {confirmClose && (
-          <div className="flex items-center justify-between gap-2 border-b border-edge bg-warning/10 px-3 py-2 text-xs">
+          <div className="flex shrink-0 items-center justify-between gap-2 border-b border-edge bg-warning/10 px-3 py-2 text-xs">
             <span className="flex items-center gap-1.5 text-ink">
               <AlertTriangle size={13} className="shrink-0 text-warning" />
               {t('editor.dirtyPrompt')}
@@ -442,11 +442,13 @@ export function RemoteEditorDialog({
           </div>
         )}
 
-        <div className="modal-body flex h-[56vh] overflow-hidden p-0">
+        {/* Do not use modal-body (flex: 1 / flex-basis: 0%) with h-[56vh] inside a max-h-only .modal;
+            otherwise flex-basis: 0% overrides h-[56vh] and leaves the height indefinite for children. */}
+        <div className="flex h-[56vh] min-h-0 overflow-hidden">
           <div
             ref={gutterRef}
             aria-hidden="true"
-            className="select-none overflow-hidden border-r border-edge bg-panel px-2.5 pt-3 pb-7 text-right font-mono text-xs leading-[19.5px] text-ink-3"
+            className="shrink-0 select-none overflow-hidden border-r border-edge bg-panel px-2.5 pt-3 pb-7 text-right font-mono text-xs leading-[19.5px] text-ink-3"
           >
             <pre className="m-0 font-mono text-xs leading-[19.5px]">{lineNumbers}</pre>
           </div>
@@ -454,7 +456,7 @@ export function RemoteEditorDialog({
             ref={textareaRef}
             autoFocus
             wrap="off"
-            className="scroll-thin h-full min-w-0 flex-1 resize-none overflow-auto whitespace-pre selectable bg-app p-3 font-mono text-xs leading-[19.5px] text-ink outline-none"
+            className="scroll-thin min-w-0 flex-1 resize-none overflow-auto whitespace-pre selectable bg-app p-3 font-mono text-xs leading-[19.5px] text-ink outline-none"
             value={text}
             onChange={(e) => {
               setText(e.target.value)
