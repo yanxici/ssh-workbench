@@ -5,6 +5,19 @@ All notable changes to SSH Workbench will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.2] - 2026-11-25
+
+<!-- release-notes:start -->
+### 这一版更新了什么
+
+- **修复 `sz` 多文件批量下载（如 `sz robottest*`）中途断开或仅下载第 1 个文件的问题**：真实 `lrzsz` 在多帧 `ZDATA`（`ZCRCW`/`ZCRCE` 边界）发送、批次中夹带 0 字节空文件、以及文件间重传 `ZEOF`/`ZRQINIT`/`ZFILE` 时，原先 `zmodem.js` 接收状态机会触发 `Unhandled header` 或遗漏清理 `_file_info` 导致第 2 个文件报 `second ZFILE` 直接中止整批传输；现已统一接管接收侧协议状态机，支持任意多帧 `ZDATA`、空文件直达 `ZEOF(0)` 与文件间重传兜底，整批文件只需选择一次保存目录即可连续稳定落盘。
+- **消除多文件并发落盘状态串号并新增批次进度显示**：将 `ZEOF` 后的 `ZRINIT` 延后至当前文件完成 `flush` 与 `saveFinish` 落盘后再放行下一份，并以独立 `offerGen`、`transferId` 与 `localPath` 彻底隔离前后文件，传输记录与保存路径不再互相覆盖；传输浮层在多文件批次中同步展示当前进度序号（如 `2/3`），0 字节文件完成后正确显示 `100%`。
+<!-- release-notes:end -->
+
+### Fixed
+
+- **ZMODEM `sz` 多文件批量接收协议与状态机修复**（`src/renderer/src/lib/zmodem.ts`、`src/renderer/src/components/terminal/ZmodemOverlay.tsx`）：新增 `primeReceiveSession()` 统一接管 `_accept`、`_consume_ZDATA` 与 `_make_promise_for_between_files`——正常与续传路径均保留 `{ ZDATA, ZEOF }`、兜底 `ZEOF` 偏移不一致时强制清理 `_file_info`/`_current_transfer` 并复位 `_accepted_offer`、延后 `ZEOF` 后的 `ZRINIT` 至异步落盘完成、阻断前向跳洞静默拼接并在文件间及 `saveBegin` 期间兜底重传帧；`ZmodemOverlay.tsx` 补齐多文件批次序号展示与 0 字节完成态 `100%`；`scripts/verify-zmodem-renderer.cjs` 新增 5 组多文件 `sz` 回归用例（105/105 通过）。
+
 ## [2.4.1] - 2026-11-25
 
 <!-- release-notes:start -->
