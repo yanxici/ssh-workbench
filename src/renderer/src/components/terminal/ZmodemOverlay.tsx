@@ -202,7 +202,12 @@ export function ZmodemOverlay(): React.JSX.Element | null {
   if (!progress) return null
 
   const total = progress.bytesTotal
-  const pct = total > 0 ? Math.min(100, Math.round((progress.bytesDone / total) * 100)) : 0
+  const pct =
+    total > 0
+      ? Math.min(100, Math.round((progress.bytesDone / total) * 100))
+      : progress.phase === 'done'
+        ? 100
+        : 0
   const receiving = progress.direction === 'receive'
 
   const icon =
@@ -250,8 +255,15 @@ export function ZmodemOverlay(): React.JSX.Element | null {
         </div>
 
         {progress.fileName && (
-          <div className="mb-2 truncate text-2xs text-ink-2" title={progress.fileName}>
-            {progress.fileName}
+          <div className="mb-2 flex items-center justify-between gap-2 text-2xs text-ink-2">
+            <span className="truncate" title={progress.fileName}>
+              {progress.fileName}
+            </span>
+            {progress.fileCount && progress.fileCount > 1 && (
+              <span className="shrink-0 tabular-nums text-ink-3">
+                {progress.fileIndex ?? 1}/{progress.fileCount}
+              </span>
+            )}
           </div>
         )}
 

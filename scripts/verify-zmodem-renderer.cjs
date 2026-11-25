@@ -52,6 +52,9 @@ function loadLib(opts = {}) {
     pickDirCalls: 0,
     pickDirCanceled: false,
     saves: new Map(),
+    savePaths: new Map(),
+    saveBeginDelayMs: opts.saveBeginDelayMs || 0,
+    saveFinishDelayMs: opts.saveFinishDelayMs || 0,
     saveBeginCalls: 0,
     appendCalls: 0,
     finishCalls: 0,
@@ -74,10 +77,13 @@ function loadLib(opts = {}) {
         },
         saveBegin: async (token, name) => {
           state.saveBeginCalls++
+          if (state.saveBeginDelayMs) await new Promise((r) => setTimeout(r, state.saveBeginDelayMs))
           if (token !== state.dirToken) return { ok: false, error: '保存文件夹已失效' }
           const saveId = 'save-' + state.saveBeginCalls
+          const p = 'C:/dl/' + name
           state.saves.set(saveId, [])
-          return { ok: true, data: { saveId, path: 'C:/dl/' + name } }
+          state.savePaths.set(saveId, p)
+          return { ok: true, data: { saveId, path: p } }
         },
         saveAppend: async (saveId, base64) => {
           state.appendCalls++
@@ -90,12 +96,13 @@ function loadLib(opts = {}) {
         },
         saveFinish: async (saveId) => {
           state.finishCalls++
+          if (state.saveFinishDelayMs) await new Promise((r) => setTimeout(r, state.saveFinishDelayMs))
           const arr = state.saves.get(saveId)
           if (!arr) return { ok: false, error: '接收会话已失效' }
           const buf = Buffer.concat(arr)
           state.saves.delete(saveId)
           state.files.set(saveId, buf)
-          return { ok: true, data: { path: 'C:/dl/x', size: buf.length } }
+          return { ok: true, data: { path: state.savePaths.get(saveId) || 'C:/dl/x', size: buf.length } }
         },
         sendBytes: async () => ({ ok: true, data: undefined })
       }
@@ -1102,6 +1109,364 @@ function silenceBench(opts = {}) {
       (b.state.files.get('save-1') || Buffer.alloc(0)).length <= 800,
       'len=' + (b.state.files.get('save-1') || Buffer.alloc(0)).length)
     b.teardown()
+  }
+
+  /** 多文件 lrzsz 模拟公共辅助：支持 ZBIN32/ZHEX、多 ZDATA 帧、0 字节文件、重传与延迟落盘 */
+  function multiSzBench(opts = {}) {
+    const { lib, state } = loadLib(opts)
+    const sessionId = 's-multi-' + Math.random().toString(36).slice(2)
+    const term = []
+    const sent = []
+    const events = []
+    lib.ensureZmodem(sessionId, {
+      write: (t) => term.push(t),
+      send: (bytes) => sent.push(Buffer.from(bytes)),
+      confirm: async () => true,
+      afterTransfer: () => {}
+    })
+    lib.watchZmodem(sessionId, (p) => events.push(p))
+
+    const enc = new Zmodem.ZDLE()
+    enc.set_escape_ctrl_chars(true)
+    const hex = (name, args) => Buffer.from(Zmodem.Header.build(name, args || []).to_hex())
+    const bin32 = (name, args) => Buffer.from(Zmodem.Header.build(name, args || []).to_binary32(enc))
+    const sub16 = (payload, fe) =>
+      Buffer.from(Zmodem.Subpacket.build(Array.from(payload), fe).encode16(enc))
+    const sub32 = (payload, fe) =>
+      Buffer.from(Zmodem.Subpacket.build(Array.from(payload), fe).encode32(enc))
+    const info = (name, size, filesRemaining, bytesRemaining) => {
+      const rest =
+        filesRemaining != null
+          ? `${size} 0 100644 0 ${filesRemaining} ${bytesRemaining ?? size}`
+          : `${size} 0 100644 0`
+      return Buffer.concat([Buffer.from(name), Buffer.from([0]), Buffer.from(rest)])
+    }
+    const feed = (buf) => lib.feedZmodem(sessionId, buf.toString('base64'), buf.toString('latin1'))
+    const wait = (ms) => new Promise((r) => setTimeout(r, ms))
+    const pump = async (n = 40) => {
+      for (let i = 0; i < n; i++) await tick()
+    }
+    const parsed = () =>
+      sent.map((b) => {
+        try {
+          return Zmodem.Header.parse_hex(Array.from(b))
+        } catch {
+          return null
+        }
+      })
+    const names = () => parsed().map((h) => (h ? h.NAME : '?'))
+    const countSent = (name) => names().filter((n) => n === name).length
+    const waitSent = async (name, wantCount, timeoutMs = 1500) => {
+      const deadline = Date.now() + timeoutMs
+      while (Date.now() < deadline) {
+        if (countSent(name) >= wantCount) return true
+        await wait(5)
+      }
+      return countSent(name) >= wantCount
+    }
+    const teardown = () => lib.detachZmodem(sessionId)
+    return {
+      lib,
+      state,
+      sessionId,
+      term,
+      sent,
+      events,
+      hex,
+      bin32,
+      sub16,
+      sub32,
+      info,
+      feed,
+      wait,
+      pump,
+      names,
+      countSent,
+      waitSent,
+      teardown
+    }
+  }
+
+  /* ---------- 22：多文件 sz robottest*（ZBIN32 + 多 ZDATA/ZCRCW 帧 + 文件间杂讯） ---------- */
+  {
+    const m = multiSzBench()
+    const f1 = Buffer.alloc(4000)
+    const f2 = Buffer.alloc(3000)
+    const f3 = Buffer.alloc(1500)
+    for (let i = 0; i < f1.length; i++) f1[i] = (i * 11 + 1) & 0xff
+    for (let i = 0; i < f2.length; i++) f2[i] = (i * 17 + 2) & 0xff
+    for (let i = 0; i < f3.length; i++) f3[i] = (i * 23 + 3) & 0xff
+
+    m.feed(m.hex('ZRQINIT', [0, 0, 0, 0]))
+    await m.waitSent('ZRINIT', 1)
+
+    // File 1: 2 ZDATA frames separated by ZCRCW (window boundary) using ZBIN32
+    m.feed(Buffer.concat([m.bin32('ZFILE', [0]), m.sub32(m.info('robottest1.bin', f1.length, 3, 8500), 'end_ack')]))
+    await m.waitSent('ZRPOS', 1)
+    m.feed(Buffer.concat([m.bin32('ZDATA', [0]), m.sub32(f1.subarray(0, 2000), 'end_ack')]))
+    await m.waitSent('ZACK', 1)
+    m.feed(Buffer.concat([m.bin32('ZDATA', [2000]), m.sub32(f1.subarray(2000), 'end_no_ack')]))
+    await m.pump()
+    m.feed(m.bin32('ZEOF', [f1.length]))
+    const gotZrinit2 = await m.waitSent('ZRINIT', 2)
+
+    // File 2: 3 ZDATA frames separated by ZCRCW / ZCRCE
+    if (gotZrinit2) {
+      m.feed(Buffer.concat([m.bin32('ZFILE', [0]), m.sub32(m.info('robottest2.bin', f2.length, 2, 4500), 'end_ack')]))
+      await m.waitSent('ZRPOS', 2)
+      m.feed(Buffer.concat([m.bin32('ZDATA', [0]), m.sub32(f2.subarray(0, 1000), 'end_ack')]))
+      await m.waitSent('ZACK', 2)
+      m.feed(Buffer.concat([m.bin32('ZDATA', [1000]), m.sub32(f2.subarray(1000, 2000), 'end_no_ack')]))
+      await m.pump()
+      m.feed(Buffer.concat([m.bin32('ZDATA', [2000]), m.sub32(f2.subarray(2000), 'end_no_ack')]))
+      await m.pump()
+      m.feed(m.bin32('ZEOF', [f2.length]))
+    }
+    const gotZrinit3 = await m.waitSent('ZRINIT', 3)
+
+    // File 3: preceded by non-protocol text (e.g. sz skipping a directory) + ZFIN + OO
+    if (gotZrinit3) {
+      m.feed(
+        Buffer.concat([
+          Buffer.from('sz: is not a file: robottest_dir\r\n'),
+          m.bin32('ZFILE', [0]),
+          m.sub32(m.info('robottest3.bin', f3.length, 1, 1500), 'end_ack')
+        ])
+      )
+      await m.waitSent('ZRPOS', 3)
+      m.feed(Buffer.concat([m.bin32('ZDATA', [0]), m.sub32(f3, 'end_no_ack')]))
+      await m.pump()
+      m.feed(m.bin32('ZEOF', [f3.length]))
+    }
+    const gotZrinit4 = await m.waitSent('ZRINIT', 4)
+    if (gotZrinit4) {
+      m.feed(m.hex('ZFIN', [0]))
+      await m.waitSent('ZFIN', 1)
+      m.feed(Buffer.from('OO'))
+      await m.pump(40)
+    }
+
+    const s1 = m.state.files.get('save-1')
+    const s2 = m.state.files.get('save-2')
+    const s3 = m.state.files.get('save-3')
+    check('多文件 sz：保存目录只询问一次', m.state.pickDirCalls === 1, 'pickDir=' + m.state.pickDirCalls)
+    check('多文件 sz：3 个文件全部建立并完成落盘',
+      m.state.saveBeginCalls === 3 && m.state.finishCalls === 3,
+      `begin=${m.state.saveBeginCalls} finish=${m.state.finishCalls} sent=${m.names().join(',')}`)
+    check('多文件 sz：第 1 个多帧 ZDATA 文件逐字节一致',
+      !!s1 && Buffer.compare(s1, f1) === 0, s1 ? `len=${s1.length}/${f1.length}` : 'missing')
+    check('多文件 sz：第 2 个多帧 ZDATA 文件逐字节一致',
+      !!s2 && Buffer.compare(s2, f2) === 0, s2 ? `len=${s2.length}/${f2.length}` : 'missing')
+    check('多文件 sz：第 3 个文件（含文件间杂讯）逐字节一致',
+      !!s3 && Buffer.compare(s3, f3) === 0, s3 ? `len=${s3.length}/${f3.length}` : 'missing')
+    check('多文件 sz：多帧 ZDATA 不触发无谓的 ZRPOS 续传（正好 3 次）',
+      m.countSent('ZRPOS') === 3, 'zrpos=' + m.countSent('ZRPOS') + ' sent=' + m.names().join(','))
+    check('多文件 sz：全程无 error 且 ZFIN/OO 后会话正常退出',
+      !m.events.some((e) => e.phase === 'error') && m.lib.isZmodemActive(m.sessionId) === false,
+      `active=${m.lib.isZmodemActive(m.sessionId)} errs=${JSON.stringify(m.events.filter((e) => e.phase === 'error'))}`)
+    const doneFiles = m.events.filter((e) => e.phase === 'done')
+    check('多文件 sz：进度携带批次序号 fileIndex/fileCount (1/3, 2/3, 3/3)',
+      doneFiles.length === 3 &&
+        doneFiles[0].fileIndex === 1 && doneFiles[0].fileCount === 3 &&
+        doneFiles[1].fileIndex === 2 && doneFiles[1].fileCount === 3 &&
+        doneFiles[2].fileIndex === 3 && doneFiles[2].fileCount === 3,
+      JSON.stringify(doneFiles.map((e) => ({ f: e.fileName, i: e.fileIndex, c: e.fileCount }))))
+    m.teardown()
+  }
+
+  /* ---------- 23：多文件 sz 包含 0 字节空文件（直接 ZEOF(0)，不发 ZDATA） ---------- */
+  {
+    const m = multiSzBench()
+    const mid = Buffer.alloc(1200, 0x55)
+
+    m.feed(m.hex('ZRQINIT', [0, 0, 0, 0]))
+    await m.waitSent('ZRINIT', 1)
+
+    // File 1: 0-byte empty file
+    m.feed(Buffer.concat([m.hex('ZFILE', [0]), m.sub16(m.info('robottest0.empty', 0, 3, 1200), 'end_ack')]))
+    await m.waitSent('ZRPOS', 1)
+    m.feed(m.hex('ZEOF', [0]))
+    const zr2 = await m.waitSent('ZRINIT', 2)
+
+    // File 2: normal file
+    if (zr2) {
+      m.feed(Buffer.concat([m.hex('ZFILE', [0]), m.sub16(m.info('robottest1.dat', mid.length, 2, 1200), 'end_ack')]))
+      await m.waitSent('ZRPOS', 2)
+      m.feed(Buffer.concat([m.hex('ZDATA', [0]), m.sub16(mid, 'end_no_ack')]))
+      await m.pump()
+      m.feed(m.hex('ZEOF', [mid.length]))
+    }
+    const zr3 = await m.waitSent('ZRINIT', 3)
+
+    // File 3: trailing 0-byte empty file
+    if (zr3) {
+      m.feed(Buffer.concat([m.hex('ZFILE', [0]), m.sub16(m.info('robottest2.empty', 0, 1, 0), 'end_ack')]))
+      await m.waitSent('ZRPOS', 3)
+      m.feed(m.hex('ZEOF', [0]))
+    }
+    const zr4 = await m.waitSent('ZRINIT', 4)
+    if (zr4) {
+      m.feed(m.hex('ZFIN', [0]))
+      await m.waitSent('ZFIN', 1)
+      m.feed(Buffer.from('OO'))
+      await m.pump(40)
+    }
+
+    const s1 = m.state.files.get('save-1')
+    const s2 = m.state.files.get('save-2')
+    const s3 = m.state.files.get('save-3')
+    check('空文件批次：3 个文件（含 2 个 0 字节文件）全部落盘',
+      m.state.finishCalls === 3 && !!s1 && s1.length === 0 && !!s2 && Buffer.compare(s2, mid) === 0 && !!s3 && s3.length === 0,
+      `finish=${m.state.finishCalls} lens=${[s1?.length, s2?.length, s3?.length].join(',')} sent=${m.names().join(',')}`)
+    check('空文件批次：不触发 error 且会话干净收尾',
+      !m.events.some((e) => e.phase === 'error') && m.lib.isZmodemActive(m.sessionId) === false,
+      `active=${m.lib.isZmodemActive(m.sessionId)} errs=${JSON.stringify(m.events.filter((e) => e.phase === 'error'))}`)
+    m.teardown()
+  }
+
+  /* ---------- 24：第 1 个文件发生续传 + ZEOF 偏移不一致时，不能泄漏 _file_info 导致第 2 个文件崩溃 ---------- */
+  {
+    const m = multiSzBench()
+    const f2 = Buffer.alloc(1000, 0x66)
+
+    m.feed(m.hex('ZRQINIT', [0, 0, 0, 0]))
+    await m.waitSent('ZRINIT', 1)
+
+    // File 1: half data -> trigger resync -> mismatched ZEOF(1600) while local offset is 800
+    m.feed(Buffer.concat([m.hex('ZFILE', [0]), m.sub16(m.info('robottest1.bin', 1600, 2, 2600), 'end_ack')]))
+    await m.waitSent('ZRPOS', 1)
+    m.feed(Buffer.concat([m.hex('ZDATA', [0]), m.sub16(Buffer.alloc(800, 0x41), 'no_end_no_ack')]))
+    await m.pump()
+    m.feed(Buffer.concat([m.hex('ZDATA', [0]), m.sub16(Buffer.alloc(800, 0x41), 'no_end_no_ack')]))
+    await m.waitSent('ZRPOS', 2)
+    m.feed(m.hex('ZEOF', [1600]))
+    const zr2 = await m.waitSent('ZRINIT', 2)
+
+    // File 2 must still work cleanly (no "second ZFILE data subpacket received")
+    if (zr2) {
+      m.feed(Buffer.concat([m.hex('ZFILE', [0]), m.sub16(m.info('robottest2.bin', f2.length, 1, 1000), 'end_ack')]))
+      await m.waitSent('ZRPOS', 3)
+      m.feed(Buffer.concat([m.hex('ZDATA', [0]), m.sub16(f2, 'end_no_ack')]))
+      await m.pump()
+      m.feed(m.hex('ZEOF', [f2.length]))
+    }
+    const zr3 = await m.waitSent('ZRINIT', 3)
+    if (zr3) {
+      m.feed(m.hex('ZFIN', [0]))
+      await m.waitSent('ZFIN', 1)
+      m.feed(Buffer.from('OO'))
+      await m.pump(40)
+    }
+
+    const s2 = m.state.files.get('save-2')
+    check('续传+ZEOF 错位后第 2 个文件照常完整收完（无 _file_info 泄漏）',
+      m.state.finishCalls === 2 && !!s2 && Buffer.compare(s2, f2) === 0,
+      `finish=${m.state.finishCalls} s2=${s2 ? s2.length : 'missing'} sent=${m.names().join(',')}`)
+    check('续传+ZEOF 错位后第 2 个文件不报 error 且会话干净收尾',
+      !m.events.some((e) => e.phase === 'error') && m.lib.isZmodemActive(m.sessionId) === false,
+      `active=${m.lib.isZmodemActive(m.sessionId)} errs=${JSON.stringify(m.events.filter((e) => e.phase === 'error'))}`)
+    m.teardown()
+  }
+
+  /* ---------- 25：落盘 saveFinish 有异步延迟时，ZRINIT 需等前一份落盘完且不串号 ---------- */
+  {
+    const m = multiSzBench({ saveFinishDelayMs: 35 })
+    const payloads = [
+      Buffer.alloc(700, 0x11),
+      Buffer.alloc(800, 0x22),
+      Buffer.alloc(900, 0x33)
+    ]
+    let zrinitBeforeFinish = false
+
+    m.feed(m.hex('ZRQINIT', [0, 0, 0, 0]))
+    await m.waitSent('ZRINIT', 1)
+
+    for (let idx = 0; idx < payloads.length; idx++) {
+      const name = `robottest${idx + 1}.bin`
+      const buf = payloads[idx]
+      m.feed(Buffer.concat([m.hex('ZFILE', [0]), m.sub16(m.info(name, buf.length, payloads.length - idx), 'end_ack')]))
+      await m.waitSent('ZRPOS', idx + 1)
+      m.feed(Buffer.concat([m.hex('ZDATA', [0]), m.sub16(buf, 'end_no_ack')]))
+      await m.pump()
+      const finishBefore = m.state.finishCalls
+      m.feed(m.hex('ZEOF', [buf.length]))
+      await m.wait(10) // saveFinish takes 35ms; ZRINIT must wait until saveFinish completes
+      if (m.countSent('ZRINIT') >= idx + 2 && m.state.files.size <= finishBefore) {
+        zrinitBeforeFinish = true
+      }
+      await m.waitSent('ZRINIT', idx + 2)
+    }
+    m.feed(m.hex('ZFIN', [0]))
+    await m.waitSent('ZFIN', 1)
+    m.feed(Buffer.from('OO'))
+    await m.pump(40)
+
+    const dones = m.events.filter((e) => e.phase === 'done')
+    const ids = new Set(dones.map((e) => e.transferId).filter(Boolean))
+    check('延迟落盘：ZRINIT 等本文件 saveFinish 完成后再放行下一文件',
+      zrinitBeforeFinish === false, `zrinitBeforeFinish=${zrinitBeforeFinish}`)
+    check('延迟落盘：3 个文件全部完整保存',
+      m.state.finishCalls === 3 &&
+        payloads.every((p, i) => {
+          const got = m.state.files.get('save-' + (i + 1))
+          return !!got && Buffer.compare(got, p) === 0
+        }),
+      `finish=${m.state.finishCalls}`)
+    check('延迟落盘：每份文件的 done 都有独立 transferId 且 localPath 一一对应',
+      dones.length === 3 &&
+        ids.size === 3 &&
+        dones[0].localPath === 'C:/dl/robottest1.bin' &&
+        dones[1].localPath === 'C:/dl/robottest2.bin' &&
+        dones[2].localPath === 'C:/dl/robottest3.bin',
+      JSON.stringify(dones.map((e) => ({ f: e.fileName, id: e.transferId, path: e.localPath }))))
+    m.teardown()
+  }
+
+  /* ---------- 26：文件间重发 ZEOF / ZRQINIT 与等待 saveBegin 期间重发 ZFILE 不中断批次 ---------- */
+  {
+    const m = multiSzBench({ saveBeginDelayMs: 30 })
+    const f1 = Buffer.alloc(600, 0x71)
+    const f2 = Buffer.alloc(900, 0x72)
+
+    m.feed(m.hex('ZRQINIT', [0, 0, 0, 0]))
+    await m.waitSent('ZRINIT', 1)
+
+    // File 1
+    m.feed(Buffer.concat([m.hex('ZFILE', [0]), m.sub16(m.info('robottest1.log', f1.length, 2), 'end_ack')]))
+    await m.waitSent('ZRPOS', 1)
+    m.feed(Buffer.concat([m.hex('ZDATA', [0]), m.sub16(f1, 'end_no_ack')]))
+    await m.pump()
+    m.feed(m.hex('ZEOF', [f1.length]))
+    await m.waitSent('ZRINIT', 2)
+
+    // Retransmitted ZEOF + ZRQINIT between File 1 and File 2
+    m.feed(Buffer.concat([m.hex('ZEOF', [f1.length]), m.hex('ZRQINIT', [0, 0, 0, 0])]))
+    await m.pump()
+
+    // File 2 ZFILE arrives, and while saveBegin is awaiting (30ms), remote retransmits ZFILE
+    const zfile2 = Buffer.concat([m.hex('ZFILE', [0]), m.sub16(m.info('robottest2.log', f2.length, 1), 'end_ack')])
+    m.feed(zfile2)
+    await m.wait(5)
+    m.feed(zfile2)
+    await m.waitSent('ZRPOS', 2)
+    m.feed(Buffer.concat([m.hex('ZDATA', [0]), m.sub16(f2, 'end_no_ack')]))
+    await m.pump()
+    m.feed(m.hex('ZEOF', [f2.length]))
+    await m.waitSent('ZRINIT', 3)
+    m.feed(m.hex('ZFIN', [0]))
+    await m.waitSent('ZFIN', 1)
+    m.feed(Buffer.from('OO'))
+    await m.pump(40)
+
+    const s1 = m.state.files.get('save-1')
+    const s2 = m.state.files.get('save-2')
+    check('文件间重传 ZEOF/ZRQINIT 与 ZFILE 重传下两份文件均完整落盘',
+      m.state.finishCalls === 2 && !!s1 && Buffer.compare(s1, f1) === 0 && !!s2 && Buffer.compare(s2, f2) === 0,
+      `finish=${m.state.finishCalls} s1=${s1?.length} s2=${s2?.length} sent=${m.names().join(',')}`)
+    check('文件间重传场景无 error 且会话干净收尾',
+      !m.events.some((e) => e.phase === 'error') && m.lib.isZmodemActive(m.sessionId) === false,
+      `active=${m.lib.isZmodemActive(m.sessionId)} errs=${JSON.stringify(m.events.filter((e) => e.phase === 'error'))}`)
+    m.teardown()
   }
 
   console.log('')

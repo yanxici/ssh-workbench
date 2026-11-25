@@ -79,6 +79,10 @@ export interface ZmodemProgress {
   localPath?: string
   /** 远端路径：ZMODEM 两端都不告诉对端路径，恒为空，保留字段是为了口径统一。 */
   remotePath?: string
+  /** 多文件批次中的当前序号（从 1 开始） */
+  fileIndex?: number
+  /** 多文件批次的总文件数 */
+  fileCount?: number
 }
 
 interface SessionState {
@@ -161,6 +165,16 @@ interface SessionState {
   transferStartedAt: number
   /** 本机落盘路径（接收）或源文件路径（发送），记录里展示用 */
   transferLocalPath: string
+  /** 当前接收文件的代际编号：防止前一份异步收尾踩掉下一份的状态与定时器 */
+  offerGen: number
+  /** 收到 ZEOF 后是否等本份落盘完再发 ZRINIT（避免多文件并发竞态） */
+  deferNextZrinit: boolean
+  /** 已消费 ZEOF，等待 saveFinish 完成后补发 ZRINIT */
+  pendingZrinit: boolean
+  /** 本次接收批次已进入的文件计数（从 1 计） */
+  batchIndex: number
+  /** 本次接收批次估算的总文件数 */
+  batchTotal: number
 }
 
 /** 会话结束后等待残渣到齐的窗口（远端常会补发 ZRINIT 等） */
@@ -289,6 +303,7 @@ const lastProgress = new Map<string, ZmodemProgress>()
  * 而进度本身对事后排查没有价值（要看的是传完了没、失败原因是什么）。
  */
 const startedRecords = new Set<string>()
+const recordStartedAt = new Map<string, number>()
 
 function trackRecord(sessionId: string, p: ZmodemProgress): void {
   if (!p.transferId) return
@@ -299,8 +314,11 @@ function trackRecord(sessionId: string, p: ZmodemProgress): void {
   /*
    * 一个字节都没动就取消的，不留记录：用户点「取消」拒绝确认、或在选目录时
    * 关掉对话框，这类空任务只会把账本刷成一堆 0 字节行，真正传过的反而被挤下去。
+   * 0 字节文件正常收完（done）则照常入账。
    */
-  if (finished && !startedRecords.has(p.transferId) && p.bytesDone === 0) return
+  if (finished && !startedRecords.has(p.transferId) && p.bytesDone === 0 && p.phase !== 'done') {
+    return
+  }
   startedRecords.add(p.transferId)
   reportZmodemRecord({
     id: p.transferId,
@@ -313,14 +331,16 @@ function trackRecord(sessionId: string, p: ZmodemProgress): void {
     remotePath: p.remotePath,
     size: p.bytesTotal,
     transferred: p.bytesDone,
-    startedAt: st?.transferStartedAt || Date.now(),
+    startedAt: recordStartedAt.get(p.transferId) ?? st?.transferStartedAt ?? Date.now(),
     // 只有失败才把文案当错误；完成时的 message 是「已保存到 …」这类说明
     error: p.phase === 'error' ? p.message : undefined,
     note: p.phase === 'done' ? p.message : undefined
   })
   if (finished) {
     startedRecords.delete(p.transferId)
-    if (st) {
+    recordStartedAt.delete(p.transferId)
+    // 多文件收尾可能与下一份交错：只清理属于自己的那条，不能把下一份的 id 抹掉
+    if (st && st.transferId === p.transferId) {
       st.transferId = null
       st.transferStartedAt = 0
       st.transferLocalPath = ''
@@ -435,7 +455,12 @@ export function attachZmodem(sessionId: string, hooks: ZmodemHooks): void {
     startupNoticed: false,
     transferId: null,
     transferStartedAt: 0,
-    transferLocalPath: ''
+    transferLocalPath: '',
+    offerGen: 0,
+    deferNextZrinit: false,
+    pendingZrinit: false,
+    batchIndex: 0,
+    batchTotal: 0
   }
 
   state.sentry = new Sentry({
@@ -654,15 +679,21 @@ function startSession(
     state.transferId = null
     state.transferStartedAt = 0
     state.transferLocalPath = ''
+    state.deferNextZrinit = false
+    state.pendingZrinit = false
+    state.batchIndex = 0
+    state.batchTotal = 0
     clearAutoTimer(state)
     clearStallTimer(state)
     // 会话结束后排一次清理：远端可能还会补发一点残渣，给它一个短暂窗口
     scheduleResidueFlush(state)
   })
 
-  // 位置校验以对端为准：真 sz 在 ZRPOS 之后会把整帧从头重发，
-  // 库默认会因此抛 "Error correction is unimplemented." 把会话判死。
-  relaxDataOffset(session)
+  // 接收方向进传输前补齐状态机短板（多帧 ZDATA / 0 字节文件 ZEOF / _file_info 清理 /
+  // 延迟 ZRINIT 避开多文件并发竞态 / 文件间重传兜底 / 安全的位置校验）
+  if (direction === 'receive') {
+    primeReceiveSession(session, state)
+  }
 
   // ZCRCW 是「帧结束，等 ZACK」：lrzsz 的 sz 用它在窗口边界收确认。
   // 本库的条件是 ack_expected() && !frame_end()，正好把这个组合排除掉了，
@@ -678,7 +709,7 @@ function startSession(
       const offset =
         typeof (session as unknown as { _file_offset?: number })._file_offset === 'number'
           ? (session as unknown as { _file_offset: number })._file_offset
-          : state.receivedBytes + subpacket.get_payload().length
+          : state.fileOffset + subpacket.get_payload().length
       const ack = ZmodemModule.Header.build(
         'ZACK',
         ZmodemModule.ENCODELIB.pack_u32_le(offset)
@@ -750,16 +781,22 @@ function clearStallTimer(state: SessionState): void {
  * 让对端从断点续发；连着 IDLE_RESUME_MAX 轮都还是静默才认定对方已经死了，如实报错。
  * 计时器只有一个，收到数据时只更新时间戳（每包都 clear/set 会白白抖动几千次）。
  */
-function armStallTimer(sessionId: string, state: SessionState, fileName?: string): void {
+function armStallTimer(
+  sessionId: string,
+  state: SessionState,
+  fileName?: string,
+  offerGen?: number
+): void {
   clearStallTimer(state)
   state.stallTimer = setTimeout(() => {
     state.stallTimer = undefined
     if (!state.active) return
+    if (offerGen !== undefined && state.offerGen !== offerGen) return
     // 按「落盘进展」计时，不按收包：对端反复重发被丢弃的区间时字节在流，
     // 但文件长度不动，那种状态和彻底静默一样需要干预。
     const idleFor = Date.now() - state.lastProgressAt
     if (state.lastProgressAt > 0 && idleFor < receiveWatchdog.idleMs) {
-      armStallTimer(sessionId, state, fileName)
+      armStallTimer(sessionId, state, fileName, offerGen)
       return
     }
     // 判据用 fileOffset（已落盘）而不是 receivedBytes（收到的字节）：
@@ -775,13 +812,15 @@ function armStallTimer(sessionId: string, state: SessionState, fileName?: string
           fileName: fileName ?? snap?.fileName,
           bytesDone: 0,
           bytesTotal: snap?.bytesTotal ?? 0,
+          fileIndex: snap?.fileIndex,
+          fileCount: snap?.fileCount,
           message:
             '已等待 15 秒仍未收到数据，远端可能没在发送 —— 可按「中断」退出或重新执行 sz'
         })
       }
       // 提示只发一次，但看门狗必须继续跑：否则这里 return 之后整条传输
       // 就再没有任何超时保护，对端后面真的卡住也没人管。
-      armStallTimer(sessionId, state, fileName)
+      armStallTimer(sessionId, state, fileName, offerGen)
       return
     }
 
@@ -794,6 +833,8 @@ function armStallTimer(sessionId: string, state: SessionState, fileName?: string
         fileName: fileName ?? snap?.fileName,
         bytesDone: offset,
         bytesTotal: snap?.bytesTotal ?? offset,
+        fileIndex: snap?.fileIndex,
+        fileCount: snap?.fileCount,
         message: `连续 ${IDLE_RESUME_MAX} 次续传都没有新进展，对端疑似已退出（已保留前 ${offset} 字节）`
       })
       recoverFromError(state)
@@ -807,7 +848,7 @@ function armStallTimer(sessionId: string, state: SessionState, fileName?: string
       `已 ${Math.round(receiveWatchdog.idleMs / 1000)} 秒没有进展，正在请求对端从 ${offset} 字节处续传（第 ${state.idleResumes} 次）`
     )
     if (resumed) {
-      armStallTimer(sessionId, state, fileName)
+      armStallTimer(sessionId, state, fileName, offerGen)
       return
     }
     emit(sessionId, {
@@ -816,6 +857,8 @@ function armStallTimer(sessionId: string, state: SessionState, fileName?: string
       fileName: fileName ?? snap?.fileName,
       bytesDone: offset,
       bytesTotal: snap?.bytesTotal ?? offset,
+      fileIndex: snap?.fileIndex,
+      fileCount: snap?.fileCount,
       message: `传输停滞且无法续传（已保留前 ${offset} 字节）`
     })
     recoverFromError(state)
@@ -926,10 +969,13 @@ async function runReceive(
 
   // 关键一步：Receive 会话创建后必须 start() 才会发出第一个 ZRINIT。
   // 少了它，远端 sz 永远等不到回应 —— 界面上就是「收取」之后一直等待。
+  const startGen = state.offerGen
   try {
-    await session.start()
+    const startP = session.start()
     // 发出 ZRINIT 之后远端应当开始推文件；迟迟没动静就提醒，避免纯干等。
-    armStallTimer(sessionId, state)
+    // 带上 startGen：一旦第一个 offer 到达，启动看门狗自动让位给文件级看门狗。
+    armStallTimer(sessionId, state, undefined, startGen)
+    await startP
   } catch (err) {
     emit(sessionId, {
       phase: 'error',
@@ -946,12 +992,33 @@ async function runReceive(
   }
 }
 
+/**
+ * 当前文件落盘收尾后，补发在 ZEOF 里延后的 ZRINIT，通知远端推送下一份文件（或 ZFIN）。
+ * 只在当前代际仍匹配时执行：若对端已流水线提前推了下一份 ZFILE，绝不能补发过期 ZRINIT。
+ */
+function flushPendingZrinit(state: SessionState, myGen: number): void {
+  if (state.offerGen !== myGen) return
+  state.deferNextZrinit = false
+  if (!state.pendingZrinit) return
+  state.pendingZrinit = false
+  const raw = state.active as unknown as RawReceiveSession | null
+  try {
+    raw?._send_ZRINIT?.()
+  } catch {
+    /* 会话已结束或已中止 */
+  }
+}
+
 async function handleOffer(
   sessionId: string,
   state: SessionState,
   offer: ZmodemOffer
 ): Promise<void> {
-  let details: { name?: string; size?: number }
+  const myGen = ++state.offerGen
+  state.pendingZrinit = false
+  state.deferNextZrinit = false
+
+  let details: { name?: string; size?: number; files_remaining?: number }
   try {
     details = offer.get_details()
   } catch {
@@ -959,6 +1026,17 @@ async function handleOffer(
   }
   const fileName = details.name || 'download.bin'
   const total = details.size || 0
+
+  // 批次序号：对端 ZFILE 的 files_remaining 包含当前文件本身（如 3 -> 2 -> 1）
+  const myFileIndex = ++state.batchIndex
+  const remaining =
+    typeof details.files_remaining === 'number' && details.files_remaining > 0
+      ? details.files_remaining
+      : 1
+  state.batchTotal = Math.max(state.batchTotal, myFileIndex + remaining - 1)
+  const myFileCount = state.batchTotal
+  const batchMeta =
+    myFileCount > 1 ? { fileIndex: myFileIndex, fileCount: myFileCount } : {}
 
   clearStallTimer(state)
   const target = await beginSave(state, fileName)
@@ -975,8 +1053,15 @@ async function handleOffer(
       fileName,
       bytesDone: 0,
       bytesTotal: total,
+      ...batchMeta,
       message: '未选择保存位置，已跳过'
     })
+    return
+  }
+
+  // 等待 beginSave IPC 期间若会话已中止或已切到新 offer，释放本文件句柄并退出
+  if (state.offerGen !== myGen || !state.active) {
+    await window.api.zmodem.saveFinish(target.saveId).catch(() => null)
     return
   }
 
@@ -985,13 +1070,19 @@ async function handleOffer(
   state.lastProgressAt = 0
   state.idleResumes = 0
   state.startupNoticed = false
+  state.deferNextZrinit = true
   /*
-   * 每个文件一条记录：多文件 sz 是一个接一个 offer 的，用同一个 id 会把
-   * 三次传输挤成一行，用户看不到到底哪个文件失败。
+   * 每个文件一条独立记录与本地常量：多文件 sz 即使发生收尾交错，
+   * 也不会把下一份文件的 transferId / localPath 串到上一份上。
    */
-  state.transferId = uid()
-  state.transferStartedAt = Date.now()
-  state.transferLocalPath = target.path
+  const myTransferId = uid()
+  const myStartedAt = Date.now()
+  const myLocalPath = target.path
+  recordStartedAt.set(myTransferId, myStartedAt)
+  state.transferId = myTransferId
+  state.transferStartedAt = myStartedAt
+  state.transferLocalPath = myLocalPath
+
   const chunks: Uint8Array[] = []
   let pending = 0
   let written = 0
@@ -1030,6 +1121,17 @@ async function handleOffer(
   })
 
   try {
+    emit(sessionId, {
+      phase: 'active',
+      direction: 'receive',
+      fileName,
+      bytesDone: 0,
+      bytesTotal: total,
+      ...batchMeta,
+      transferId: myTransferId,
+      localPath: myLocalPath
+    })
+
     const accepted = offer.accept({
       on_input: (payload: Uint8Array) => {
         // 数据还在流动：给静默看门狗续命。
@@ -1084,22 +1186,27 @@ async function handleOffer(
           direction: 'receive',
           fileName,
           bytesDone: written + pending,
-          bytesTotal: total
+          bytesTotal: total,
+          ...batchMeta,
+          transferId: myTransferId,
+          localPath: myLocalPath
         })
       }
     })
 
     // 数据阶段的看门狗。之前 handleOffer 一进来就 clearStallTimer 却从不重新 arm，
     // 于是「文件已经开始传」的整个窗口根本没有任何超时保护 —— 这正是大文件卡死的现场。
-    armStallTimer(sessionId, state, fileName)
+    armStallTimer(sessionId, state, fileName, myGen)
 
     await Promise.race([accepted.then(() => undefined), completed])
 
-    clearStallTimer(state)
-    state.resyncAttempts = 0
-    state.lastResyncAt = 0
-    state.lastProgressAt = 0
-    state.idleResumes = 0
+    if (state.offerGen === myGen) {
+      clearStallTimer(state)
+      state.resyncAttempts = 0
+      state.lastResyncAt = 0
+      state.lastProgressAt = 0
+      state.idleResumes = 0
+    }
     flush()
     await queue
 
@@ -1110,8 +1217,12 @@ async function handleOffer(
         fileName,
         bytesDone: written,
         bytesTotal: total || written,
+        ...batchMeta,
+        transferId: myTransferId,
+        localPath: myLocalPath,
         message: failed
       })
+      flushPendingZrinit(state, myGen)
       return
     }
 
@@ -1123,8 +1234,12 @@ async function handleOffer(
         fileName,
         bytesDone: written,
         bytesTotal: total || written,
+        ...batchMeta,
+        transferId: myTransferId,
+        localPath: myLocalPath,
         message: fin.error
       })
+      flushPendingZrinit(state, myGen)
       return
     }
     emit(sessionId, {
@@ -1133,8 +1248,12 @@ async function handleOffer(
       fileName,
       bytesDone: fin.data.size,
       bytesTotal: total || fin.data.size,
+      ...batchMeta,
+      transferId: myTransferId,
+      localPath: fin.data.path,
       message: `已保存到 ${fin.data.path}`
     })
+    flushPendingZrinit(state, myGen)
   } catch (err) {
     // 已经收到的字节先落盘，不论后面是续传还是放弃都不能丢。
     // 异常本身不代表停滞，所以这里只落盘、不碰 lastProgressAt：
@@ -1144,12 +1263,16 @@ async function handleOffer(
 
     if (resyncReceive(sessionId, state, err)) {
       // 续传链路已建立：不结束流程，等对端从断点续发（由 'complete' 收尾）
-      armStallTimer(sessionId, state, fileName)
+      armStallTimer(sessionId, state, fileName, myGen)
       return
     }
 
     // 真的失败：把远端还在喷的二进制挡在终端之外，并把已收到的部分收尾，
     // 否则用户既丢了文件又看不到任何解释。
+    if (state.offerGen === myGen) {
+      state.deferNextZrinit = false
+      state.pendingZrinit = false
+    }
     state.suppressUntil = Date.now() + GARBLE_SUPPRESS_MS
     let message = errText(err)
     const fin2 = await window.api.zmodem.saveFinish(target.saveId).catch(() => null)
@@ -1162,6 +1285,9 @@ async function handleOffer(
       fileName,
       bytesDone: written,
       bytesTotal: total || written,
+      ...batchMeta,
+      transferId: myTransferId,
+      localPath: myLocalPath,
       message
     })
   }
@@ -1397,7 +1523,12 @@ async function runSend(
 
   state.transferStartedAt = Date.now()
 
-  for (const file of picked.files) {
+  for (let fileIdx = 0; fileIdx < picked.files.length; fileIdx++) {
+    const file = picked.files[fileIdx]
+    const sendBatchMeta =
+      picked.files.length > 1
+        ? { fileIndex: fileIdx + 1, fileCount: picked.files.length }
+        : {}
     currentFile = file.name
     // 每个文件一条记录：多文件时只留一行看不出哪个没送到
     state.transferId = uid()
@@ -1443,7 +1574,8 @@ async function runSend(
           direction: 'send',
           fileName: file.name,
           bytesDone: sent,
-          bytesTotal: total
+          bytesTotal: total,
+          ...sendBatchMeta
         })
         // 几 MB 的文件在一个同步循环里塞完会让渲染进程整段卡死，
         // 期间连中断按钮都点不动，所以按固定字节数定期让出
@@ -1525,66 +1657,165 @@ interface RawReceiveSession {
   _next_header_handler?: Record<string, unknown> | null
   _file_offset?: number
   _offset_ok?: boolean
+  _accepted_offer?: boolean
+  _file_info?: unknown
+  _current_transfer?: unknown
   _consume_ZDATA?: (hdr: { get_offset(): number }) => void
+  _consume_ZDATA_data?: unknown
   _consume_ZEOF?: (hdr: { get_offset(): number }) => void
   _make_promise_for_between_files?: () => unknown
+  _accept?: (offset?: number) => Promise<unknown>
   _send_ZRINIT?: () => void
+  _send_ZRPOS?: () => void
   _on_file_end?: () => void
 }
 
 /**
- * 放宽 ZDATA 头的位置校验。
+ * 接收方向进传输前补齐 zmodem.js 的多文件与实网短板：
  *
- * 库里的 _consume_ZDATA 一旦发现头的 offset 与自身 _file_offset 不等就抛
- * "Error correction is unimplemented."，而真 sz 收到 ZRPOS 之后经常把整帧
- * 从头重发（offset 比我们记录的更小）。位置以对端为准即可：重复的字节
- * 由 on_input 里的去重循环丢弃，不该因此把整个会话判死。
+ * 1) _consume_ZDATA：放宽「回退重发」的位置校验（hdrOff <= state.fileOffset）并同步
+ *    state.resyncFrom 让 on_input 去重；若出现前向跳洞（hdrOff > state.fileOffset），
+ *    仍抛错交由续传发 ZRPOS，防止丢包被静默拼坏。
+ * 2) _accept：同时挂载 { ZDATA, ZEOF } 且消费 ZDATA 后保留 ZDATA ——
+ *    a) 0 字节文件在 ZRPOS(0) 后直接发 ZEOF(0)（无 ZDATA），原库会抛 Unhandled header: ZEOF；
+ *    b) 真实 lrzsz 在窗口边界（ZCRCW）或帧尾（ZCRCE）后会发下一帧 ZDATA，原库把 ZDATA 丢掉
+ *       会触发无谓的续传甚至丢弃缓冲中的帧；
+ *    c) ZEOF 偏移不一致兜底时必须同时清空 _file_info 与 _current_transfer，否则多文件
+ *       第二份的 ZFILE 会抛 "PROTOCOL: second ZFILE data subpacket received" 直接中止整批；
+ *    d) 延后 ZEOF 里的 ZRINIT 到本份文件 flush/saveFinish 完成之后再发，消除前后两份并发互踩。
+ * 3) _make_promise_for_between_files：在文件间隙兜底对端重发的 ZEOF / ZRQINIT，以及
+ *    等待 beginSave IPC 期间可能重发的 ZFILE，避免把整批多文件下载判死。
  */
-function relaxDataOffset(session: ZmodemSession): void {
+function primeReceiveSession(session: ZmodemSession, state: SessionState): void {
   const raw = session as unknown as RawReceiveSession
-  const original = raw._consume_ZDATA
-  if (typeof original !== 'function') return
 
-  raw._consume_ZDATA = function (
-    this: RawReceiveSession,
-    hdr: { get_offset(): number }
-  ): void {
-    try {
-      original.call(this, hdr)
-    } catch (err) {
-      if (!/Error correction is unimplemented/i.test(errText(err))) throw err
-      this._file_offset = hdr.get_offset()
-      this._offset_ok = true
+  const origConsumeZdata = raw._consume_ZDATA
+  if (typeof origConsumeZdata === 'function') {
+    raw._consume_ZDATA = function (
+      this: RawReceiveSession,
+      hdr: { get_offset(): number }
+    ): void {
+      const hdrOff = hdr.get_offset()
+      try {
+        origConsumeZdata.call(this, hdr)
+      } catch (err) {
+        if (!/Error correction is unimplemented/i.test(errText(err))) throw err
+        if (hdrOff > state.fileOffset) throw err
+        this._file_offset = hdrOff
+        this._offset_ok = true
+        state.resyncFrom = hdrOff
+      }
     }
   }
-}
 
-/**
- * 续传时给处理器补一个 ZEOF 分支。
- *
- * _accept() 装的表只有 {ZDATA}：对端若已经发完（ZRPOS 正好落在文件尾），
- * 它会直接回 ZEOF，这里就变成 "Unhandled header: ZEOF" —— 一份收完的文件
- * 反而被判成失败。补上 ZEOF 后按库自己的收尾流程走，后续文件也能继续。
- */
-function ensureEofHandler(session: ZmodemSession): void {
-  const raw = session as unknown as RawReceiveSession
-  const handlers = raw._next_header_handler
-  if (!handlers || handlers.ZEOF) return
-
-  handlers.ZEOF = function (this: RawReceiveSession, hdr: { get_offset(): number }): void {
-    this._next_subpacket_handler = null
-    try {
-      this._consume_ZEOF?.(hdr)
-    } catch {
-      // ZEOF 的 offset 与本地不一致时也认这份文件收完：字节数由去重循环保证，
-      // 不能因为一个确认帧对不上就把已经落盘的整份文件作废
-      this._on_file_end?.()
+  const origBetween = raw._make_promise_for_between_files
+  if (typeof origBetween === 'function') {
+    raw._make_promise_for_between_files = function (this: RawReceiveSession) {
+      const ret = origBetween.call(this)
+      const handlers = this._next_header_handler as
+        | Record<string, (this: RawReceiveSession, hdr: unknown) => void>
+        | null
+        | undefined
+      if (handlers) {
+        const origZfile = handlers.ZFILE
+        if (typeof origZfile === 'function') {
+          handlers.ZFILE = function (this: RawReceiveSession, hdr: unknown) {
+            origZfile.call(this, hdr)
+            const origSub = this._next_subpacket_handler as
+              | ((this: RawReceiveSession, subpacket: unknown) => void)
+              | null
+              | undefined
+            if (typeof origSub === 'function') {
+              this._next_subpacket_handler = function (
+                this: RawReceiveSession,
+                subpacket: unknown
+              ) {
+                const pendingHandlers: Record<
+                  string,
+                  (this: RawReceiveSession, h: unknown) => void
+                > = {
+                  ZFILE() {
+                    this._next_subpacket_handler = function (this: RawReceiveSession) {
+                      this._next_subpacket_handler = null
+                      if (!this._next_header_handler) {
+                        this._next_header_handler = pendingHandlers
+                      }
+                    }
+                  },
+                  ZRQINIT() {
+                    this._next_header_handler = pendingHandlers
+                  },
+                  ZEOF() {
+                    this._next_header_handler = pendingHandlers
+                  }
+                }
+                this._next_header_handler = pendingHandlers
+                origSub.call(this, subpacket)
+              }
+            }
+          }
+        }
+        if (!handlers.ZRQINIT) {
+          handlers.ZRQINIT = function (this: RawReceiveSession) {
+            this._next_header_handler = handlers
+            if (!state.pendingZrinit) this._send_ZRINIT?.()
+          }
+        }
+        if (!handlers.ZEOF) {
+          handlers.ZEOF = function (this: RawReceiveSession) {
+            this._next_header_handler = handlers
+            if (!state.pendingZrinit) this._send_ZRINIT?.()
+          }
+        }
+      }
+      return ret
     }
-    try {
-      this._make_promise_for_between_files?.()
-      this._send_ZRINIT?.()
-    } catch {
-      /* 后续文件握手失败不影响本份收尾 */
+  }
+
+  if (typeof raw._accept === 'function') {
+    raw._accept = function patchedAccept(
+      this: RawReceiveSession,
+      offset?: number
+    ): Promise<void> {
+      this._accepted_offer = true
+      this._file_offset = offset || 0
+
+      const ret = new Promise<void>((resolveAccept) => {
+        const inFileHandlers: Record<
+          string,
+          (this: RawReceiveSession, hdr: { get_offset(): number }) => void
+        > = {
+          ZDATA(hdr) {
+            this._consume_ZDATA?.(hdr)
+            this._next_subpacket_handler = this._consume_ZDATA_data
+            this._next_header_handler = inFileHandlers
+          },
+          ZEOF(hdr) {
+            this._next_subpacket_handler = null
+            try {
+              this._consume_ZEOF?.(hdr)
+            } catch {
+              // ZEOF 偏移不一致时仍认本份收完，同时清掉 _file_info/_current_transfer，
+              // 防止下一份 ZFILE 撞上 "second ZFILE data subpacket received"
+              this._on_file_end?.()
+              this._file_info = null
+              this._current_transfer = null
+            }
+            this._accepted_offer = false
+            this._make_promise_for_between_files?.()
+            resolveAccept()
+            if (state.deferNextZrinit) {
+              state.pendingZrinit = true
+            } else {
+              this._send_ZRINIT?.()
+            }
+          }
+        }
+        this._next_header_handler = inFileHandlers
+      })
+
+      this._send_ZRPOS?.()
+      return ret
     }
   }
 }
@@ -1649,13 +1880,10 @@ function resumeFromOffset(sessionId: string, state: SessionState, message: strin
     // 续传请求就是本轮的新基准：从现在起再等一个完整静默窗，没有新字节才升级。
     // 不重置的话，连续两次续传会挨着发出去（时钟还停在上一次落盘的时刻）。
     state.lastProgressAt = Date.now()
-    // _accept 内部会重发 ZRPOS，对端据此从 offset 处续传
+    // _accept 内部已统一挂载 {ZDATA, ZEOF} 并重发 ZRPOS，对端据此从 offset 处续传
     void Promise.resolve(session._accept(offset)).catch(() => {
       /* 这条链的成败由 'complete' 事件决定，这里只防止未处理的 rejection */
     })
-    // _accept 装的处理表只有 {ZDATA}：对端若正好发到文件尾会直接给 ZEOF，
-    // 那份已经收完的文件就会变成 "Unhandled header: ZEOF" 而作废
-    ensureEofHandler(session)
     const snap = lastProgress.get(sessionId)
     emit(sessionId, {
       phase: 'active',
@@ -1663,6 +1891,8 @@ function resumeFromOffset(sessionId: string, state: SessionState, message: strin
       fileName: snap?.fileName,
       bytesDone: offset,
       bytesTotal: snap?.bytesTotal ?? 0,
+      fileIndex: snap?.fileIndex,
+      fileCount: snap?.fileCount,
       message
     })
     return true
@@ -1744,6 +1974,10 @@ function recoverFromError(state: SessionState): void {
   state.autoConfirm = null
   state.saveDirToken = null
   state.latest = null
+  state.deferNextZrinit = false
+  state.pendingZrinit = false
+  state.batchIndex = 0
+  state.batchTotal = 0
   clearAutoTimer(state)
   try {
     stray?.abort()
