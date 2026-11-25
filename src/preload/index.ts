@@ -495,9 +495,15 @@ export const api = {
     /** 追加一块数据，避免整份文件驻留渲染进程内存 */
     saveAppend: (saveId: string, base64: string): Promise<IpcResult<{ bytes: number }>> =>
       invoke(IPC.ZM_SAVE_APPEND, saveId, base64),
-    saveFinish: (saveId: string): Promise<IpcResult<{ path: string; size: number }>> =>
-      invoke(IPC.ZM_SAVE_FINISH, saveId),
-    sendBytes: (sessionId: string, base64: string): Promise<IpcResult<void>> =>
+    saveFinish: (
+      saveId: string,
+      opts?: { canceled?: boolean }
+    ): Promise<IpcResult<{ path: string; size: number }>> =>
+      invoke(IPC.ZM_SAVE_FINISH, saveId, opts),
+    sendBytes: (
+      sessionId: string,
+      base64: string
+    ): Promise<IpcResult<{ ok: boolean; reason?: string }>> =>
       invoke(IPC.ZM_SEND_BYTES, sessionId, base64)
   },
 

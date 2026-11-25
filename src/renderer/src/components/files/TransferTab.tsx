@@ -14,12 +14,13 @@ import {
 } from 'lucide-react'
 import type { TransferRecord } from '@shared/types'
 import { call } from '@/lib/ipc'
-import { cn, formatRelativeTime } from '@/lib/utils'
+import { cn, formatBytes, formatRelativeTime } from '@/lib/utils'
 import { useTransferStore, isFailedRecord, isLiveRecord } from '@/stores/transferStore'
 import { useSftpStore } from '@/stores/sftpStore'
 import { useSessionStore } from '@/stores/sessionStore'
 import { useToastStore } from '@/stores/toastStore'
 import { amountText, basename, locateKind, parentOf, STATUS_CLASS, STATUS_LABEL } from '@/lib/transferFormat'
+import { getZmodemRecordProgress, watchZmodem, type ZmodemProgress } from '@/lib/zmodem'
 
 /**
  * 侧栏「传输」Tab —— 上传 / 下载的记录，点一行就能定位到文件。
@@ -190,6 +191,7 @@ function TabRow({ record }: { record: TransferRecord }): React.JSX.Element {
   const reveal = useTransferStore((s) => s.reveal)
   const openDir = useTransferStore((s) => s.openDir)
   const live = isLiveRecord(record)
+  const zm = useZmodemLive(record, live)
   const where = locateKind(record)
   const name = record.fileName || basename(record.remotePath || record.localPath) || '（未知文件）'
 
@@ -212,9 +214,10 @@ function TabRow({ record }: { record: TransferRecord }): React.JSX.Element {
           <span className="min-w-0 flex-1 truncate" title={record.connectionName ?? record.target ?? ''}>
             {record.connectionName || record.target || '未知连接'}
           </span>
-          <span className="shrink-0 font-mono">{live ? <LiveAmount record={record} /> : amountText(record)}</span>
+          <span className="shrink-0 font-mono">{live ? <LiveAmount record={record} zm={zm} /> : amountText(record)}</span>
           <span className="shrink-0">{formatRelativeTime(record.finishedAt ?? record.startedAt)}</span>
         </div>
+        {live && <LiveProgressBar record={record} zm={zm} />}
         {(record.error || record.note) && (
           <div
             className={cn(
@@ -273,13 +276,76 @@ function StatusDot({ record }: { record: TransferRecord }): React.JSX.Element {
   return <X size={10} className={cn('shrink-0', STATUS_CLASS[record.status])} />
 }
 
+/** 订阅单条 ZMODEM 进行中记录的实时进度（仅在活任务行启用，避免每行重复订阅或空订阅） */
+function useZmodemLive(record: TransferRecord, enabled: boolean): ZmodemProgress | null {
+  const sessionId = enabled && record.via === 'zmodem' ? record.sessionId : undefined
+  const [zm, setZm] = useState<ZmodemProgress | null>(() =>
+    sessionId ? getZmodemRecordProgress(sessionId, record.id) : null
+  )
+  useEffect(() => {
+    if (!sessionId) {
+      setZm(null)
+      return
+    }
+    setZm(getZmodemRecordProgress(sessionId, record.id))
+    return watchZmodem(sessionId, (p) => {
+      if (p.transferId !== record.id) return
+      setZm(p.phase === 'active' ? p : null)
+    })
+  }, [sessionId, record.id])
+  return zm
+}
+
 /** 活任务按 id 单独订阅：整表订阅会被每 150ms 一次的事件拖着重渲 */
-function LiveAmount({ record }: { record: TransferRecord }): React.JSX.Element {
-  const task = useSftpStore((s) => s.transfers.find((t) => t.id === record.id))
+function LiveAmount({
+  record,
+  zm
+}: {
+  record: TransferRecord
+  zm: ZmodemProgress | null
+}): React.JSX.Element {
+  const task = useSftpStore((s) =>
+    record.via === 'sftp' ? s.transfers.find((t) => t.id === record.id) : undefined
+  )
+  if (zm) {
+    const batch = zm.fileCount && zm.fileCount > 1 ? `${zm.fileIndex ?? 1}/${zm.fileCount} · ` : ''
+    if (zm.bytesTotal <= 0) {
+      return <span className="text-accent">{batch}{formatBytes(zm.bytesDone)}</span>
+    }
+    const pct = Math.min(100, Math.round((zm.bytesDone / zm.bytesTotal) * 100))
+    return <span className="text-accent">{batch}{pct}%</span>
+  }
   if (!task) return <span title={STATUS_LABEL[record.status]}>进行中</span>
   if (task.unit === 'files') return <span>{Math.min(task.transferred, task.total)} / {task.total} 个</span>
   if (task.total <= 0) return <span>{task.speedBps ? `${Math.round(task.speedBps / 1024)} KB/s` : '计算中'}</span>
   return <span>{Math.min(100, Math.round((task.transferred / task.total) * 100))}%</span>
+}
+
+function LiveProgressBar({
+  record,
+  zm
+}: {
+  record: TransferRecord
+  zm: ZmodemProgress | null
+}): React.JSX.Element | null {
+  const task = useSftpStore((s) =>
+    record.via === 'sftp' ? s.transfers.find((t) => t.id === record.id) : undefined
+  )
+  let pct: number | null = null
+  if (zm && zm.bytesTotal > 0) {
+    pct = Math.min(100, Math.round((zm.bytesDone / zm.bytesTotal) * 100))
+  } else if (task && task.total > 0) {
+    pct = Math.min(100, Math.round((task.transferred / task.total) * 100))
+  }
+  if (pct === null) return null
+  return (
+    <div className="mt-1 h-1 overflow-hidden rounded-full bg-raised">
+      <div
+        className="h-full rounded-full bg-accent transition-[width] duration-150"
+        style={{ width: `${pct}%` }}
+      />
+    </div>
+  )
 }
 
 function RemoteLocate({ record }: { record: TransferRecord }): React.JSX.Element {

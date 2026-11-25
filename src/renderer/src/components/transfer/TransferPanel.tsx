@@ -1,5 +1,5 @@
 import type * as React from 'react'
-import { useEffect, useMemo } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
   AlertTriangle,
   ArrowDownToLine,
@@ -24,6 +24,7 @@ import { useSftpStore } from '@/stores/sftpStore'
 import { useTransferStore, isFailedRecord, type RecordFilter } from '@/stores/transferStore'
 import { useTrzszStore } from '@/stores/trzszStore'
 import { amountText, basename, locateKind, parentOf } from '@/lib/transferFormat'
+import { getZmodemRecordProgress, watchZmodem, type ZmodemProgress } from '@/lib/zmodem'
 
 /**
  * 传输记录面板（覆盖主区域，与其它工具面板同一套外壳）。
@@ -310,6 +311,30 @@ function LiveAmount({ record }: { record: TransferRecord }): React.JSX.Element {
    * 所以这里按 sessionId 取那一条 —— 同样只在本次运行内有效。
    */
   const trzsz = useTrzszStore((s) => (record.sessionId ? s.bySession[record.sessionId] : undefined))
+  const zmSessionId = record.via === 'zmodem' ? record.sessionId : undefined
+  const [zm, setZm] = useState<ZmodemProgress | null>(() =>
+    zmSessionId ? getZmodemRecordProgress(zmSessionId, record.id) : null
+  )
+  useEffect(() => {
+    if (!zmSessionId) {
+      setZm(null)
+      return
+    }
+    setZm(getZmodemRecordProgress(zmSessionId, record.id))
+    return watchZmodem(zmSessionId, (p) => {
+      if (p.transferId !== record.id) return
+      setZm(p.phase === 'active' ? p : null)
+    })
+  }, [zmSessionId, record.id])
+  if (record.via === 'zmodem' && zm) {
+    const pct = zm.bytesTotal > 0 ? Math.min(100, Math.round((zm.bytesDone / zm.bytesTotal) * 100)) : 0
+    const batch = zm.fileCount && zm.fileCount > 1 ? `${zm.fileIndex ?? 1}/${zm.fileCount} · ` : ''
+    return (
+      <span className="w-24 shrink-0 text-right font-mono text-3xs text-accent">
+        {batch}{zm.bytesTotal > 0 ? `${pct}%` : formatBytes(zm.bytesDone)}
+      </span>
+    )
+  }
   if (record.via === 'trzsz' && trzsz) {
     const total = trzsz.files?.total
     const index = trzsz.files?.index

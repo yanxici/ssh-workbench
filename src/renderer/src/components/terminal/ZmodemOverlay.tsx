@@ -28,7 +28,7 @@ import {
   type ZmodemDirection
 } from '@/lib/zmodem'
 import { setZmodemIdentityResolver } from '@/lib/zmodemRecord'
-import { useSessionStore } from '@/stores/sessionStore'
+import { terminalRegistry, useSessionStore } from '@/stores/sessionStore'
 
 interface PendingConfirm {
   direction: ZmodemDirection
@@ -46,15 +46,17 @@ export function ZmodemOverlay(): React.JSX.Element | null {
   // 注册确认处理器：协议层检测到 ZMODEM 时调用
   useEffect(() => {
     setZmodemConfirmHandler(
-      (direction) =>
+      (sessionId, direction) =>
         new Promise<boolean>((resolve) => {
+          const src = useSessionStore.getState().sessions.find((s) => s.id === sessionId)
+          const sessionName = src ? src.title || src.host : ''
           setPending((prev) => {
             // 已有一个待确认时，后到的直接拒绝，避免弹窗互相覆盖
             if (prev) {
               resolve(false)
               return prev
             }
-            return { direction, resolve, sessionName: '' }
+            return { direction, resolve, sessionName }
           })
         })
     )
@@ -131,11 +133,13 @@ export function ZmodemOverlay(): React.JSX.Element | null {
       if (pending) {
         pending.resolve(false)
         setPending(null)
+        if (activeId) terminalRegistry.get(activeId)?.term.focus()
         return
       }
       if (!activeId) return
       abortZmodem(activeId)
       setProgress(null)
+      terminalRegistry.get(activeId)?.term.focus()
     }
     // 捕获阶段抢在 xterm / 弹窗之前，避免 Esc 被当成终端输入
     window.addEventListener('keydown', onKey, true)
@@ -147,9 +151,12 @@ export function ZmodemOverlay(): React.JSX.Element | null {
   /* ---------------- 确认弹窗 ---------------- */
   if (pending) {
     const receiving = pending.direction === 'receive'
+    const confirmSessionName =
+      pending.sessionName || (activeSession ? activeSession.title || activeSession.host : '')
     const answer = (ok: boolean): void => {
       pending.resolve(ok)
       setPending(null)
+      if (!ok && activeId) terminalRegistry.get(activeId)?.term.focus()
     }
     return (
       <div
@@ -174,11 +181,7 @@ export function ZmodemOverlay(): React.JSX.Element | null {
                   : '远端已进入接收状态（rz），是否选择本机文件发送？'}
               </span>
             </div>
-            {activeSession && (
-              <div className="text-ink-3">
-                会话：{activeSession.title || activeSession.host}
-              </div>
-            )}
+            {confirmSessionName && <div className="text-ink-3">会话：{confirmSessionName}</div>}
             <div className="text-ink-3">
               {receiving
                 ? '接收需要先选一个保存文件夹（多文件只问一次），同名文件自动加序号，不会覆盖。'
@@ -243,6 +246,7 @@ export function ZmodemOverlay(): React.JSX.Element | null {
   const abort = (): void => {
     if (activeId) abortZmodem(activeId)
     setProgress(null)
+    if (activeId) terminalRegistry.get(activeId)?.term.focus()
   }
 
   return (
@@ -251,7 +255,9 @@ export function ZmodemOverlay(): React.JSX.Element | null {
         <div className="mb-2 flex items-center gap-2 text-xs">
           {icon}
           <span className="font-medium text-ink-1">{label}</span>
-          <span className="ml-auto text-ink-3">{pct}%</span>
+          <span className="ml-auto text-ink-3">
+            {total > 0 || progress.phase === 'done' ? `${pct}%` : formatBytes(progress.bytesDone)}
+          </span>
         </div>
 
         {progress.fileName && (
@@ -287,7 +293,7 @@ export function ZmodemOverlay(): React.JSX.Element | null {
 
         {(canAbort || (progress.phase === 'detected' && receiving)) && (
           <div className="mt-2 flex items-center justify-end gap-2 border-t border-edge-soft pt-2">
-            {receiving && (
+            {progress.phase === 'detected' && receiving && (
               <button
                 className="btn"
                 onClick={() => {

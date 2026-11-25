@@ -854,13 +854,14 @@ class SessionManager {
    * SSH 侧的 string 则会被按 UTF-8 编码，>127 的字节失真。
    * 二进制内容也不写进会话录制，避免污染日志。
    */
-  writeBytes(sessionId: string, data: Buffer): void {
+  writeBytes(sessionId: string, data: Buffer): { ok: boolean; reason?: string } {
     const rec = this.sessions.get(sessionId)
-    if (!rec || rec.status !== 'connected') return
+    if (!rec || rec.status !== 'connected') return { ok: false, reason: '会话未连接' }
     // 传输中不接受二进制：ZMODEM 与 trzsz 不会同时进行，
     // 把 ZMODEM 的帧写进 trzsz 的 base64 流里只会两边都坏掉。
-    if (trzszManager.get(sessionId)?.active) return
+    if (trzszManager.get(sessionId)?.active) return { ok: false, reason: 'trzsz 传输进行中' }
     rec.transport.writeBytes(data)
+    return { ok: true }
   }
 
   /* ------------------------------------------------------------------ *

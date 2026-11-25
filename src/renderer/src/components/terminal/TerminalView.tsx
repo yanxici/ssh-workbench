@@ -511,12 +511,13 @@ export function TerminalView({
     ensureZmodem(sessionId, {
       // 走统一写入口：ZMODEM 转发的普通输出也要经过高亮（命中行才染色）
       write: (text) => writeSessionData(sessionId, term, text),
-      send: (bytes) => {
+      send: async (bytes) => {
         // 协议控制字节是二进制，必须走专用通道；
         // session.write 会按 UTF-8 编码，>127 的字节会失真。
-        void window.api.zmodem.sendBytes(sessionId, bytesToBase64(bytes))
+        const res = await window.api.zmodem.sendBytes(sessionId, bytesToBase64(bytes))
+        return res.ok ? res.data : { ok: false, reason: res.error }
       },
-      confirm: (direction) => requestZmodemConfirm(direction),
+      confirm: (direction) => requestZmodemConfirm(sessionId, direction),
       afterTransfer: () => {
         // 传输结束后补换行：远端 sz/rz 退出时不补 \r\n，
         // 提示符会与最后一行进度挤在一起。

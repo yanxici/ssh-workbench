@@ -94,7 +94,11 @@ function loadLib(opts = {}) {
           const total = arr.reduce((a, b) => a + b.length, 0)
           return { ok: true, data: { bytes: total } }
         },
-        saveFinish: async (saveId) => {
+        saveFinish: async (saveId, opts) => {
+          if (opts?.canceled) {
+            state.saves.delete(saveId)
+            return { ok: true, data: { path: state.savePaths.get(saveId) || 'C:/dl/x', size: 0 } }
+          }
           state.finishCalls++
           if (state.saveFinishDelayMs) await new Promise((r) => setTimeout(r, state.saveFinishDelayMs))
           const arr = state.saves.get(saveId)
@@ -1466,6 +1470,170 @@ function silenceBench(opts = {}) {
     check('文件间重传场景无 error 且会话干净收尾',
       !m.events.some((e) => e.phase === 'error') && m.lib.isZmodemActive(m.sessionId) === false,
       `active=${m.lib.isZmodemActive(m.sessionId)} errs=${JSON.stringify(m.events.filter((e) => e.phase === 'error'))}`)
+    m.teardown()
+  }
+
+  /* ---------- 27：实时增长日志文件（超过 ZFILE 初始大小）+ 多文件续传不能在 100% 卡死 ---------- */
+  {
+    const m = multiSzBench()
+    const f1 = Buffer.alloc(3200)
+    const f2 = Buffer.alloc(1000)
+    for (let i = 0; i < f1.length; i++) f1[i] = (i * 19 + 5) & 0xff
+    for (let i = 0; i < f2.length; i++) f2[i] = (i * 29 + 7) & 0xff
+
+    m.feed(m.hex('ZRQINIT', [0, 0, 0, 0]))
+    await m.waitSent('ZRINIT', 1)
+
+    // File 1: ZFILE 声明 2000 字节，但传输期间文件实时增长到 3200 字节（跨两帧 ZDATA）
+    m.feed(Buffer.concat([m.bin32('ZFILE', [0]), m.sub32(m.info('robotTestDebug.log', 2000, 2, 3000), 'end_ack')]))
+    await m.waitSent('ZRPOS', 1)
+    m.feed(Buffer.concat([m.bin32('ZDATA', [0]), m.sub32(f1.subarray(0, 2400), 'end_ack')]))
+    await m.waitSent('ZACK', 1)
+    m.feed(Buffer.concat([m.bin32('ZDATA', [2400]), m.sub32(f1.subarray(2400), 'end_no_ack')]))
+    await m.pump()
+    m.feed(m.bin32('ZEOF', [f1.length]))
+    const zr2 = await m.waitSent('ZRINIT', 2)
+
+    if (zr2) {
+      m.feed(Buffer.concat([m.bin32('ZFILE', [0]), m.sub32(m.info('robotTestDebug_2.log', f2.length, 1, f2.length), 'end_ack')]))
+      await m.waitSent('ZRPOS', 2)
+      m.feed(Buffer.concat([m.bin32('ZDATA', [0]), m.sub32(f2, 'end_no_ack')]))
+      await m.pump()
+      m.feed(m.bin32('ZEOF', [f2.length]))
+    }
+    const zr3 = await m.waitSent('ZRINIT', 3)
+    if (zr3) {
+      m.feed(m.hex('ZFIN', [0]))
+      await m.waitSent('ZFIN', 1)
+      m.feed(Buffer.from('OO'))
+      await m.pump(40)
+    }
+
+    const s1 = m.state.files.get('save-1')
+    const s2 = m.state.files.get('save-2')
+    check('增长日志：超出 ZFILE 初始大小的连续字节完整落盘（不被截断也不卡 100%）',
+      !!s1 && Buffer.compare(s1, f1) === 0, s1 ? `len=${s1.length}/${f1.length}` : 'missing')
+    check('增长日志：第 1 个增长文件收完后第 2 个文件照常收完',
+      m.state.finishCalls === 2 && !!s2 && Buffer.compare(s2, f2) === 0,
+      `finish=${m.state.finishCalls} s2=${s2?.length} sent=${m.names().join(',')}`)
+    check('增长日志：全程无 error 且会话正常结束',
+      !m.events.some((e) => e.phase === 'error') && m.lib.isZmodemActive(m.sessionId) === false,
+      `active=${m.lib.isZmodemActive(m.sessionId)} errs=${JSON.stringify(m.events.filter((e) => e.phase === 'error'))}`)
+    m.teardown()
+  }
+
+  /* ---------- 28：150ms 限流窗内连续坏帧只限流不中止（高延迟 315ms RTT 场景） ---------- */
+  {
+    const m = multiSzBench()
+    const f1 = Buffer.alloc(2400)
+    const f2 = Buffer.alloc(1000)
+    for (let i = 0; i < f1.length; i++) f1[i] = (i * 7 + 1) & 0xff
+    for (let i = 0; i < f2.length; i++) f2[i] = (i * 13 + 2) & 0xff
+
+    m.feed(m.hex('ZRQINIT', [0, 0, 0, 0]))
+    await m.waitSent('ZRINIT', 1)
+
+    m.feed(Buffer.concat([m.hex('ZFILE', [0]), m.sub16(m.info('robottest1.bin', f1.length, 2), 'end_ack')]))
+    await m.waitSent('ZRPOS', 1)
+    // 先收前 800 字节
+    m.feed(Buffer.concat([m.hex('ZDATA', [0]), m.sub16(f1.subarray(0, 800), 'no_end_no_ack')]))
+    await m.pump(10)
+    // 第 1 次坏帧（触发 resyncReceive 并记下 lastResyncAt）
+    m.feed(Buffer.concat([m.hex('ZDATA', [0]), m.sub16(f1.subarray(0, 800), 'no_end_no_ack')]))
+    await m.waitSent('ZRPOS', 2)
+    // 在 150ms 窗内先收到一个旧的重传包把 resyncFrom 清成 -1，再马上撞上第 2 次坏帧（< 150ms）
+    m.feed(Buffer.concat([m.hex('ZDATA', [0]), m.sub16(f1.subarray(0, 400), 'no_end_no_ack')]))
+    await m.pump(5)
+    m.feed(Buffer.concat([m.hex('ZDATA', [0]), m.sub16(f1.subarray(0, 400), 'no_end_no_ack')]))
+    await m.pump(10)
+    // 随后对端按第 1 次 ZRPOS(800) 续传剩余字节
+    m.feed(Buffer.concat([m.hex('ZDATA', [800]), m.sub16(f1.subarray(800), 'end_no_ack')]))
+    await m.pump()
+    m.feed(m.hex('ZEOF', [f1.length]))
+    const zr2 = await m.waitSent('ZRINIT', 2)
+
+    if (zr2) {
+      m.feed(Buffer.concat([m.hex('ZFILE', [0]), m.sub16(m.info('robottest2.bin', f2.length, 1), 'end_ack')]))
+      await m.waitSent('ZRPOS', 3)
+      m.feed(Buffer.concat([m.hex('ZDATA', [0]), m.sub16(f2, 'end_no_ack')]))
+      await m.pump()
+      m.feed(m.hex('ZEOF', [f2.length]))
+    }
+    const zr3 = await m.waitSent('ZRINIT', 3)
+    if (zr3) {
+      m.feed(m.hex('ZFIN', [0]))
+      await m.waitSent('ZFIN', 1)
+      m.feed(Buffer.from('OO'))
+      await m.pump(40)
+    }
+
+    const s1 = m.state.files.get('save-1')
+    const s2 = m.state.files.get('save-2')
+    check('限流窗坏帧：不因 150ms 限流误杀整批会话，两份文件逐字节完整',
+      m.state.finishCalls === 2 && !!s1 && Buffer.compare(s1, f1) === 0 && !!s2 && Buffer.compare(s2, f2) === 0,
+      `finish=${m.state.finishCalls} s1=${s1?.length}/${f1.length} s2=${s2?.length}/${f2.length} sent=${m.names().join(',')}`)
+    check('限流窗坏帧：不触发 error 且会话正常退出',
+      !m.events.some((e) => e.phase === 'error') && m.lib.isZmodemActive(m.sessionId) === false,
+      `active=${m.lib.isZmodemActive(m.sessionId)} errs=${JSON.stringify(m.events.filter((e) => e.phase === 'error'))}`)
+    m.teardown()
+  }
+
+  /* ---------- 29：不可恢复异常（对端 5×CAN）不能静默冻在 100%/进行中，必须上报 error 并保留已收部分 ---------- */
+  {
+    const m = multiSzBench()
+    m.feed(m.hex('ZRQINIT', [0, 0, 0, 0]))
+    await m.waitSent('ZRINIT', 1)
+    m.feed(Buffer.concat([m.hex('ZFILE', [0]), m.sub16(m.info('robottest1.log', 1600, 4), 'end_ack')]))
+    await m.waitSent('ZRPOS', 1)
+    m.feed(Buffer.concat([m.hex('ZDATA', [0]), m.sub16(Buffer.alloc(800, 0x41), 'no_end_no_ack')]))
+    await m.pump(20)
+    // 对端异常中止（5×CAN）
+    m.feed(Buffer.from(Zmodem.ZMLIB.ABORT_SEQUENCE))
+    await m.pump(40)
+
+    const errEv = m.events.filter((e) => e.phase === 'error').pop()
+    const saved = m.state.files.get('save-1')
+    check('不可恢复异常：立刻向 UI 与传输账本上报 error（不能静默冻在「进行中」）',
+      !!errEv && !!errEv.transferId && /已保留前 800 字节/.test(errEv.message || ''),
+      JSON.stringify(errEv))
+    check('不可恢复异常：已收字节正常 saveFinish 落盘',
+      m.state.finishCalls === 1 && !!saved && saved.length === 800,
+      `finish=${m.state.finishCalls} len=${saved?.length}`)
+    check('不可恢复异常：会话与活动快照全部复位',
+      m.lib.isZmodemActive(m.sessionId) === false && m.lib.getZmodemProgress(m.sessionId) === null,
+      `active=${m.lib.isZmodemActive(m.sessionId)} snap=${JSON.stringify(m.lib.getZmodemProgress(m.sessionId))}`)
+    m.teardown()
+  }
+
+  /* ---------- 30：ZFIN 后杂讯/换行再跟 OO 不抛错 + 多订阅者 watchZmodem 共存 ---------- */
+  {
+    const m = multiSzBench()
+    const secondEvents = []
+    const offSecond = m.lib.watchZmodem(m.sessionId, (p) => secondEvents.push(p))
+    const payload = Buffer.alloc(900, 0x33)
+
+    m.feed(m.hex('ZRQINIT', [0, 0, 0, 0]))
+    await m.waitSent('ZRINIT', 1)
+    m.feed(Buffer.concat([m.hex('ZFILE', [0]), m.sub16(m.info('robottest1.log', payload.length, 1), 'end_ack')]))
+    await m.waitSent('ZRPOS', 1)
+    m.feed(Buffer.concat([m.hex('ZDATA', [0]), m.sub16(payload, 'end_no_ack')]))
+    await m.pump()
+    m.feed(m.hex('ZEOF', [payload.length]))
+    await m.waitSent('ZRINIT', 2)
+    m.feed(m.hex('ZFIN', [0]))
+    await m.waitSent('ZFIN', 1)
+    // 真实 shell/lrzsz 在 ZFIN 后常夹带 \r\n 再发 OO 与提示符
+    m.feed(Buffer.from('\r\nOO\r\nroot@IFLY:~# '))
+    await m.pump(40)
+    offSecond()
+
+    check('多订阅者共存：浮层与侧栏两个 watcher 都能收到 active 与 done 事件',
+      m.events.some((e) => e.phase === 'done') && secondEvents.some((e) => e.phase === 'done') &&
+        m.events.some((e) => e.phase === 'active') && secondEvents.some((e) => e.phase === 'active'),
+      `w1=${m.events.map((e) => e.phase).join(',')} w2=${secondEvents.map((e) => e.phase).join(',')}`)
+    check('ZFIN 后夹带换行再发 OO 能干净结束且不误发 CAN 中止',
+      m.lib.isZmodemActive(m.sessionId) === false && !m.names().includes('?') && !m.events.some((e) => e.phase === 'error'),
+      `active=${m.lib.isZmodemActive(m.sessionId)} sent=${m.names().join(',')} errs=${JSON.stringify(m.events.filter((e) => e.phase === 'error'))}`)
     m.teardown()
   }
 

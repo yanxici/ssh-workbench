@@ -202,9 +202,9 @@ function makeSentry() {
   const zmIpc = fs.readFileSync(path.join(ROOT, 'src/main/ipc/zmodem.ts'), 'utf8')
   check('主进程推送 raw（base64）', /raw: raw\?\.length \? raw\.toString\('base64'\)/.test(main))
   check('接收目录用一次性文件夹令牌，禁止任意路径', /zmDirTokens\.get\(token\)/.test(zmIpc))
-  check('接收按块追加落盘（不再整份驻留内存）', /appendFileSync\(rec\.path, buf\)/.test(zmIpc))
+  check('接收按块追加落盘（不再整份驻留内存）', /appendFile(?:Sync)?\(rec\.path, buf\)/.test(zmIpc))
   check('文件名做 basename 与保留字符清洗', /const safeFileName = \(name: string\)/.test(zmIpc))
-  check('同名文件自动加序号，不覆盖', /while \(existsSync\(candidate\)\)/.test(zmIpc))
+  check('同名文件自动加序号，不覆盖', /while \(existsSync\(candidate\)/.test(zmIpc))
   check('pickFiles 返回 base64 内容', /data: buf\.toString\('base64'\)/.test(zmIpc))
 })()
 
@@ -214,8 +214,18 @@ function makeSentry() {
   check('创建 Sentry', /new Sentry\(/.test(zm))
   check('发送原始字节用 sess.sender', /sender:/.test(zm))
   check('处理 offer 事件（接收方向）', /session\.on\('offer'/.test(zm))
-  // 回归：Receive 会话必须 start() 才会发 ZRINIT，缺了它就是「sz 卡在收取中」
-  check('接收方向调用 session.start()', /await session\.start\(\)/.test(zm))
+  // 回归：Receive 会话必须 start() 才会发 ZRINIT，缺了它就是「sz 卡在收取中」；
+  // 切出 runReceive 函数体并剔除注释行，兼容 await session.start() / const startP = session.start()
+  const runRecvStart = zm.indexOf('async function runReceive(')
+  const runRecvTail = runRecvStart >= 0 ? zm.slice(runRecvStart) : ''
+  const nextFnMatch = runRecvTail.slice(1).match(/\r?\n(?:export\s+)?(?:async\s+)?function\s+/)
+  const runRecvBody = nextFnMatch ? runRecvTail.slice(0, nextFnMatch.index + 1) : runRecvTail
+  const runRecvCode = runRecvBody
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .split(/\r?\n/)
+    .map((l) => l.replace(/\/\/.*$/, ''))
+    .join('\n')
+  check('接收方向调用 session.start()', /\bsession\.start\(/.test(runRecvCode))
   check('检测被 retract 后记住用户选择（autoConfirm）', /state\.autoConfirm = direction/.test(zm))
   check('有超时看门狗，不会一直转圈', /AUTO_CONFIRM_TIMEOUT_MS/.test(zm))
   check('协议异常后 abort 复位，避免终端被吞', /function recoverFromError/.test(zm))
