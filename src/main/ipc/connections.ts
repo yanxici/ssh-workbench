@@ -60,7 +60,7 @@ export function registerConnectionIpc(): void {
     const res = await showSaveDialog({
       title: '导出连接',
       defaultPath: dialogDefaultPath('file', `SSH连接-${stamp}.swconn`),
-      filters: [{ name: 'SSH Workbench 连接', extensions: ['swconn'] }]
+      filters: [{ name: 'Portix 连接', extensions: ['swconn'] }]
     })
     if (res.canceled || !res.filePath) return { canceled: true as const }
     rememberDialogPick('file', res.filePath, false)
@@ -84,7 +84,7 @@ export function registerConnectionIpc(): void {
       defaultPath: dialogDefaultPath('file'),
       properties: ['openFile'],
       filters: [
-        { name: 'SSH Workbench 连接', extensions: ['swconn', 'json'] },
+        { name: 'Portix 连接', extensions: ['swconn', 'json'] },
         { name: '所有文件', extensions: ['*'] }
       ]
     })

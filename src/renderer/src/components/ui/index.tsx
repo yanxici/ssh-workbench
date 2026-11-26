@@ -27,13 +27,16 @@ import { useOverlayEscape } from '@/lib/overlayKeys'
  *  Modal
  * ------------------------------------------------------------------ */
 
+export { BrandMark } from './BrandMark'
+
 export function Modal({
   open,
   title,
   onClose,
   children,
   footer,
-  width
+  width,
+  bodyClassName
 }: {
   open: boolean
   title: ReactNode
@@ -41,6 +44,7 @@ export function Modal({
   children: ReactNode
   footer?: ReactNode
   width?: string
+  bodyClassName?: string
 }): React.JSX.Element | null {
   useOverlayEscape(open, onClose)
 
@@ -60,7 +64,7 @@ export function Modal({
             <X size={13} />
           </button>
         </div>
-        <div className="modal-body scroll-thin">{children}</div>
+        <div className={bodyClassName ?? 'modal-body scroll-thin'}>{children}</div>
         {footer && <div className="modal-footer">{footer}</div>}
       </div>
     </div>

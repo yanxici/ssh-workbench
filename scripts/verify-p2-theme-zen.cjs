@@ -218,8 +218,8 @@ async function main() {
   const darkBrands = defs.map((t) => t.dark.vars.brand)
   check('4 套暗色 brand 互不相同', new Set(darkBrands).size === 4, darkBrands)
   check(
-    'brand 不再全部硬编码 39 201 63',
-    darkBrands.filter((b) => b === '39 201 63').length === 1,
+    '已彻底移除旧硬编码亮绿 39 201 63',
+    darkBrands.filter((b) => b === '39 201 63').length === 0,
     darkBrands
   )
   check(
@@ -239,9 +239,12 @@ async function main() {
       const inkApp = contrast(v.ink, v.app)
       const inkPanel = contrast(v.ink, v.panel)
       const onBrand = contrast(v['on-brand'], v.brand)
+      const onAccent = contrast(v['on-accent'], v.accent)
+      check(t.id + '/' + mode + ' 具备 chrome 外框层变量', typeof v.chrome === 'string' && v.chrome.trim().length > 0, v.chrome)
       check(t.id + '/' + mode + ' ink 对 app >= 4.5:1', inkApp >= 4.5, inkApp)
       check(t.id + '/' + mode + ' ink 对 panel >= 4.5:1', inkPanel >= 4.5, inkPanel)
       check(t.id + '/' + mode + ' on-brand 对 brand >= 4.5:1', onBrand >= 4.5, onBrand)
+      check(t.id + '/' + mode + ' on-accent 对 accent >= 4.5:1', onAccent >= 4.5, onAccent)
       console.log(
         '    ' +
           (t.id + '/' + mode).padEnd(18) +
@@ -249,17 +252,19 @@ async function main() {
           inkApp.toFixed(2).padStart(6) +
           '  ink/panel ' +
           inkPanel.toFixed(2).padStart(6) +
-          '  on-brand/brand ' +
-          onBrand.toFixed(2).padStart(6)
+          '  on-brand ' +
+          onBrand.toFixed(2).padStart(5) +
+          '  on-accent ' +
+          onAccent.toFixed(2).padStart(5)
       )
     }
   }
 
   for (const t of defs) {
     check(
-      t.id + ' 亮色层与画布有层次差异',
-      t.light.vars.raised !== t.light.vars.app || t.light.vars.edge !== t.light.vars.app,
-      [t.light.vars.raised, t.light.vars.app, t.light.vars.edge]
+      t.id + ' 亮色外框与画布有层次差异',
+      t.light.vars.chrome !== t.light.vars.app && (t.light.vars.raised !== t.light.vars.app || t.light.vars.edge !== t.light.vars.app),
+      [t.light.vars.chrome, t.light.vars.raised, t.light.vars.app, t.light.vars.edge]
     )
   }
 

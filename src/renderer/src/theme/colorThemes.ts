@@ -1,11 +1,12 @@
 /**
  * 配色主题定义 —— 界面外壳与终端调色板共用的唯一事实来源。
  *
- * 设计：每个主题都提供 dark / light 两套「变量表 + 终端调色板」，
- * 与 settings.theme（暗色/亮色/跟随系统）正交组合，任意搭配都成立。
+ * 设计：每个主题都提供 dark / light 两套「四级表面变量表 + 终端调色板」，
+ * 与 settings.theme（亮色默认 / 暗色 / 跟随系统）正交组合，任意搭配都成立。
  *
- * 变量与 styles/index.css 里的 :root / .light 一一对应，
- * 以「R G B」三通道书写，配合 tailwind 的 <alpha-value> 实现透明度。
+ * 四级表面层级：
+ *   chrome（最外层顶栏与活动栏）→ panel（侧栏/命令栏/状态栏）→ app（终端画布与激活标签）→ raised（卡片/输入框）
+ * 颜色全部以「R G B」三通道书写，配合 Tailwind 的 <alpha-value> 实现透明度。
  */
 
 import type { ColorThemeId } from '@shared/types'
@@ -13,8 +14,13 @@ import type { ITheme } from '@xterm/xterm'
 
 /** 界面外壳的语义色变量（R G B 三通道） */
 export interface ThemeVars {
+  /** 最外层窗口骨架（标题栏、活动栏、设置左轨） */
+  chrome: string
+  /** 主内容画布（终端舞台、激活标签、欢迎页） */
   app: string
+  /** 导航与工具面板层（侧栏、命令栏、状态栏） */
   panel: string
+  /** 浮起控件与卡片层（命令卡、输入框、胶囊控件） */
   raised: string
   hover: string
   edge: string
@@ -22,13 +28,16 @@ export interface ThemeVars {
   ink: string
   'ink-2': string
   'ink-3': string
-  /** 强调色：标题栏徽标、活动栏激活指示线、终端成功信息 —— 每套主题自成体系 */
+  /** 品牌结构指示色（活动栏 2px 条、激活标签指示条、连接行 hover 左竖条） */
   brand: string
   /** brand 之上的文字色，与 brand 对比度必须 >= 4.5:1 */
   'on-brand': string
-  /** 文件树选中行底色 */
+  /** 选中行 / 柔和激活底色 */
   select: string
+  /** 主交互强调色（主按钮、焦点环、亮底前景强调图标） */
   accent: string
+  /** accent 之上的文字色（.btn-primary），与 accent 对比度必须 >= 4.5:1 */
+  'on-accent': string
   success: string
   warning: string
   danger: string
@@ -51,105 +60,105 @@ export interface ColorThemeDef {
 }
 
 /* ------------------------------------------------------------------ *
- *  精密默认（中性锌灰 + 克制钢蓝，暗/亮都成立，故不再叫「浅色」）
+ *  Portix 默认（内部 ID 保留 vscode 兼容旧配置文件）
  *
- *  用户给定的视觉规范全部落在这套变量里：
- *    主背景 #ffffff / 侧栏状态栏 #f8f9fa · #fafafa / hover #f3f4f6
- *    边框 #e5e7eb / 正文 #374151 / 标题 #111827
- *    品牌绿 #27c93f（只给标题栏底色、活动栏指示线、终端成功信息）
- *    文件树选中 #e0f2fe
- *  暗色分支是同一套语义的暗化版本，保证切到暗色时不出现「亮底白字」这类断裂。
+ *  Qoder 四级中性石墨层次 + 单一翡翠绿（亮 #0A7E5C / 暗 #2ED39A）：
+ *  brand 与 accent 收敛统一，彻底消除旧版荧光绿 + 皇家蓝的视觉分裂。
  * ------------------------------------------------------------------ */
 
 const VSCODE: ColorThemeDef = {
   id: 'vscode',
-  name: '精密默认',
-  swatch: ['#ffffff', '#27c93f', '#2563eb'],
-  tagline: 'Neutral canvas, precise blue accents',
+  name: 'Portix 默认',
+  swatch: ['#ffffff', '#0a7e5c', '#eff2f6'],
+  tagline: 'Crisp slate with jade emerald accents',
   light: {
     vars: {
-      app: '255 255 255', // #ffffff 主背景
-      panel: '248 249 250', // #f8f9fa 侧栏 / 状态栏
-      raised: '250 250 250', // #fafafa 浮起面（输入框、卡片）
-      hover: '243 244 246', // #f3f4f6 悬停
-      edge: '229 231 235', // #e5e7eb 统一分割线
-      'edge-soft': '238 240 243', // 更弱的分割线（分组之间）
-      ink: '17 24 39', // #111827 标题 / 强调
-      'ink-2': '55 65 81', // #374151 正文
-      'ink-3': '107 114 128', // #6b7280 次要文字
-      brand: '39 201 63', // #27c93f
-      'on-brand': '8 24 12',
-      select: '224 242 254', // #e0f2fe 选中行
-      accent: '37 99 235', // #2563eb 交互强调（蓝，不与品牌绿混用）
-      success: '16 185 129', // #10b981
-      warning: '234 179 8', // #eab308
-      danger: '220 38 38' // #dc2626
+      chrome: '239 242 246', // #EFF2F6 chrome frame
+      app: '255 255 255', // #FFFFFF canvas & active tab
+      panel: '246 248 250', // #F6F8FA sidebar / command rail / statusbar
+      raised: '255 255 255', // #FFFFFF cards & inputs
+      hover: '233 238 244', // #E9EEF4 hover
+      edge: '223 228 235', // #DFE4EB hairline border
+      'edge-soft': '235 239 245', // #EBEFF5 subtle border
+      ink: '15 23 36', // #0F1724 primary text
+      'ink-2': '58 69 86', // #3A4556 body text
+      'ink-3': '104 115 131', // #687383 muted text
+      brand: '10 126 92', // #0A7E5C Portix jade emerald (5.06:1 vs white)
+      'on-brand': '255 255 255',
+      select: '230 245 239', // #E6F5EF soft mint selection
+      accent: '10 126 92', // #0A7E5C unified interactive accent
+      'on-accent': '255 255 255',
+      success: '16 156 107', // #109C6B
+      warning: '202 138 4', // #CA8A04
+      danger: '217 45 56' // #D92D38
     },
     terminal: {
       background: '#FFFFFF',
-      foreground: '#374151',
-      cursor: '#27C93F',
+      foreground: '#1E293B',
+      cursor: '#0A7E5C',
       cursorAccent: '#FFFFFF',
-      selectionBackground: 'rgba(39, 201, 63, 0.20)',
-      black: '#111827',
-      red: '#dc2626',
-      green: '#10b981',
-      yellow: '#eab308',
-      blue: '#3b82f6',
-      magenta: '#8b5cf6',
-      cyan: '#06b6d4',
-      white: '#9ca3af',
-      brightBlack: '#6b7280',
-      brightRed: '#ef4444',
-      brightGreen: '#27c93f',
-      brightYellow: '#facc15',
-      brightBlue: '#60a5fa',
-      brightMagenta: '#a78bfa',
-      brightCyan: '#22d3ee',
-      brightWhite: '#111827'
+      selectionBackground: 'rgba(10, 126, 92, 0.16)',
+      black: '#0F1724',
+      red: '#D92D38',
+      green: '#0A7E5C',
+      yellow: '#CA8A04',
+      blue: '#2563EB',
+      magenta: '#7C3AED',
+      cyan: '#0891B2',
+      white: '#94A3B8',
+      brightBlack: '#64748B',
+      brightRed: '#EF4444',
+      brightGreen: '#109C6B',
+      brightYellow: '#EAB308',
+      brightBlue: '#3B82F6',
+      brightMagenta: '#8B5CF6',
+      brightCyan: '#06B6D4',
+      brightWhite: '#0F1724'
     }
   },
   dark: {
     vars: {
-      app: '24 24 27',
-      panel: '31 31 35',
-      raised: '39 39 42',
-      hover: '45 45 50',
-      edge: '56 56 62',
-      'edge-soft': '43 43 47',
-      ink: '244 244 245',
-      'ink-2': '212 212 216',
-      'ink-3': '161 161 170',
-      brand: '39 201 63',
-      'on-brand': '8 24 12',
-      select: '30 58 74',
-      accent: '96 165 250',
-      success: '16 185 129',
-      warning: '234 179 8',
+      chrome: '15 17 21', // #0F1115 obsidian chrome
+      app: '13 15 19', // #0D0F13 terminal canvas
+      panel: '21 24 30', // #15181E sidebar / command rail / statusbar
+      raised: '29 33 41', // #1D2129 raised cards & inputs
+      hover: '37 42 52', // #252A34
+      edge: '46 52 64', // #2E3440
+      'edge-soft': '33 38 47', // #21262F
+      ink: '238 241 246', // #EEF1F6
+      'ink-2': '178 186 198', // #B2BAC6
+      'ink-3': '124 134 150', // #7C8696
+      brand: '46 211 154', // #2ED39A emerald (9.20:1 vs dark ink)
+      'on-brand': '7 28 20',
+      select: '20 56 46', // #14382E deep pine selection
+      accent: '46 211 154',
+      'on-accent': '7 28 20',
+      success: '46 211 154',
+      warning: '245 185 66',
       danger: '248 113 113'
     },
     terminal: {
-      background: '#1E1E20',
-      foreground: '#D4D4D8',
-      cursor: '#27C93F',
-      cursorAccent: '#1E1E20',
-      selectionBackground: 'rgba(39, 201, 63, 0.28)',
-      black: '#27272A',
+      background: '#0D0F13',
+      foreground: '#DCE3EC',
+      cursor: '#2ED39A',
+      cursorAccent: '#0D0F13',
+      selectionBackground: 'rgba(46, 211, 154, 0.24)',
+      black: '#1D2129',
       red: '#F87171',
-      green: '#10B981',
-      yellow: '#EAB308',
+      green: '#2ED39A',
+      yellow: '#F5B942',
       blue: '#60A5FA',
-      magenta: '#8B5CF6',
-      cyan: '#22D3EE',
-      white: '#D4D4D8',
-      brightBlack: '#71717A',
+      magenta: '#A78BFA',
+      cyan: '#38BDF8',
+      white: '#DCE3EC',
+      brightBlack: '#6B7686',
       brightRed: '#FCA5A5',
-      brightGreen: '#27C93F',
-      brightYellow: '#FACC15',
+      brightGreen: '#5CE5B5',
+      brightYellow: '#FDE047',
       brightBlue: '#93C5FD',
       brightMagenta: '#C4B5FD',
       brightCyan: '#67E8F9',
-      brightWhite: '#FAFAFA'
+      brightWhite: '#F8FAFC'
     }
   }
 }
@@ -165,6 +174,7 @@ const DRACULA: ColorThemeDef = {
   tagline: 'Purple night with vivid pink accents',
   dark: {
     vars: {
+      chrome: '24 25 34',
       app: '30 31 41',
       panel: '40 42 54',
       raised: '52 54 70',
@@ -175,6 +185,7 @@ const DRACULA: ColorThemeDef = {
       'ink-2': '177 180 196',
       'ink-3': '142 146 168',
       accent: '255 121 198',
+      'on-accent': '36 10 28',
       success: '80 250 123',
       warning: '241 250 140',
       danger: '255 85 85',
@@ -208,16 +219,18 @@ const DRACULA: ColorThemeDef = {
   },
   light: {
     vars: {
-      app: '246 245 250',
-      panel: '255 255 255',
-      raised: '250 249 253',
-      hover: '240 238 248',
+      chrome: '236 233 245',
+      app: '249 248 252',
+      panel: '244 242 250',
+      raised: '255 255 255',
+      hover: '234 231 245',
       edge: '216 212 232',
       'edge-soft': '233 230 243',
       ink: '40 42 54',
       'ink-2': '98 100 118',
       'ink-3': '116 118 138',
       accent: '168 40 120',
+      'on-accent': '255 255 255',
       success: '20 140 62',
       warning: '156 116 0',
       danger: '200 40 50',
@@ -262,6 +275,7 @@ const SOLARIZED: ColorThemeDef = {
   tagline: 'Deep teal, low glare',
   dark: {
     vars: {
+      chrome: '0 34 44',
       app: '0 43 54',
       panel: '7 54 66',
       raised: '14 63 76',
@@ -272,6 +286,7 @@ const SOLARIZED: ColorThemeDef = {
       'ink-2': '160 172 172',
       'ink-3': '128 148 148',
       accent: '96 168 227',
+      'on-accent': '0 28 42',
       success: '133 153 0',
       warning: '181 137 0',
       danger: '220 50 47',
@@ -280,8 +295,6 @@ const SOLARIZED: ColorThemeDef = {
       select: '18 84 96'
     },
     terminal: {
-      // 原版 Solarized 前景 #839496 在 #002B36 上仅 4.75:1，长时间看命令输出偏灰。
-      // 这里把前景抬到 base2（#EEE8D5）并保留 Solarized 的强调色，对比度 ~13:1。
       background: '#002B36',
       foreground: '#E4DDC8',
       cursor: '#268BD2',
@@ -307,9 +320,10 @@ const SOLARIZED: ColorThemeDef = {
   },
   light: {
     vars: {
+      chrome: '231 224 203',
       app: '253 246 227',
-      panel: '238 232 213',
-      raised: '248 243 226',
+      panel: '240 234 216',
+      raised: '251 247 234',
       hover: '233 226 205',
       edge: '211 203 181',
       'edge-soft': '228 221 200',
@@ -317,6 +331,7 @@ const SOLARIZED: ColorThemeDef = {
       'ink-2': '88 110 117',
       'ink-3': '112 128 130',
       accent: '25 116 178',
+      'on-accent': '255 255 255',
       success: '101 123 0',
       warning: '150 113 0',
       danger: '203 43 40',
@@ -325,7 +340,6 @@ const SOLARIZED: ColorThemeDef = {
       select: '222 233 231'
     },
     terminal: {
-      // 亮色侧同样抬高前景对比度（原版 #657B83 仅 4.13:1 → 这里用近黑的 base03 侧深色）
       background: '#FDF6E3',
       foreground: '#3C4F55',
       cursor: '#268BD2',
@@ -362,6 +376,7 @@ const GRUVBOX: ColorThemeDef = {
   tagline: 'Warm retro amber on dark earth',
   dark: {
     vars: {
+      chrome: '24 26 27',
       app: '29 32 33',
       panel: '40 40 40',
       raised: '50 48 47',
@@ -372,6 +387,7 @@ const GRUVBOX: ColorThemeDef = {
       'ink-2': '176 162 140',
       'ink-3': '138 124 110',
       accent: '131 165 152',
+      'on-accent': '24 28 26',
       success: '184 187 38',
       warning: '254 128 25',
       danger: '251 73 52',
@@ -405,8 +421,9 @@ const GRUVBOX: ColorThemeDef = {
   },
   light: {
     vars: {
+      chrome: '238 228 190',
       app: '251 241 199',
-      panel: '246 238 202',
+      panel: '245 236 200',
       raised: '255 252 231',
       hover: '240 233 195',
       edge: '213 196 161',
@@ -415,6 +432,7 @@ const GRUVBOX: ColorThemeDef = {
       'ink-2': '96 87 78',
       'ink-3': '118 104 90',
       accent: '58 118 122',
+      'on-accent': '255 255 255',
       success: '121 125 15',
       warning: '175 88 0',
       danger: '175 48 34',
@@ -452,7 +470,7 @@ export const COLOR_THEMES: ColorThemeDef[] = [VSCODE, GRUVBOX, SOLARIZED, DRACUL
 
 const BY_ID = new Map<string, ColorThemeDef>(COLOR_THEMES.map((t) => [t.id, t]))
 
-/** 取主题定义；未知 id 回落到精密默认（当前默认外观） */
+/** 取主题定义；未知 id 回落到 Portix 默认 */
 export function getColorTheme(id: string | undefined): ColorThemeDef {
   return (id && BY_ID.get(id)) || VSCODE
 }

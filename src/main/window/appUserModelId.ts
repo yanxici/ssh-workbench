@@ -7,8 +7,8 @@ import { join, resolve } from 'node:path'
  */
 export const APP_USER_MODEL_ID = 'com.sshworkbench.app'
 
-/** 只检查名称与本应用相关的开始菜单快捷方式，避免启动时遍历整机几百个无关 .lnk */
-const SHORTCUT_NAME_RE = /(?:ssh|workbench)/i
+/** 只检查名称与本应用相关的开始菜单快捷方式（兼容 Portix 与旧版 SSH Workbench），避免遍历整机 .lnk */
+const SHORTCUT_NAME_RE = /(?:portix|ssh|workbench)/i
 const MAX_SCAN_DEPTH = 2
 
 export interface ShortcutLinkInfo {

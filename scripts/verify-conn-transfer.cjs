@@ -246,7 +246,7 @@ async function main() {
     return f
   }
   await rejects('非 JSON', C.previewImport(bad('a', 'hello')), /无法解析/)
-  await rejects('别的 JSON', C.previewImport(bad('b', '{"a":1}')), /不是 SSH Workbench/)
+  await rejects('别的 JSON', C.previewImport(bad('b', '{"a":1}')), /不是 Portix/)
   await rejects('版本过新', C.previewImport(bad('c', JSON.stringify({ format: 'ssh-workbench-connections', version: 99 }))), /版本/)
   const mixed = bad(
     'd',

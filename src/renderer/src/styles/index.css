@@ -13,26 +13,28 @@
  * ================================================================== */
 
 :root {
-  --c-app: 255 255 255; /* #ffffff 主背景 */
-  --c-panel: 248 249 250; /* #f8f9fa 侧栏 / 状态栏 */
-  --c-raised: 250 250 250; /* #fafafa */
-  --c-hover: 243 244 246; /* #f3f4f6 */
-  --c-edge: 229 231 235; /* #e5e7eb 统一 1px 分割线 */
-  --c-edge-soft: 238 240 243;
-  --c-ink: 17 24 39; /* #111827 标题 */
-  --c-ink-2: 55 65 81; /* #374151 正文 */
-  --c-ink-3: 107 114 128; /* #6b7280 次要 */
-  --c-brand: 39 201 63; /* #27c93f */
-  /* 品牌绿上的深墨字：对比 8.3:1（原来的纯白只有 2.21:1，不达 WCAG AA） */
-  --c-on-brand: 8 24 12;
-  --c-select: 224 242 254; /* #e0f2fe */
-  --c-accent: 37 99 235;
-  --c-success: 16 185 129;
-  --c-warning: 234 179 8;
-  --c-danger: 220 38 38;
+  --c-chrome: 239 242 246; /* #EFF2F6 外框 */
+  --c-app: 255 255 255; /* #FFFFFF 主背景 */
+  --c-panel: 246 248 250; /* #F6F8FA 侧栏 / 状态栏 */
+  --c-raised: 255 255 255; /* #FFFFFF 浮起卡片 */
+  --c-hover: 233 238 244; /* #E9EEF4 悬停 */
+  --c-edge: 223 228 235; /* #DFE4EB 统一 1px 分割线 */
+  --c-edge-soft: 235 239 245;
+  --c-ink: 15 23 36; /* #0F1724 标题 */
+  --c-ink-2: 58 69 86; /* #3A4556 正文 */
+  --c-ink-3: 104 115 131; /* #687383 次要 */
+  --c-brand: 10 126 92; /* #0A7E5C Portix 翡翠绿 */
+  --c-on-brand: 255 255 255;
+  --c-select: 230 245 239; /* #E6F5EF */
+  --c-accent: 10 126 92;
+  --c-on-accent: 255 255 255;
+  --c-success: 16 156 107;
+  --c-warning: 202 138 4;
+  --c-danger: 217 45 56;
 
   /* 浮层投影：浅色主题下 45% 黑会糊成一团脏灰，压到 16% 才像「纸片浮起」。
      暗色主题反过来需要更深的投影才有层次，所以投影也走变量。 */
+  --shadow-card: 0 1px 2px rgb(15 23 42 / 0.045);
   --shadow-pop: 0 8px 24px -8px rgb(15 23 42 / 0.16), 0 2px 6px -2px rgb(15 23 42 / 0.1);
   --shadow-pop-lg: 0 16px 48px -12px rgb(15 23 42 / 0.2), 0 4px 10px -4px rgb(15 23 42 / 0.12);
   /* 抬升投影：卡片悬停轻抬 1px 时用。比 --shadow-pop 更薄更近 ——
@@ -55,23 +57,26 @@
 
 /* 亮色：显式带 .light 时等同默认 */
 .light {
+  --c-chrome: 239 242 246;
   --c-app: 255 255 255;
-  --c-panel: 248 249 250;
-  --c-raised: 250 250 250;
-  --c-hover: 243 244 246;
-  --c-edge: 229 231 235;
-  --c-edge-soft: 238 240 243;
-  --c-ink: 17 24 39;
-  --c-ink-2: 55 65 81;
-  --c-ink-3: 107 114 128;
-  --c-brand: 39 201 63;
-  --c-on-brand: 8 24 12;
-  --c-select: 224 242 254;
-  --c-accent: 37 99 235;
-  --c-success: 16 185 129;
-  --c-warning: 234 179 8;
-  --c-danger: 220 38 38;
+  --c-panel: 246 248 250;
+  --c-raised: 255 255 255;
+  --c-hover: 233 238 244;
+  --c-edge: 223 228 235;
+  --c-edge-soft: 235 239 245;
+  --c-ink: 15 23 36;
+  --c-ink-2: 58 69 86;
+  --c-ink-3: 104 115 131;
+  --c-brand: 10 126 92;
+  --c-on-brand: 255 255 255;
+  --c-select: 230 245 239;
+  --c-accent: 10 126 92;
+  --c-on-accent: 255 255 255;
+  --c-success: 16 156 107;
+  --c-warning: 202 138 4;
+  --c-danger: 217 45 56;
 
+  --shadow-card: 0 1px 2px rgb(15 23 42 / 0.045);
   --shadow-pop: 0 8px 24px -8px rgb(15 23 42 / 0.16), 0 2px 6px -2px rgb(15 23 42 / 0.1);
   --shadow-pop-lg: 0 16px 48px -12px rgb(15 23 42 / 0.2), 0 4px 10px -4px rgb(15 23 42 / 0.12);
   --shadow-lift: 0 1px 2px rgb(15 23 42 / 0.06), 0 6px 16px -8px rgb(15 23 42 / 0.12);
@@ -82,23 +87,26 @@
 /* 暗色兜底：settingsStore 会同时给 html 挂 .dark，
    这样「暗色」在样式表层面也是自洽的，不必依赖内联变量先落地。 */
 .dark {
-  --c-app: 24 24 27;
-  --c-panel: 31 31 35;
-  --c-raised: 39 39 42;
-  --c-hover: 45 45 50;
-  --c-edge: 56 56 62;
-  --c-edge-soft: 43 43 47;
-  --c-ink: 244 244 245;
-  --c-ink-2: 212 212 216;
-  --c-ink-3: 161 161 170;
-  --c-brand: 39 201 63;
-  --c-on-brand: 8 24 12;
-  --c-select: 30 58 74;
-  --c-accent: 96 165 250;
-  --c-success: 16 185 129;
-  --c-warning: 234 179 8;
+  --c-chrome: 15 17 21;
+  --c-app: 13 15 19;
+  --c-panel: 21 24 30;
+  --c-raised: 29 33 41;
+  --c-hover: 37 42 52;
+  --c-edge: 46 52 64;
+  --c-edge-soft: 33 38 47;
+  --c-ink: 238 241 246;
+  --c-ink-2: 178 186 198;
+  --c-ink-3: 124 134 150;
+  --c-brand: 46 211 154;
+  --c-on-brand: 7 28 20;
+  --c-select: 20 56 46;
+  --c-accent: 46 211 154;
+  --c-on-accent: 7 28 20;
+  --c-success: 46 211 154;
+  --c-warning: 245 185 66;
   --c-danger: 248 113 113;
 
+  --shadow-card: 0 1px 2px rgb(0 0 0 / 0.28);
   --shadow-pop: 0 10px 38px -10px rgb(0 0 0 / 0.55), 0 10px 20px -15px rgb(0 0 0 / 0.4);
   --shadow-pop-lg: 0 24px 64px -16px rgb(0 0 0 / 0.7), 0 8px 24px -12px rgb(0 0 0 / 0.5);
   --shadow-lift: 0 1px 2px rgb(0 0 0 / 0.4), 0 8px 20px -10px rgb(0 0 0 / 0.6);
@@ -170,7 +178,7 @@
   }
 
   .btn-primary {
-    @apply border-transparent bg-accent text-white hover:bg-accent/90 hover:text-white;
+    @apply border-transparent bg-accent text-on-accent hover:bg-accent/90 hover:text-on-accent;
   }
 
   .btn-danger {
@@ -274,24 +282,24 @@
    * 活动栏激活条上。中性底 + 单条指示线让标题栏与工作区处于同一套明度阶梯。
    */
   .titlebar {
-    @apply flex h-9 shrink-0 items-center border-b border-edge bg-panel text-ink;
+    @apply flex h-9 shrink-0 items-center border-b border-edge bg-chrome text-ink;
   }
 
   /* 标题栏图标按钮：中性描边感，悬停只叠一层 hover 底 —— 不做投影与位移 */
   .titlebar-btn {
-    @apply inline-flex h-7 w-7 shrink-0 items-center justify-center rounded text-ink-3
+    @apply inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-ink-3
       transition-colors duration-150 hover:bg-hover hover:text-ink
       disabled:pointer-events-none disabled:opacity-40;
   }
 
-  /* 活动栏条目：44px 窄轨，图标竖排。激活项 = 左侧 2px 品牌条 + 低透明微底 */
+  /* 活动栏条目：44px 窄轨，图标竖排。激活项 = 左侧 2px 品牌条 + 内嵌浮块 */
   .activity-item {
     @apply relative flex h-11 w-full items-center justify-center text-ink-3
       transition-colors duration-150 hover:text-ink;
   }
 
   .activity-item-active {
-    @apply bg-hover/60 text-ink;
+    @apply text-ink;
   }
 
   /* 状态栏：面板底 + 极细上边框（26px，与 --size-statusbar 同口径）。
@@ -326,7 +334,7 @@
   }
 
   .panel-count {
-    @apply shrink-0 rounded bg-raised px-1 font-mono text-3xs leading-4 text-ink-3;
+    @apply shrink-0 rounded-full bg-chrome px-1.5 font-mono text-3xs leading-4 text-ink-3;
   }
 
   .panel-toolbar {
@@ -647,6 +655,10 @@
 /* ================================================================== *
  *  xterm 微调
  * ================================================================== */
+
+.cmd-title-balance {
+  text-wrap: balance;
+}
 
 .xterm {
   padding: 0;

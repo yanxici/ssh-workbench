@@ -1,10 +1,10 @@
-# SSH Workbench
+# Portix
 
 English | [简体中文](./README.zh-CN.md)
 
-A lightweight desktop SSH client with a built-in workbench for embedded-device technical support. Built with Electron, React and TypeScript.
+Modern desktop SSH & Serial terminal workbench for developers, SREs, and embedded engineers. Built with Electron, React and TypeScript.
 
-![SSH Workbench overview](docs/ui/overview.png)
+![Portix overview](docs/ui/overview.png)
 
 ## Download & install
 

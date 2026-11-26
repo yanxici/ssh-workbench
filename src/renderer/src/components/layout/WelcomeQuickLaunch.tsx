@@ -1,29 +1,26 @@
 import { useMemo } from 'react'
 import type * as React from 'react'
-import { Command, Plus, Radar, TerminalSquare, Usb } from 'lucide-react'
+import { Command, Plus, Radar, Usb } from 'lucide-react'
 import type { Connection } from '@shared/types'
 import { connectionAddress } from '@shared/serialDisplay'
+import { BrandMark } from '@/components/ui'
 import { useConnectionStore } from '@/stores/connectionStore'
 import { useDiscoveryStore } from '@/stores/discoveryStore'
 import { useSessionStore } from '@/stores/sessionStore'
 import { useUiStore } from '@/stores/uiStore'
+import { useUpdateStore } from '@/stores/updateStore'
 import { useI18n } from '@/i18n'
-import { cn } from '@/lib/utils'
+import { cn, formatRelativeTime } from '@/lib/utils'
 
 /**
- * 空工作区的快速启动页。
+ * 空工作区的 Portix 快速启动页。
  *
- * 设计取向（Spec 3.3 / P2 单色精密仪器外壳）：
- * - 容器是纯色 bg-app 画布，无发光、无阴影、无装饰动画；性能红线同 MainWorkspace。
- * - 居中 max-w-[640px]**：眼睛从上到下扫一次就能看完，不需要横向移动。
- * - 上部四个动作按钮解决「我来这儿是要干什么」；下部最近连接解决「我要回到哪」。
- *
- * 最近连接按 lastUsedAt 降序取前 8 条，SSH 与串口一视同仁。
- * 单击直接开会话 —— 侧栏那条路径要展开分组、找到行、再双击，
- * 对一个每天开十次的连接来说这三次交互全是税。
+ * 设计取向：
+ * - 纯色 bg-app 画布，零毛玻璃、零装饰动画，保持 2900+ 连接库下的轻盈响应。
+ * - 居中 max-w-[660px]：上方品牌识别 + 4 张结构化入口卡；下方最近连接卡与快捷键提示。
+ * - 最近连接按 lastUsedAt 降序取前 8 条，单击即开会话。
  */
 
-/** 最近连接最多展示多少条：再多就要滚动，滚动就不算「一眼看完」了 */
 const RECENT_LIMIT = 8
 
 export function WelcomeQuickLaunch({
@@ -36,14 +33,8 @@ export function WelcomeQuickLaunch({
   const openSession = useSessionStore((s) => s.open)
   const openConnEditor = useUiStore((s) => s.openConnEditor)
   const openCommandCenter = useUiStore((s) => s.openCommandCenter)
+  const version = useUpdateStore((s) => s.status?.currentVersion)
 
-  /*
-   * 过滤 + 排序 + 截断只随连接表变化重算。
-   *
-   * 大库实测 2900+ 条：这一页每次重渲染都重排一遍是白烧 CPU，
-   * 而它偏偏挂在空工作区上 —— 没有会话时后台同步、面板开合都在触发重渲染。
-   * 依赖只有 connections，其余状态变化不该重排。
-   */
   const recent = useMemo(
     () =>
       connections
@@ -53,11 +44,6 @@ export function WelcomeQuickLaunch({
     [connections]
   )
 
-  /**
-   * 与侧栏一致的打开逻辑，外加一条串口专属处理：
-   * pathPending 表示设备换过口（USB 序列号没对上），此时直接 open 只会在终端里
-   * 报一句「找不到端口」——不如把连接编辑弹窗带出来，让用户当场重选。
-   */
   const launch = (c: Connection): void => {
     if (c.kind === 'serial' && c.serial?.pathPending) {
       openConnEditor(c)
@@ -73,13 +59,6 @@ export function WelcomeQuickLaunch({
     })
   }
 
-  /**
-   * 「设备发现」是浮层面板而不是左侧活动栏视图，已开着就不再翻转。
-   *
-   * 这里走 getState 读面板状态而不是订阅 panelOpen：本页只关心
-   * 「点下去那一刻开没开」，订阅会让面板一开一合就整页重渲染，
-   * 而这一页恰好在空工作区上，重渲染的代价全落在无谓的地方。
-   */
   const openDiscovery = (): void => {
     const discovery = useDiscoveryStore.getState()
     if (!discovery.panelOpen) discovery.togglePanel()
@@ -87,83 +66,168 @@ export function WelcomeQuickLaunch({
 
   return (
     <div className="flex h-full items-center justify-center overflow-y-auto px-6 py-10">
-      <div className="w-full max-w-[640px]">
-        <div className="flex items-center gap-2.5">
-          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-edge bg-raised text-ink-2">
-            <TerminalSquare size={16} />
-          </span>
+      <div className="w-full max-w-[660px]">
+        {/* Brand header */}
+        <div className="flex items-center gap-3.5">
+          <BrandMark size={44} className="shrink-0" />
           <div className="min-w-0">
-            <div className="truncate text-sm font-semibold tracking-wide text-ink">
-              SSH Workbench
+            <div className="flex items-center gap-2">
+              <span className="truncate text-base font-semibold tracking-[-0.02em] text-ink">
+                Portix
+              </span>
+              {version && (
+                <span className="shrink-0 rounded-full border border-edge bg-panel px-2 py-px font-mono text-3xs text-ink-3">
+                  v{version}
+                </span>
+              )}
             </div>
-            <div className="truncate text-2xs text-ink-3">{t('welcome.subtitle')}</div>
+            <div className="mt-0.5 truncate text-xs text-ink-3">{t('welcome.subtitle')}</div>
           </div>
         </div>
 
-        <div className="mt-5 flex flex-wrap items-center gap-1.5">
-          <button className="btn btn-primary h-7 px-3 text-2xs" onClick={onNewConnection}>
-            <Plus size={12} />
-            {t('welcome.newSsh')}
-          </button>
+        {/* Quick launch cards */}
+        <div className="mt-6 grid grid-cols-2 gap-2.5 sm:grid-cols-4">
           <button
-            className="btn h-7 px-2.5 text-2xs"
+            type="button"
+            onClick={onNewConnection}
+            className="group flex flex-col items-start rounded-lg border border-accent/35 bg-accent/10 p-3 text-left transition-colors duration-150 hover:border-accent/60 hover:bg-accent/15"
+          >
+            <div className="flex w-full items-center justify-between gap-1">
+              <span className="flex h-7 w-7 items-center justify-center rounded-md bg-accent text-on-accent">
+                <Plus size={14} />
+              </span>
+              <kbd className="rounded border border-accent/25 bg-app/80 px-1 py-px font-mono text-3xs text-accent">
+                Ctrl+N
+              </kbd>
+            </div>
+            <div className="mt-2.5 text-xs font-semibold text-ink">{t('welcome.newSsh')}</div>
+            <div className="mt-0.5 line-clamp-1 text-2xs text-ink-3">
+              {t('welcome.newSsh.desc')}
+            </div>
+          </button>
+
+          <button
+            type="button"
             title={t('welcome.newSerial.hint')}
             onClick={() => openConnEditor(null, { kind: 'serial' })}
+            className="group flex flex-col items-start rounded-lg border border-edge bg-panel p-3 text-left shadow-card transition-colors duration-150 hover:border-accent/40 hover:bg-raised"
           >
-            <Usb size={12} />
-            {t('welcome.newSerial')}
+            <span className="flex h-7 w-7 items-center justify-center rounded-md border border-edge bg-app text-ink-2 group-hover:text-accent">
+              <Usb size={14} />
+            </span>
+            <div className="mt-2.5 text-xs font-semibold text-ink">{t('welcome.newSerial')}</div>
+            <div className="mt-0.5 line-clamp-1 text-2xs text-ink-3">
+              {t('welcome.newSerial.desc')}
+            </div>
           </button>
-          <button className="btn h-7 px-2.5 text-2xs" onClick={openDiscovery}>
-            <Radar size={12} />
-            {t('welcome.discovery')}
+
+          <button
+            type="button"
+            onClick={openDiscovery}
+            className="group flex flex-col items-start rounded-lg border border-edge bg-panel p-3 text-left shadow-card transition-colors duration-150 hover:border-accent/40 hover:bg-raised"
+          >
+            <span className="flex h-7 w-7 items-center justify-center rounded-md border border-edge bg-app text-ink-2 group-hover:text-accent">
+              <Radar size={14} />
+            </span>
+            <div className="mt-2.5 text-xs font-semibold text-ink">{t('welcome.discovery')}</div>
+            <div className="mt-0.5 line-clamp-1 text-2xs text-ink-3">
+              {t('welcome.discovery.desc')}
+            </div>
           </button>
-          <button className="btn h-7 px-2.5 text-2xs" onClick={() => openCommandCenter('')}>
-            <Command size={12} />
-            {t('welcome.commandCenter')}
+
+          <button
+            type="button"
+            onClick={() => openCommandCenter('')}
+            className="group flex flex-col items-start rounded-lg border border-edge bg-panel p-3 text-left shadow-card transition-colors duration-150 hover:border-accent/40 hover:bg-raised"
+          >
+            <div className="flex w-full items-center justify-between gap-1">
+              <span className="flex h-7 w-7 items-center justify-center rounded-md border border-edge bg-app text-ink-2 group-hover:text-accent">
+                <Command size={14} />
+              </span>
+              <kbd className="rounded border border-edge bg-app px-1 py-px font-mono text-3xs text-ink-3">
+                Ctrl+K
+              </kbd>
+            </div>
+            <div className="mt-2.5 text-xs font-semibold text-ink">
+              {t('welcome.shortcut.commandCenter')}
+            </div>
+            <div className="mt-0.5 line-clamp-1 text-2xs text-ink-3">
+              {t('welcome.commandCenter.desc')}
+            </div>
           </button>
         </div>
 
+        {/* Recent connections */}
         <div className="mt-7">
           <div className="flex items-baseline justify-between">
-            <span className="text-2xs font-medium tracking-wide text-ink-3">
+            <span className="text-2xs font-semibold tracking-wide text-ink-3">
               {t('welcome.recent')}
             </span>
-            <span className="text-3xs tabular-nums text-ink-3/60">{recent.length}</span>
+            <span className="font-mono text-3xs tabular-nums text-ink-3/70">{recent.length}</span>
           </div>
 
           {recent.length === 0 ? (
-            <p className="mt-2 text-xs text-ink-3">{t('welcome.emptyRecent')}</p>
+            <div className="mt-2 rounded-lg border border-dashed border-edge bg-panel/60 px-4 py-5 text-center text-xs text-ink-3">
+              {t('welcome.emptyRecent')}
+            </div>
           ) : (
-            <div className="mt-1.5 flex flex-col">
+            <div className="mt-2 flex flex-col rounded-lg border border-edge bg-panel p-1.5 shadow-card">
               {recent.map((c) => (
                 <button
                   key={c.id}
                   type="button"
                   title={connectionAddress(c)}
                   onClick={() => launch(c)}
-                  className="group flex h-8 w-full items-center gap-2 rounded-md px-1.5 text-left transition-colors duration-150 hover:bg-hover"
+                  className="group flex h-9 w-full items-center gap-2.5 rounded-md px-2 text-left transition-colors duration-150 hover:bg-hover"
                 >
                   <span
                     className={cn(
                       'h-4 w-[3px] shrink-0 rounded-full',
-                      !c.color && 'bg-transparent'
+                      !c.color && 'bg-edge'
                     )}
                     style={c.color ? { background: c.color } : undefined}
                   />
-                  <span className="max-w-[42%] shrink-0 truncate text-xs text-ink">{c.name}</span>
+                  <span className="max-w-[38%] shrink-0 truncate text-xs font-medium text-ink">
+                    {c.name}
+                  </span>
                   <span className="min-w-0 flex-1 truncate font-mono text-2xs tabular-nums text-ink-3">
                     {connectionAddress(c)}
                   </span>
-                  <span className="shrink-0 rounded-sm border border-edge-soft px-1 text-3xs leading-4 text-ink-3">
+                  <span className="shrink-0 rounded border border-edge-soft bg-app px-1.5 text-3xs leading-4 text-ink-3">
                     {c.kind === 'serial' ? t('welcome.typeSerial') : 'SSH'}
                   </span>
-                  <span className="w-8 shrink-0 text-right text-3xs text-ink-3 opacity-0 transition-opacity duration-150 group-hover:opacity-100">
+                  <span className="hidden w-12 shrink-0 text-right text-3xs tabular-nums text-ink-3/70 sm:inline">
+                    {formatRelativeTime(c.lastUsedAt)}
+                  </span>
+                  <span className="w-8 shrink-0 text-right text-3xs font-medium text-accent opacity-0 transition-opacity duration-150 group-hover:opacity-100">
                     {t('welcome.connect')}
                   </span>
                 </button>
               ))}
             </div>
           )}
+        </div>
+
+        {/* Keyboard shortcut footer */}
+        <div className="mt-6 flex flex-wrap items-center gap-x-4 gap-y-1.5 border-t border-edge-soft pt-3.5 text-2xs text-ink-3">
+          <span className="flex items-center gap-1.5">
+            <kbd className="rounded border border-edge bg-panel px-1.5 py-px font-mono text-3xs text-ink-2">
+              Ctrl+K
+            </kbd>
+            {t('welcome.shortcut.commandCenter')}
+          </span>
+          <span className="flex items-center gap-1.5">
+            <kbd className="rounded border border-edge bg-panel px-1.5 py-px font-mono text-3xs text-ink-2">
+              Ctrl+Shift+Z
+            </kbd>
+            {t('welcome.shortcut.zen')}
+          </span>
+          <span className="flex items-center gap-1.5">
+            <kbd className="rounded border border-edge bg-panel px-1.5 py-px font-mono text-3xs text-ink-2">
+              Ctrl+Alt+B
+            </kbd>
+            {t('welcome.shortcut.commandRail')}
+          </span>
         </div>
       </div>
     </div>

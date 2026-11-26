@@ -5,6 +5,7 @@ module.exports = {
     extend: {
       colors: {
         // 语义色：全部走 CSS 变量，暗色 / 亮色主题只切换变量值
+        chrome: 'rgb(var(--c-chrome) / <alpha-value>)',
         app: 'rgb(var(--c-app) / <alpha-value>)',
         panel: 'rgb(var(--c-panel) / <alpha-value>)',
         raised: 'rgb(var(--c-raised) / <alpha-value>)',
@@ -14,12 +15,11 @@ module.exports = {
         ink: 'rgb(var(--c-ink) / <alpha-value>)',
         'ink-2': 'rgb(var(--c-ink-2) / <alpha-value>)',
         'ink-3': 'rgb(var(--c-ink-3) / <alpha-value>)',
-        // 品牌绿 #27c93f：只给标题栏底色、活动栏指示线、终端成功信息
         brand: 'rgb(var(--c-brand) / <alpha-value>)',
         'on-brand': 'rgb(var(--c-on-brand) / <alpha-value>)',
-        // 选中行底色（文件树 #e0f2fe）
         select: 'rgb(var(--c-select) / <alpha-value>)',
         accent: 'rgb(var(--c-accent) / <alpha-value>)',
+        'on-accent': 'rgb(var(--c-on-accent) / <alpha-value>)',
         success: 'rgb(var(--c-success) / <alpha-value>)',
         warning: 'rgb(var(--c-warning) / <alpha-value>)',
         danger: 'rgb(var(--c-danger) / <alpha-value>)'
@@ -62,6 +62,7 @@ module.exports = {
       boxShadow: {
         /* 投影走 CSS 变量：浅色主题要轻（45% 黑在 #ffffff 上糊成脏灰），
            暗色主题要重（不够深就完全看不出浮层）。见 styles/index.css。 */
+        card: 'var(--shadow-card)',
         pop: 'var(--shadow-pop)',
         'pop-lg': 'var(--shadow-pop-lg)',
         glow: '0 0 0 1px rgb(var(--c-accent) / 0.35), 0 0 18px -4px rgb(var(--c-accent) / 0.5)'

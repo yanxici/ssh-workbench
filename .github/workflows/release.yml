@@ -197,7 +197,7 @@ jobs:
 
           gh release view $tag 2>$null | Out-Null
           if ($LASTEXITCODE -ne 0) {
-            gh release create $tag --title "SSH Workbench $tag" --target main --notes-file $notesFile
+            gh release create $tag --title "Portix $tag" --target main --notes-file $notesFile
           } else {
             # Release 已存在（人工先建、或上一轮 CI 半途失败）：
             # 只在正文是占位符或为空时补写，不覆盖人工已写好的日志。

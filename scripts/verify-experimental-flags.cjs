@@ -76,23 +76,24 @@ async function main() {
   const opened = await p.evaluate(`(() => { const b = document.querySelector('[aria-label="设置"]'); if (!b) return 'no-btn'; b.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window })); return 'ok' })()`)
   await sleep(1200)
   check('设置按钮可打开面板', opened === 'ok', opened)
-  const text = await p.evaluate(`(() => document.body.innerText)()`)
-  check('设置面板出现「实验性」分区', String(text).includes('实验性'), String(text).slice(0, 80))
-  /*
-  * Section 默认是折叠的（只有 appearance/terminal 默认展开），要先点开再数。
-  * 不点开就断言，测的是「折叠标题在不在」，不是「开关在不在」—— 那是假绿。
-  */
-  /*
-  * Section 的折叠头是一个 <button>（见上面 DOM 探测：BUTTON.flex.w-full...）。
-  * 必须对它派发真实的 click 事件 —— .click() 在自绘外壳上不触发 React 链路。
-  */
-  await p.evaluate(`(() => {
-    const btn = [...document.querySelectorAll('button')].find(b => b.textContent.includes('实验性（设计 token 灰度）'))
-    if (!btn) return 'no-header'
-    btn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }))
+  /* 设置页升级为 6 选项卡：实验性分区位于「更新与诊断」选项卡（data-settings-tab="system"） */
+  const tabSwitched = await p.evaluate(`(() => {
+    const tab = document.querySelector('[data-settings-tab="system"]')
+    if (!tab) return 'no-tab'
+    tab.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }))
     return 'ok'
   })()`)
-  await sleep(600)
+  await sleep(500)
+  check('可切换到「更新与诊断」选项卡', tabSwitched === 'ok', tabSwitched)
+  const text = await p.evaluate(`(() => document.body.innerText)()`)
+  check('设置面板出现「实验性」分区', String(text).includes('实验性'), String(text).slice(0, 80))
+  /* 若为旧折叠头则展开，新版 SettingsCard 默认已展开 */
+  await p.evaluate(`(() => {
+    const btn = [...document.querySelectorAll('button')].find(b => b.textContent.includes('实验性（设计 token 灰度）'))
+    if (btn) btn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }))
+    return 'ok'
+  })()`)
+  await sleep(400)
   /*
   * 断言的是「5 个开关的标签都出现」。
   * 注意「终端」这个词在设置面板别处也有（终端分区），单判 'includes("终端")' 会假绿，

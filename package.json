@@ -2,7 +2,7 @@
   "name": "ssh-workbench",
   "version": "2.5.0",
   "private": true,
-  "description": "轻量级 SSH 客户端 + 嵌入式技术支持工作台",
+  "description": "Portix — 现代 SSH 与串口终端工作台",
   "license": "MIT",
   "author": "ssh-workbench",
   "repository": {

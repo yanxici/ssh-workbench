@@ -1,10 +1,10 @@
-# SSH Workbench
+# Portix
 
 [English](./README.md) | 简体中文
 
-轻量级桌面 SSH 客户端，内置面向嵌入式设备技术支持的工作台。基于 Electron + React + TypeScript。
+现代 SSH 与串口终端工作台，面向服务器运维、设备调试与嵌入式开发场景。基于 Electron + React + TypeScript。
 
-![SSH Workbench 主界面](docs/ui/overview.png)
+![Portix 主界面](docs/ui/overview.png)
 
 ## 下载安装
 

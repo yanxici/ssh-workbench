@@ -1,34 +1,85 @@
 import type * as React from 'react'
-import { useEffect, useState } from 'react'
-import { FolderOpen } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
+import {
+  FolderOpen,
+  Info,
+  Keyboard,
+  Palette,
+  ShieldCheck,
+  SlidersHorizontal,
+  TerminalSquare
+} from 'lucide-react'
 import { useSettingsStore } from '@/stores/settingsStore'
+import { useUpdateStore } from '@/stores/updateStore'
 import { call } from '@/lib/ipc'
-import { Modal } from '@/components/ui'
+import { BrandMark, Modal } from '@/components/ui'
+import { useI18n, type I18nKey, type Lang } from '@/i18n'
+import { cn } from '@/lib/utils'
 import { AppearanceSection } from './AppearanceSection'
 import { BehaviorSection } from './BehaviorSection'
 import { DangerSection } from './DangerSection'
 import { ErrorLogSection } from './ErrorLogSection'
-import { KnownHostsSection } from './KnownHostsSection'
 import { ExperimentalSection } from './ExperimentalSection'
+import { KnownHostsSection } from './KnownHostsSection'
 import { LayoutSection } from './LayoutSection'
 import { NotifySection } from './NotifySection'
 import { OutputHighlightSection } from './OutputHighlightSection'
-import { Section } from './sectionUi'
+import { Row, Segmented, SettingsCard } from './sectionUi'
 import { ShortcutSection } from './ShortcutSection'
 import { TerminalSection } from './TerminalSection'
 import { TransferSection } from './TransferSection'
 import { UpdateSection } from './UpdateSection'
 
+type SettingsTabId = 'general' | 'terminal' | 'workflow' | 'shortcuts' | 'security' | 'system'
+
+interface SettingsTabDef {
+  id: SettingsTabId
+  labelKey: I18nKey
+  descKey: I18nKey
+  icon: typeof Palette
+}
+
+const SETTINGS_TABS: SettingsTabDef[] = [
+  {
+    id: 'general',
+    labelKey: 'settings.tab.general',
+    descKey: 'settings.tab.general.desc',
+    icon: Palette
+  },
+  {
+    id: 'terminal',
+    labelKey: 'settings.tab.terminal',
+    descKey: 'settings.tab.terminal.desc',
+    icon: TerminalSquare
+  },
+  {
+    id: 'workflow',
+    labelKey: 'settings.tab.workflow',
+    descKey: 'settings.tab.workflow.desc',
+    icon: SlidersHorizontal
+  },
+  {
+    id: 'shortcuts',
+    labelKey: 'settings.tab.shortcuts',
+    descKey: 'settings.tab.shortcuts.desc',
+    icon: Keyboard
+  },
+  {
+    id: 'security',
+    labelKey: 'settings.tab.security',
+    descKey: 'settings.tab.security.desc',
+    icon: ShieldCheck
+  },
+  {
+    id: 'system',
+    labelKey: 'settings.tab.system',
+    descKey: 'settings.tab.system.desc',
+    icon: Info
+  }
+]
+
 /**
- * 设置面板总装。
- *
- * 原本这个文件 959 行，同时装了：4 个 UI 原子（Section / Row / Segmented /
- * ColorThemeGallery）、7 个业务分区、以及一段完整的指纹探测状态机。
- * 改「已知主机指纹」和改「终端字号」要动同一个文件。
- *
- * 现在按分区拆到 ./{Appearance,Terminal,Behavior,Layout,Shortcut,Danger,
- * KnownHosts}Section.tsx，UI 原子在 ./sectionUi.tsx，
- * 这里只负责布局顺序与 Modal 外壳。
+ * Portix 设置面板：左侧 6 选项卡分类导航 + 右侧卡片式详情区。
  */
 export function SettingsPanel({
   open,
@@ -38,119 +89,244 @@ export function SettingsPanel({
   onClose: () => void
 }): React.JSX.Element {
   const settings = useSettingsStore((s) => s.settings)
+  const updateSettings = useSettingsStore((s) => s.update)
+  const version = useUpdateStore((s) => s.status?.currentVersion)
+  const { lang, t } = useI18n()
+  const [activeTab, setActiveTab] = useState<SettingsTabId>('general')
   const [paths, setPaths] = useState<{ dataDir: string; userData: string } | null>(null)
+  const contentRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
     if (!open) return
+    setActiveTab('general')
     void call(window.api.settings.paths(), { silent: true }).then((p) => setPaths(p))
   }, [open])
+
+  useEffect(() => {
+    if (contentRef.current) contentRef.current.scrollTop = 0
+  }, [activeTab])
+
+  const setLang = (next: Lang): void => {
+    if (next === lang) return
+    void updateSettings({ language: next })
+  }
+
+  const currentTab = SETTINGS_TABS.find((item) => item.id === activeTab) ?? SETTINGS_TABS[0]
 
   return (
     <Modal
       open={open}
-      title="设置"
+      title={t('settings.title')}
       onClose={onClose}
-      width="max-w-xl"
+      width="max-w-3xl"
+      bodyClassName="flex h-[540px] min-h-0 overflow-hidden p-0"
       footer={
-        <button className="btn" onClick={onClose}>
-          完成
+        <button className="btn btn-primary" onClick={onClose}>
+          {t('settings.done')}
         </button>
       }
     >
-      <Section id="appearance" title="外观" defaultOpen>
-        <AppearanceSection />
-      </Section>
-
-      <Section id="terminal" title="终端" defaultOpen>
-        <TerminalSection />
-      </Section>
-
-      {/*
-        * 输出高亮单独开一区，而且默认展开：这是「改一条规则马上就能看到效果」的功能，
-        * 藏进折叠区之后，用户根本不知道它存在 —— 而它恰恰是最容易被感知的能力。
-        */}
-      <Section id="highlight" title="输出高亮" hint="按关键词给终端输出染色（行级）" defaultOpen>
-        <OutputHighlightSection />
-      </Section>
-
-      {/*
-        * 通知也默认展开。默认值里 system=true、heuristic=false 是一套"宁可少弹、
-        * 但长任务必须告诉我"的组合，用户得先看见这四个开关才知道自己可以调。
-        */}
-      <Section
-        id="notify"
-        title="通知"
-        hint="任务完成提示 / 系统通知 / 提示音 / 疑似完成"
-        defaultOpen
-      >
-        <NotifySection />
-      </Section>
-
-      <Section
-        id="behavior"
-        title="行为"
-        hint="延迟探测 / 自动录像 / 跟随终端 / 指纹校验 / 面板位置"
-      >
-        <BehaviorSection />
-      </Section>
-
-      <Section id="transfer" title="文件传输" hint="默认下载目录 / 重传跳过未变化文件">
-        <TransferSection />
-      </Section>
-
-      <Section
-        id="layout"
-        title="侧栏宽度"
-        hint="拖动侧栏右侧的分隔条即可调整；双击分隔条恢复默认"
-      >
-        <LayoutSection />
-      </Section>
-
-      <Section
-        id="experimental"
-        title="实验性（设计 token 灰度）"
-        hint="逐个面板启用新的间距 / 行高 / 动效规范，可随时全部关闭回到旧视觉"
-      >
-        <ExperimentalSection />
-      </Section>
-
-      <Section id="shortcuts" title="快捷键" hint="点击键位进入录制">
-        <ShortcutSection />
-      </Section>
-
-      <Section id="danger" title="危险命令关键词" hint={`${settings.dangerPatterns.length} 条`}>
-        <DangerSection />
-      </Section>
-
-      <Section
-        id="knownhosts"
-        title="已知主机指纹"
-        hint={settings.strictHostKey ? '严格校验已开启' : '严格校验已关闭'}
-      >
-        <KnownHostsSection />
-      </Section>
-
-      <Section
-        id="errorlog"
-        title="错误日志"
-        hint="运行期异常自动收集，可搜索、复制、导出给同事排查"
-      >
-        <ErrorLogSection />
-      </Section>
-
-      <Section id="update" title="软件更新" hint="检查更新 / 自动下载 / 更新代理">
-        <UpdateSection />
-      </Section>
-
-      <Section id="datadir" title="数据目录">
-        <div className="flex items-center gap-2 text-2xs text-ink-3">
-          <FolderOpen size={12} className="shrink-0" />
-          <span className="selectable break-all font-mono">{paths?.dataDir ?? '加载中…'}</span>
+      {/* Left category rail */}
+      <aside className="flex w-[176px] shrink-0 flex-col justify-between border-r border-edge bg-chrome p-2">
+        <div role="tablist" aria-label={t('settings.tab.navLabel')} className="space-y-0.5">
+          {SETTINGS_TABS.map((tab) => {
+            const Icon = tab.icon
+            const active = tab.id === activeTab
+            return (
+              <button
+                key={tab.id}
+                type="button"
+                role="tab"
+                aria-selected={active}
+                data-settings-tab={tab.id}
+                onClick={() => setActiveTab(tab.id)}
+                className={cn(
+                  'relative flex h-8 w-full cursor-default items-center gap-2 rounded-md border px-2.5 text-left text-xs transition-colors duration-150',
+                  active
+                    ? 'border-edge bg-app font-medium text-ink shadow-card dark:bg-raised'
+                    : 'border-transparent text-ink-2 hover:bg-hover hover:text-ink'
+                )}
+              >
+                {active && (
+                  <span className="pointer-events-none absolute bottom-1.5 left-0 top-1.5 w-[2px] rounded-r-full bg-brand" />
+                )}
+                <Icon size={14} className={cn('shrink-0', active ? 'text-accent' : 'text-ink-3')} />
+                <span className="truncate">{t(tab.labelKey)}</span>
+              </button>
+            )
+          })}
         </div>
-        <div className="text-2xs leading-relaxed text-ink-3">
-          连接、常用命令、历史、设置均以 JSON 保存在该目录；密码 / 私钥口令单独加密存储（系统凭据保护），永不落明文。
+
+        <div className="flex items-center gap-2 border-t border-edge-soft px-2 pt-2.5 text-2xs text-ink-3">
+          <BrandMark size={18} className="shrink-0" />
+          <span className="font-medium text-ink-2">Portix</span>
+          {version && <span className="ml-auto font-mono text-3xs">v{version}</span>}
         </div>
-      </Section>
+      </aside>
+
+      {/* Right content pane */}
+      <div
+        ref={contentRef}
+        role="tabpanel"
+        className="min-w-0 flex-1 overflow-y-auto bg-panel px-5 py-4 scroll-thin"
+      >
+        <div className="mb-4">
+          <h3 className="text-sm font-semibold text-ink">{t(currentTab.labelKey)}</h3>
+          <p className="mt-0.5 text-2xs text-ink-3">{t(currentTab.descKey)}</p>
+        </div>
+
+        <div className="space-y-3">
+          {activeTab === 'general' && (
+            <>
+              <SettingsCard id="language">
+                <Row label={t('settings.language')} hint={t('settings.language.hint')}>
+                  <Segmented<Lang>
+                    value={lang}
+                    options={[
+                      { value: 'zh-CN', label: '中文' },
+                      { value: 'en', label: 'English' }
+                    ]}
+                    onChange={setLang}
+                  />
+                </Row>
+              </SettingsCard>
+
+              <SettingsCard id="appearance" title={t('section.appearance')}>
+                <AppearanceSection />
+              </SettingsCard>
+
+              <SettingsCard id="layout" title={t('section.layout')} hint={t('section.layout.hint')}>
+                <LayoutSection />
+              </SettingsCard>
+            </>
+          )}
+
+          {activeTab === 'terminal' && (
+            <>
+              <SettingsCard id="terminal" title={t('section.terminal')}>
+                <TerminalSection />
+              </SettingsCard>
+
+              <SettingsCard
+                id="highlight"
+                title={t('section.highlight')}
+                hint={t('section.highlight.hint')}
+              >
+                <OutputHighlightSection />
+              </SettingsCard>
+
+              <SettingsCard id="notify" title={t('section.notify')} hint={t('section.notify.hint')}>
+                <NotifySection />
+              </SettingsCard>
+            </>
+          )}
+
+          {activeTab === 'workflow' && (
+            <>
+              <SettingsCard
+                id="behavior"
+                title={t('section.behavior')}
+                hint={t('section.behavior.hint')}
+              >
+                <BehaviorSection />
+              </SettingsCard>
+
+              <SettingsCard
+                id="transfer"
+                title={t('section.transfer')}
+                hint={t('section.transfer.hint')}
+              >
+                <TransferSection />
+              </SettingsCard>
+            </>
+          )}
+
+          {activeTab === 'shortcuts' && (
+            <SettingsCard
+              id="shortcuts"
+              title={t('section.shortcuts')}
+              hint={t('section.shortcuts.hint')}
+            >
+              <ShortcutSection />
+            </SettingsCard>
+          )}
+
+          {activeTab === 'security' && (
+            <>
+              <SettingsCard
+                id="danger"
+                title={t('section.danger')}
+                hint={t('section.danger.hint', { count: settings.dangerPatterns.length })}
+              >
+                <DangerSection />
+              </SettingsCard>
+
+              <SettingsCard
+                id="knownhosts"
+                title={t('section.knownhosts')}
+                hint={t(
+                  settings.strictHostKey
+                    ? 'section.knownhosts.hint.on'
+                    : 'section.knownhosts.hint.off'
+                )}
+              >
+                <KnownHostsSection />
+              </SettingsCard>
+
+              <SettingsCard
+                id="privacy"
+                title={t('section.privacy')}
+                hint={t('section.privacy.hint')}
+              >
+                <div className="flex items-start gap-2 text-2xs leading-relaxed text-ink-3">
+                  <ShieldCheck size={12} className="mt-0.5 shrink-0 text-success" />
+                  <span>{t('privacy.noTelemetry')}</span>
+                </div>
+                <div className="pl-5 text-2xs leading-relaxed text-ink-3">
+                  {t('privacy.egress')}
+                </div>
+                <div className="selectable pl-5 text-2xs leading-relaxed text-ink-3/80">
+                  {t('privacy.verify')}
+                </div>
+              </SettingsCard>
+            </>
+          )}
+
+          {activeTab === 'system' && (
+            <>
+              <SettingsCard id="update" title={t('section.update')} hint={t('section.update.hint')}>
+                <UpdateSection />
+              </SettingsCard>
+
+              <SettingsCard
+                id="experimental"
+                title={t('section.experimental')}
+                hint={t('section.experimental.hint')}
+              >
+                <ExperimentalSection />
+              </SettingsCard>
+
+              <SettingsCard
+                id="errorlog"
+                title={t('section.errorlog')}
+                hint={t('section.errorlog.hint')}
+              >
+                <ErrorLogSection />
+              </SettingsCard>
+
+              <SettingsCard id="datadir" title={t('section.datadir')}>
+                <div className="flex items-center gap-2 text-2xs text-ink-3">
+                  <FolderOpen size={12} className="shrink-0" />
+                  <span className="selectable break-all font-mono">{paths?.dataDir ?? '…'}</span>
+                </div>
+                <div className="text-2xs leading-relaxed text-ink-3">
+                  {t('section.datadir.hint')}
+                </div>
+              </SettingsCard>
+            </>
+          )}
+        </div>
+      </div>
     </Modal>
   )
 }

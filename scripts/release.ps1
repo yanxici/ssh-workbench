@@ -1,4 +1,4 @@
-# SSH Workbench 发布脚本（GitHub Release）
+﻿# SSH Workbench 发布脚本（GitHub Release）
 #
 # 规则（用户 2026-10-26 明确要求）：
 #   远端 Release 只上传 NSIS 安装包及其自动更新元数据，
@@ -248,7 +248,7 @@ if ($NotesFile -and (Test-Path (Join-Path $root $NotesFile))) {
 $body = @{
   tag_name         = $tag
   target_commitish = $sha
-  name             = "SSH Workbench $tag"
+  name             = "Portix $tag"
   draft            = $false
   prerelease       = $false
   body             = $notes

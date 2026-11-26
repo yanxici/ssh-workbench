@@ -186,15 +186,26 @@ export function StatusBar(): React.JSX.Element {
   }, [sessionId, connected, session?.kind])
 
   const { activeCount, activePct, firstDirection } = transfer
+  const serialCfg = session?.kind === 'serial' ? session.serialConfig : undefined
+  const serialFrame = serialCfg
+    ? `${serialCfg.baudRate ?? 115200} ${serialCfg.dataBits ?? 8}${(serialCfg.parity ?? 'none')[0].toUpperCase()}${serialCfg.stopBits ?? 1}`
+    : null
 
   return (
     <footer className="statusbar">
       {/* ---------- 左：SSH 状态 + Git 分支 ---------- */}
       {session ? (
         <>
-          <span className="flex items-center gap-1.5">
+          <span
+            className={cn(
+              'flex items-center gap-1.5',
+              connected && 'rounded-full bg-accent/10 px-1.5 py-px text-accent'
+            )}
+          >
             <span className={cn('h-1.5 w-1.5 rounded-full', STATUS_DOT[session.status])} />
-            <span className="text-ink-2">{(session.phase && STATUS_PHASE_TEXT(session.phase)) || STATUS_TEXT[session.status]}</span>
+            <span className={cn(connected ? 'font-medium text-accent' : 'text-ink-2')}>
+              {(session.phase && STATUS_PHASE_TEXT(session.phase)) || STATUS_TEXT[session.status]}
+            </span>
           </span>
 
           <Sep />
@@ -279,19 +290,40 @@ export function StatusBar(): React.JSX.Element {
         </>
       )}
 
-      <span>UTF-8</span>
-      <Sep />
-      <span>LF</span>
-      <Sep />
-      <span className="font-mono">bash</span>
-
-      {session && (
+      {session?.kind === 'serial' ? (
         <>
+          <span className="rounded bg-chrome px-1.5 py-px font-mono text-3xs font-medium text-ink-2">
+            SERIAL
+          </span>
+          {serialFrame && (
+            <>
+              <Sep />
+              <span className="font-mono tabular-nums">{serialFrame}</span>
+            </>
+          )}
+          <Sep />
+          <span className="font-mono">{(serialCfg?.charset ?? 'utf-8').toUpperCase()}</span>
+          <Sep />
+          <span className="font-mono">{(serialCfg?.newline ?? 'cr').toUpperCase()}</span>
           <Sep />
           <span className="font-mono tabular-nums">
             {session.cols}×{session.rows}
           </span>
         </>
+      ) : session ? (
+        <>
+          <span className="rounded bg-chrome px-1.5 py-px font-mono text-3xs font-medium text-ink-2">
+            SSH
+          </span>
+          <Sep />
+          <span>UTF-8</span>
+          <Sep />
+          <span className="font-mono tabular-nums">
+            {session.cols}×{session.rows}
+          </span>
+        </>
+      ) : (
+        <span className="font-medium tracking-[-0.01em] text-ink-3">Portix</span>
       )}
     </footer>
   )

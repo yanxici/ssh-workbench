@@ -75,18 +75,25 @@ bootLog('boot: module loaded')
  *
  * 为什么不改成异步：Electron 在 app ready 之后再调用该 API 会抛错且不生效。
  */
-function readSoftwareRenderSync(): boolean {
+function readStartupPrefsSync(): { softwareRender: boolean; darkBg: boolean } {
   try {
     const p = join(app.getPath('userData'), 'data', 'settings.json')
     const raw = readFileSync(p, 'utf-8')
-    const parsed = JSON.parse(raw) as { experimental?: { softwareRender?: boolean } }
-    return parsed?.experimental?.softwareRender === true
+    const parsed = JSON.parse(raw) as {
+      theme?: string
+      experimental?: { softwareRender?: boolean }
+    }
+    return {
+      softwareRender: parsed?.experimental?.softwareRender === true,
+      darkBg: parsed?.theme === 'dark'
+    }
   } catch {
-    return false
+    return { softwareRender: false, darkBg: false }
   }
 }
 
-const softwareRender = readSoftwareRenderSync()
+const startupPrefs = readStartupPrefsSync()
+const softwareRender = startupPrefs.softwareRender
 if (softwareRender) {
   app.disableHardwareAcceleration()
   bootLog('software render forced by settings.experimental.softwareRender')
@@ -110,8 +117,8 @@ function createWindow(): void {
     minHeight: 640,
     show: false,
     frame: false,
-    backgroundColor: '#0D1117',
-    title: 'SSH Workbench',
+    backgroundColor: startupPrefs.darkBg ? '#0F1115' : '#EFF2F6',
+    title: 'Portix',
     /*
      * 显式给窗口一个图标。
      *

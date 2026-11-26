@@ -25,7 +25,7 @@ export interface SupportBundleInput {
 /** boot.log 可能很长（反复启动会一直追加），只保留尾部，避免压出几十 MB 的包 */
 const MAX_BOOT_LOG_BYTES = 200 * 1024
 
-const README = `SSH Workbench 诊断包
+const README = `Portix 诊断包
 ====================
 由「设置 → 错误日志 → 导出诊断包」生成，把问题现场原样交给技术支持或研发。
 

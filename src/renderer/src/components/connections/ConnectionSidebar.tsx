@@ -837,7 +837,12 @@ export function ConnectionSidebar({
 
                         <div className="min-w-0 flex-1">
                           <div className="flex items-center gap-1.5">
-                            <span className="truncate text-xs text-ink">{c.name}</span>
+                            <span className="truncate text-xs font-medium text-ink">{c.name}</span>
+                            {c.kind === 'serial' && (
+                              <span className="shrink-0 rounded bg-chrome px-1 font-mono text-3xs leading-4 text-ink-3">
+                                COM
+                              </span>
+                            )}
                             {live && (
                               <span
                                 className={cn(
@@ -859,14 +864,14 @@ export function ConnectionSidebar({
 
                           {/* 主机信息：等宽字体，单行省略，悬停看完整地址 */}
                           <div
-                            className="mt-0.5 truncate pl-[11px] font-mono text-2xs text-ink-3"
+                            className="mt-0.5 truncate font-mono text-2xs text-ink-3"
                             title={connectionAddress(c)}
                           >
                             {connectionAddress(c)}
                           </div>
 
                           {c.tags.length > 0 && (
-                            <div className="mt-1 flex gap-1 pl-[11px]">
+                            <div className="mt-1 flex gap-1">
                               {c.tags.slice(0, 2).map((t) => (
                                 <span
                                   key={t}

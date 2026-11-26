@@ -85,7 +85,9 @@ export function CommandCard({
            */
           'group relative flex h-10 min-w-0 flex-col items-stretch justify-center overflow-hidden rounded-md border border-l-2 px-2 py-1 text-left motion-lift motion-in',
           accentClass(tone),
-          active ? 'border-accent/50 border-l-accent bg-select' : 'border-edge bg-app hover:bg-hover',
+          active
+            ? 'border-accent/55 border-l-accent bg-select'
+            : 'border-edge/85 bg-raised shadow-card hover:border-accent/40 hover:bg-app',
           dropTarget && 'border-accent/60',
           dragging && 'opacity-40'
         )}
@@ -95,7 +97,7 @@ export function CommandCard({
           交叉轴上子项宽度由内容决定，少了 width 基准 line-clamp 的 overflow 不参与收缩，
           长名字会把卡片撑出边界（旧实现踩过：129 张里 92 张中招）。
         */}
-        <span className="line-clamp-2 w-full min-w-0 break-words text-2xs font-medium leading-[1.3] text-ink">
+        <span className="cmd-title-balance line-clamp-2 w-full min-w-0 break-words text-2xs font-medium leading-[1.3] text-ink">
           <Highlight text={c.name} indices={hit?.nameIndices ?? []} />
         </span>
 

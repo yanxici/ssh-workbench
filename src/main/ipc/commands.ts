@@ -52,7 +52,7 @@ export function registerCommandIpc(): void {
     const stamp = new Date().toISOString().slice(0, 10)
     const res = await showSaveDialog({
       title: '导出常用命令',
-      defaultPath: dialogDefaultPath('file', `ssh-workbench-commands-${stamp}.json`),
+      defaultPath: dialogDefaultPath('file', `portix-commands-${stamp}.json`),
       filters: [{ name: 'JSON 文件', extensions: ['json'] }]
     })
     if (res.canceled || !res.filePath) return { canceled: true, count: 0 }

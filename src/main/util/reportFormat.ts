@@ -113,7 +113,7 @@ export function generateMarkdown(report: DiagReport): string {
 
   lines.push('---')
   lines.push('')
-  lines.push(`*由 SSH Workbench 生成于 ${formatDateTime(report.finishedAt)}*`)
+  lines.push(`*由 Portix 生成于 ${formatDateTime(report.finishedAt)}*`)
   return lines.join('\n')
 }
 
@@ -193,7 +193,7 @@ export function generateHtml(report: DiagReport): string {
     </table>
   </div>
 ${rows}
-  <footer>由 SSH Workbench 生成于 ${formatDateTime(report.finishedAt)}</footer>
+  <footer>由 Portix 生成于 ${formatDateTime(report.finishedAt)}</footer>
 </div>
 </body>
 </html>`

@@ -224,15 +224,20 @@ export function runSmoke(win: BrowserWindow): void {
           await settle(700)
           const settings = await shoot('smoke-shot-settings.png')
 
-          // 「栏宽」分组在设置面板下方：展开它并滚到可见位置，验证可滚动可达
+          // 「栏宽」分组在设置面板「通用与外观」下方：滚到可见位置，验证可滚动可达
           const layoutSection: unknown = await win.webContents.executeJavaScript(`
             (() => {
+              const card = document.querySelector('[data-settings-section="layout"]')
+              if (card) {
+                card.scrollIntoView({ block: 'center' })
+                return { clicked: true, mode: 'card' }
+              }
               const head = [...document.querySelectorAll('button')]
                 .find((b) => b.textContent?.includes('栏宽'))
               if (!head) return { error: 'section-not-found' }
               head.click()
               head.scrollIntoView({ block: 'center' })
-              return { clicked: true }
+              return { clicked: true, mode: 'accordion' }
             })()
           `)
           await settle(600)
@@ -374,12 +379,16 @@ export function runSmoke(win: BrowserWindow): void {
                * 所以「> 0 且不包含 header.titlebar」才是正确判据。
                * 只看 backgroundColor 不看渐变/边框，避免把 ::before 的指示条算进来。
                */
+              const brandRaw = getComputedStyle(document.documentElement)
+                .getPropertyValue('--c-brand')
+                .trim()
+              const brandRgb = brandRaw ? 'rgb(' + brandRaw.split(/\\s+/).join(', ') + ')' : ''
               const brandBg = [...document.querySelectorAll('*')].filter((el) => {
                 const c = getComputedStyle(el).backgroundColor
-                return c === 'rgb(39, 201, 63)'
+                return brandRgb !== '' && c === brandRgb
               })
               const titlebarIsBrand = titlebar
-                ? getComputedStyle(titlebar).backgroundColor === 'rgb(39, 201, 63)'
+                ? brandRgb !== '' && getComputedStyle(titlebar).backgroundColor === brandRgb
                 : false
               return {
                 titlebar: rect('header.titlebar'),

@@ -53,7 +53,7 @@ export function registerSupportIpc(): void {
 
     const stamp = new Date()
     const pad = (n: number): string => String(n).padStart(2, '0')
-    const name = `ssh-workbench-诊断包-${app.getVersion()}-${stamp.getFullYear()}${pad(stamp.getMonth() + 1)}${pad(stamp.getDate())}-${pad(stamp.getHours())}${pad(stamp.getMinutes())}.zip`
+    const name = `portix-诊断包-${app.getVersion()}-${stamp.getFullYear()}${pad(stamp.getMonth() + 1)}${pad(stamp.getDate())}-${pad(stamp.getHours())}${pad(stamp.getMinutes())}.zip`
 
     const res = await showSaveDialog({
       title: '导出诊断包',

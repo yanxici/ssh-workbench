@@ -348,6 +348,23 @@ app.whenReady().then(() => {
     startMenuDirs: [base]
   })
 
+  // E: Portix 新品牌名 .lnk（移除旧 .lnk 后验证仅凭 Portix.lnk 也能命中 AUMID）
+  fs.rmSync(lnk, { force: true })
+  const portixLnk = path.join(base, 'Portix.lnk')
+  out.writeE = shell.writeShortcutLink(portixLnk, 'create', {
+    target: process.execPath,
+    cwd: path.dirname(process.execPath),
+    icon: process.execPath,
+    iconIndex: 0,
+    appUserModelId: APP_USER_MODEL_ID
+  })
+  out.matchingPortix = resolveWindowsAppUserModelId({
+    platform: 'win32',
+    isPackaged: true,
+    execPath: process.execPath,
+    startMenuDirs: [base]
+  })
+
   fs.writeFileSync(${JSON.stringify(probeOut)}, JSON.stringify(out))
   app.quit()
 })
@@ -375,6 +392,7 @@ app.whenReady().then(() => {
       check('真实环境 B：快捷方式指向已删目录 -> null', r.staleTarget === null, r.staleTarget)
       check('真实环境 C：快捷方式指向别的 exe -> null', r.otherExe === null, r.otherExe)
       check('真实环境 D：快捷方式指向当前 exe -> com.sshworkbench.app', r.matchingInstalled === APP_USER_MODEL_ID, r.matchingInstalled)
+      check('真实环境 E：Portix.lnk 指向当前 exe -> com.sshworkbench.app', r.writeE === true && r.matchingPortix === APP_USER_MODEL_ID, r.matchingPortix)
     }
   } else {
     console.log('  SKIP  非 Windows 或未找到 Electron 二进制，跳过第 3 组')

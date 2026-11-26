@@ -365,7 +365,7 @@ class Recorder {
           `${JSON.stringify([
             elapsed,
             'o',
-            '\r\n[SSH Workbench] 日志已超过 50 MB 上限，停止记录\r\n'
+            '\r\n[Portix] 日志已超过 50 MB 上限，停止记录\r\n'
           ])}\n`
         )
       } else {
@@ -413,7 +413,7 @@ class Recorder {
     rec.textBytes += Buffer.byteLength(out, 'utf-8')
     if (rec.textBytes > MAX_SESSION_LOG_BYTES) {
       rec.textTruncated = true
-      stream.write('\n[SSH Workbench] 文本日志已超过 50 MB 上限，停止记录\n')
+      stream.write('\n[Portix] 文本日志已超过 50 MB 上限，停止记录\n')
       return
     }
     stream.write(out)

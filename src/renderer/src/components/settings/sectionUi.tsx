@@ -72,6 +72,34 @@ export function Section({
   )
 }
 
+/** 设置页选项卡内的展开卡片：替代旧版 15 个叠层手风琴 */
+export function SettingsCard({
+  id,
+  title,
+  hint,
+  children
+}: {
+  id: string
+  title?: string
+  hint?: string
+  children: ReactNode
+}): React.JSX.Element {
+  return (
+    <section
+      data-settings-section={id}
+      className="rounded-lg border border-edge bg-app p-3.5 shadow-card"
+    >
+      {title && (
+        <div className="mb-3 border-b border-edge-soft pb-2">
+          <h4 className="text-xs font-semibold text-ink">{title}</h4>
+          {hint && <p className="mt-0.5 text-2xs leading-snug text-ink-3">{hint}</p>}
+        </div>
+      )}
+      <div className="space-y-2.5">{children}</div>
+    </section>
+  )
+}
+
 export function Row({
   label,
   hint,

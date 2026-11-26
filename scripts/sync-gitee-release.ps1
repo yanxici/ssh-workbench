@@ -143,7 +143,7 @@ try {
     $createPayload = @{
       access_token     = $token
       tag_name         = $tag
-      name             = "SSH Workbench $tag"
+      name             = "Portix $tag"
       body             = $notes
       prerelease       = $false
       target_commitish = $TargetCommitish

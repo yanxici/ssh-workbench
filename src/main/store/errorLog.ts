@@ -214,7 +214,7 @@ export async function exportErrorsText(): Promise<string> {
   const list = await store.read()
   if (list.length === 0) return '（没有错误记录）'
   const lines: string[] = [
-    `SSH Workbench 错误日志`,
+    `Portix 错误日志`,
     `应用版本：${app.getVersion()}`,
     `导出时间：${new Date().toLocaleString()}`,
     `共 ${list.length} 类错误`,

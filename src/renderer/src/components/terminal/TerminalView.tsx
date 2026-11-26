@@ -964,8 +964,8 @@ export function TerminalView({
       {/* 串口会话顶部的刷机引导条（SSH 会话不渲染） */}
       {session.kind === 'serial' && <SerialBootBar session={session} />}
 
-      {/* 终端挂载点：内层容器不设 padding，保证 fit 计算的尺寸精确 */}
-      <div className="min-h-0 flex-1 px-3 pb-1 pt-2">
+      {/* 终端挂载点：外层留呼吸边距，内层容器不设 padding，保证 fit 计算的尺寸精确 */}
+      <div className="min-h-0 flex-1 px-3.5 py-2.5">
         <div
           ref={containerRef}
           className="h-full w-full"
@@ -1089,23 +1089,23 @@ export function TerminalView({
       )}
 
       {showOverlay && (
-        <div className="absolute inset-0 z-20 flex items-center justify-center bg-app/[0.88]">
+        <div className="absolute inset-0 z-20 flex items-center justify-center bg-app/[0.88] p-4">
           {session.status === 'connecting' && (
-            <div className="flex items-center gap-2.5 text-xs text-ink-2">
+            <div className="flex items-center gap-2.5 rounded-lg border border-edge bg-panel px-5 py-3.5 text-xs text-ink-2 shadow-pop">
               <Loader2 size={15} className="animate-spin text-accent" />
               正在连接 {session.target}…
             </div>
           )}
           {session.status === 'disconnected' && (
-            <div className="flex max-w-[420px] flex-col items-center gap-2 text-center">
+            <div className="flex max-w-[420px] flex-col items-center gap-2 rounded-lg border border-edge bg-panel px-6 py-5 text-center shadow-pop">
               <PlugZap size={22} className="text-ink-3" />
-              <div className="text-xs text-ink-2">连接已断开</div>
+              <div className="text-xs font-medium text-ink">连接已断开</div>
               <div className="text-2xs text-ink-3">远端关闭了会话，或网络中断。</div>
               <ReconnectButton sessionId={sessionId} />
             </div>
           )}
           {session.status === 'error' && (
-            <div className="flex max-w-[460px] flex-col items-center gap-2 text-center">
+            <div className="flex max-w-[460px] flex-col items-center gap-2 rounded-lg border border-edge bg-panel px-6 py-5 text-center shadow-pop">
               <AlertCircle size={22} className="text-danger" />
               <div className="text-xs font-medium text-ink">连接失败</div>
               <div className="selectable whitespace-pre-line break-all text-2xs leading-relaxed text-ink-3">

@@ -1,9 +1,10 @@
 import type * as React from 'react'
-import { Maximize2, Minimize2, Minus, Search, Settings, Square, TerminalSquare, X } from 'lucide-react'
+import { Maximize2, Minimize2, Minus, Search, Settings, Square, X } from 'lucide-react'
 import { useLayoutStore } from '@/stores/layoutStore'
 import { useUiStore } from '@/stores/uiStore'
 import { useI18n } from '@/i18n'
 import { cn } from '@/lib/utils'
+import { BrandMark } from '@/components/ui'
 import { TabBar } from './TabBar'
 import { UpdateBadge } from './UpdateBadge'
 
@@ -33,12 +34,11 @@ export function TitleBar(): React.JSX.Element {
   return (
     <header className="titlebar drag-region">
       {/* 左：Logo + 产品名 */}
-      <div className="no-drag flex shrink-0 items-center gap-2 pl-3 pr-3">
-        <span className="flex h-6 w-6 items-center justify-center rounded-md bg-brand/[0.12] text-brand">
-          <TerminalSquare size={14} />
-        </span>
-        <span className="text-sm font-semibold tracking-wide text-ink">SSH Workbench</span>
+      <div className="no-drag flex shrink-0 items-center gap-2 pl-3 pr-2.5">
+        <BrandMark size={18} className="shrink-0" />
+        <span className="text-sm font-semibold tracking-[-0.02em] text-ink">Portix</span>
       </div>
+      <span className="mr-1 h-3.5 w-px shrink-0 bg-edge" />
 
       {/* 中：会话标签页（占据全部剩余宽度，过多时横向滚动） */}
       <div className="min-w-0 flex-1 self-stretch overflow-hidden">
@@ -69,7 +69,10 @@ export function TitleBar(): React.JSX.Element {
          * 这里借它表达「当前处于非常规视图」，退出后自动回到中性灰。
          */}
         <button
-          className={cn('titlebar-btn', zenMode && 'text-brand hover:text-brand')}
+          className={cn(
+            'titlebar-btn',
+            zenMode && 'bg-accent/15 text-accent hover:bg-accent/20 hover:text-accent'
+          )}
           title={zenMode ? t('titlebar.zen.on') : t('titlebar.zen.off')}
           aria-label={t('titlebar.zen.off')}
           aria-pressed={zenMode}

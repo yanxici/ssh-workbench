@@ -87,7 +87,7 @@ export function ActivityBar(): React.JSX.Element {
   return (
     <nav
       aria-label="活动栏"
-      className="flex w-11 shrink-0 flex-col items-stretch border-r border-edge bg-panel"
+      className="flex w-11 shrink-0 flex-col items-stretch border-r border-edge bg-chrome"
     >
       {MAIN_ITEMS.map(({ view, label, icon: Icon }) => {
         const active = activityView === view && sidebarVisible
@@ -103,14 +103,22 @@ export function ActivityBar(): React.JSX.Element {
           >
             {/*
               激活指示线：2px 品牌色，绝对定位贴在左沿（不占布局宽度）。
-              用 top-[14px] 而不是 top-1/2 + -translate-y-1/2：活动栏有几何禁令
-              （见文件头注释），静态居中也不该引入 transform。
-              h-4 让它比整格矮一截 —— 顶满 44px 会把「指示」画成「隔断」。
+              用 top-[14px] 而不是 top-1/2 + -translate-y-1/2：活动栏有几何禁令，
+              静态居中也不该引入 transform。
             */}
             {active && (
               <span className="pointer-events-none absolute left-0 top-[14px] h-4 w-0.5 rounded-r bg-brand" />
             )}
-            <Icon size={19} strokeWidth={active ? 2.1 : 1.7} />
+            <span
+              className={cn(
+                'flex h-8 w-8 items-center justify-center rounded-md border transition-colors duration-150',
+                active
+                  ? 'border-edge/80 bg-app text-accent dark:bg-raised'
+                  : 'border-transparent bg-transparent'
+              )}
+            >
+              <Icon size={17} strokeWidth={active ? 2.1 : 1.7} />
+            </span>
           </button>
         )
       })}
@@ -138,7 +146,16 @@ export function ActivityBar(): React.JSX.Element {
         {commandRailVisible && (
           <span className="pointer-events-none absolute left-0 top-[14px] h-4 w-0.5 rounded-r bg-brand" />
         )}
-        <Play size={19} strokeWidth={commandRailVisible ? 2.1 : 1.7} />
+        <span
+          className={cn(
+            'flex h-8 w-8 items-center justify-center rounded-md border transition-colors duration-150',
+            commandRailVisible
+              ? 'border-edge/80 bg-app text-accent dark:bg-raised'
+              : 'border-transparent bg-transparent'
+          )}
+        >
+          <Play size={17} strokeWidth={commandRailVisible ? 2.1 : 1.7} />
+        </span>
       </button>
 
       <button
@@ -147,7 +164,9 @@ export function ActivityBar(): React.JSX.Element {
         aria-label="设置"
         onClick={() => setSettingsOpen(true)}
       >
-        <Settings size={19} strokeWidth={1.7} />
+        <span className="flex h-8 w-8 items-center justify-center rounded-md">
+          <Settings size={17} strokeWidth={1.7} />
+        </span>
       </button>
     </nav>
   )
@@ -210,7 +229,16 @@ function ToolsButton({ active }: { active: boolean }): React.JSX.Element {
         {active && (
           <span className="pointer-events-none absolute left-0 top-[14px] h-4 w-0.5 rounded-r bg-brand" />
         )}
-        <Wrench size={19} strokeWidth={active ? 2.1 : 1.7} />
+        <span
+          className={cn(
+            'flex h-8 w-8 items-center justify-center rounded-md border transition-colors duration-150',
+            active
+              ? 'border-edge/80 bg-app text-accent dark:bg-raised'
+              : 'border-transparent bg-transparent'
+          )}
+        >
+          <Wrench size={17} strokeWidth={active ? 2.1 : 1.7} />
+        </span>
       </button>
 
       {/*

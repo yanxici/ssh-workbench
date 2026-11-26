@@ -19,7 +19,8 @@ import {
   CircleSlash2,
   Loader2,
   RefreshCw,
-  SquarePlus
+  SquarePlus,
+  Usb
 } from 'lucide-react'
 import type { ConnStatus } from '@shared/types'
 import { useSessionStore } from '@/stores/sessionStore'
@@ -411,17 +412,7 @@ export function TabBar(): React.JSX.Element {
                 setDragId(null)
                 setDropTarget(null)
               }}
-              className={cn(
-                'no-drag group relative flex min-w-[128px] max-w-[220px] shrink-0',
-                'cursor-default select-none items-center gap-1.5 px-2.5 text-xs',
-                'transition-colors duration-150',
-                isActive
-                  ? 'bg-app text-ink'
-                  : 'bg-transparent text-ink-3 hover:bg-hover/70 hover:text-ink-2',
-                dropTarget === i && dragId !== null && dragId !== s.id && 'bg-hover',
-                // 闪一下：品牌色底光 0.6s 内淡出，非激活标签也看得见
-                flashId === s.id && 'animate-flash-ok'
-              )}
+              className="no-drag group relative flex h-full min-w-[136px] max-w-[220px] shrink-0 cursor-default select-none items-center px-0.5 py-1"
               onMouseDown={(e) => {
                 if (e.button === 0) setActive(s.id)
               }}
@@ -429,16 +420,24 @@ export function TabBar(): React.JSX.Element {
               onContextMenu={(e) => openMenu(e, s.id)}
               title={editingId === s.id ? undefined : s.target}
             >
-              {/*
-               * 激活指示线：2px 品牌色画在标签顶部，紧贴窗口上沿。
-               * 用绝对定位而不是 border-top —— border 会占掉 2px 高度，标签
-               * 就不再是「满高」，另外几个标签会跟着上移 2px。
-               */}
+              <div
+                className={cn(
+                  'relative flex h-7 w-full min-w-0 items-center gap-1.5 rounded-md border px-2 text-xs transition-colors duration-150',
+                  isActive
+                    ? 'border-edge bg-app font-medium text-ink shadow-card'
+                    : 'border-transparent bg-transparent text-ink-3 hover:bg-hover/80 hover:text-ink-2',
+                  dropTarget === i && dragId !== null && dragId !== s.id && 'bg-hover',
+                  // 闪一下：品牌色底光 0.6s 内淡出，非激活标签也看得见
+                  flashId === s.id && 'animate-flash-ok'
+                )}
+              >
               {isActive && (
-                <span className="pointer-events-none absolute inset-x-0 top-0 h-0.5 bg-brand" />
+                <span className="h-3.5 w-0.5 shrink-0 rounded-full bg-brand" />
               )}
 
               <span className={cn('h-1.5 w-1.5 shrink-0 rounded-full', STATUS_DOT[s.status])} />
+
+              {s.kind === 'serial' && <Usb size={11} className="shrink-0 text-ink-3" />}
 
               {editingId === s.id ? (
                 <input
@@ -528,6 +527,7 @@ export function TabBar(): React.JSX.Element {
               >
                 <X size={12} />
               </button>
+              </div>
             </div>
           )
         })}

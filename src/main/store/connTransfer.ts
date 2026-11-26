@@ -518,10 +518,10 @@ async function readEnvelope(file: string): Promise<Envelope> {
   }
   const e = env as Envelope | null
   if (!e || typeof e !== 'object' || e.format !== TRANSFER_FORMAT) {
-    throw new Error('不是 SSH Workbench 导出的连接文件')
+    throw new Error('不是 Portix 导出的连接文件')
   }
   if (typeof e.version !== 'number' || e.version > VERSION) {
-    throw new Error('文件版本较新，请升级 SSH Workbench 后再导入')
+    throw new Error('文件版本较新，请升级 Portix 后再导入')
   }
   return e
 }
