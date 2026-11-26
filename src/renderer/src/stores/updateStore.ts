@@ -75,7 +75,7 @@ export const useUpdateStore = create<UpdateState>()((set) => ({
 
   later: async () => {
     const status = await call(window.api.update.later(), { silent: true })
-    set({ status, panelOpen: false })
+    set(status ? { status, panelOpen: false } : { panelOpen: false })
   },
 
   openRelease: async () => {

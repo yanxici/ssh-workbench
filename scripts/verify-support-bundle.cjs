@@ -79,6 +79,32 @@ check('令牌字段被剔除', !settings.includes('abc') && !settings.includes('
 check('普通字段保留', settings.includes('dark'))
 check('坏 JSON 不抛错', redactSettings('{ 坏掉的 json') === '{}')
 
+/* ---------- 3b. URL 内嵌凭据与 boot.log 脱敏 ---------- */
+const urlSettings = redactSettings(
+  JSON.stringify({
+    update: {
+      proxyUrl: 'http://alice:SuperSecret@127.0.0.1:7897',
+      mirror: 'https://ops:MirrorPass@mirror.corp.local/releases/'
+    },
+    proxyRule: 'http=bob:RulePass@10.0.0.2:8080;https=carol:HttpsPass@10.0.0.3:8080',
+    safeLink: 'https://example.com/help?email=support@example.com'
+  })
+)
+check('proxyUrl 内嵌账号密码被脱敏', !urlSettings.includes('SuperSecret') && !urlSettings.includes('alice'))
+check('proxyUrl 主机与端口保留', urlSettings.includes('http://***@127.0.0.1:7897'))
+check('mirror 内嵌口令被脱敏', !urlSettings.includes('MirrorPass') && urlSettings.includes('https://***@mirror.corp.local/releases/'))
+check('多规则代理串内嵌口令被脱敏', !urlSettings.includes('RulePass') && !urlSettings.includes('HttpsPass'))
+check('查询参数里的普通邮箱不被误伤', urlSettings.includes('https://example.com/help?email=support@example.com'))
+
+const bootWithSecret = buildSupportEntries({
+  ...base,
+  bootLog: '[updater] proxy: http://u:bootSecret@127.0.0.1:7897\npassword=inlinePass\n'
+})
+  .find((e) => e.name === 'boot.log')
+  .data.toString('utf8')
+check('boot.log 里的代理 URL 密码被脱敏', !bootWithSecret.includes('bootSecret') && bootWithSecret.includes('http://***@127.0.0.1:7897'))
+check('boot.log 里的 KV 密码被脱敏', !bootWithSecret.includes('inlinePass'))
+
 /* ---------- 4. zip 结构合法 ---------- */
 const zip = buildSupportZip(base)
 check('zip 以 PK\\x03\\x04 开头', zip[0] === 0x50 && zip[1] === 0x4b && zip[2] === 3 && zip[3] === 4)

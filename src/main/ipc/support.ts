@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog } from 'electron'
+import { app } from 'electron'
 import { promises as fs } from 'node:fs'
 import { join } from 'node:path'
 import { IPC } from '@shared/ipc'
@@ -6,7 +6,7 @@ import { getSettings } from '../app/settingsService'
 import { dataDir } from '../store/jsonStore'
 import { exportErrorsText } from '../store/errorLog'
 import { buildSupportZip } from '../store/supportBundle'
-import { dialogParent } from '../windowRef'
+import { showSaveDialog } from '../windowRef'
 import { dialogDefaultPath, rememberDialogPick } from '../util/dialogDirs'
 import { handle } from './handle'
 
@@ -55,7 +55,7 @@ export function registerSupportIpc(): void {
     const pad = (n: number): string => String(n).padStart(2, '0')
     const name = `ssh-workbench-诊断包-${app.getVersion()}-${stamp.getFullYear()}${pad(stamp.getMonth() + 1)}${pad(stamp.getDate())}-${pad(stamp.getHours())}${pad(stamp.getMinutes())}.zip`
 
-    const res = await dialog.showSaveDialog(dialogParent() as BrowserWindow, {
+    const res = await showSaveDialog({
       title: '导出诊断包',
       defaultPath: dialogDefaultPath('file', name),
       filters: [{ name: 'ZIP 压缩包', extensions: ['zip'] }]

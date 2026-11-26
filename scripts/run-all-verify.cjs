@@ -25,6 +25,14 @@ const SCRIPTS = path.join(ROOT, 'scripts')
 const KNOWN_FAIL = new Set(['verify-cdsync.cjs', 'verify-theme.cjs', 'verify-zmodem.cjs'])
 
 /**
+ * 依赖真实交互式 Windows 桌面（user32 mouse_event 原生鼠标点击）的脚本。
+ * 无头 CI（CI=true / GITHUB_ACTIONS=true）没有前台交互桌面，坐标校准必然失败；
+ * 等价逻辑回归已由 CDP 脚本（verify-tabmenu-e2e.cjs 等）覆盖。
+ * CI 环境默认跳过，传 --include-os-click 可强制纳入。
+ */
+const NEEDS_INTERACTIVE_DESKTOP = new Set(['verify-tabbar-os.cjs', 'verify-tabmenu-os.cjs'])
+
+/**
  * 必须在 Electron 里跑的脚本（用到 app / BrowserWindow / ipcMain）。
  *
  * 只用 CDP 驱动、自己 spawn 应用的那些 e2e（xterm6 / theme-tw4 / design-tokens /
@@ -70,6 +78,9 @@ const onlyArg = argv.find((a) => a.startsWith('--only='))
 const ONLY = onlyArg ? onlyArg.slice('--only='.length) : null
 const LIST_ONLY = argv.includes('--list')
 const INCLUDE_KNOWN = argv.includes('--include-known-fail')
+const INCLUDE_OS_CLICK = argv.includes('--include-os-click')
+const IS_CI = process.env.CI === 'true' || process.env.GITHUB_ACTIONS === 'true'
+const SKIP_OS_DESKTOP = IS_CI && !INCLUDE_OS_CLICK
 
 /**
  * 必须在最先跑的脚本。
@@ -90,18 +101,32 @@ files = [...files.filter((f) => RUN_FIRST.includes(f)), ...files.filter((f) => !
 
 if (ONLY) files = files.filter((f) => f.includes(ONLY))
 
-const skipped = files.filter((f) => !INCLUDE_KNOWN && KNOWN_FAIL.has(f))
-const target = files.filter((f) => INCLUDE_KNOWN || !KNOWN_FAIL.has(f))
+const skippedKnown = files.filter((f) => !INCLUDE_KNOWN && KNOWN_FAIL.has(f))
+const skippedDesktop = files.filter(
+  (f) => SKIP_OS_DESKTOP && NEEDS_INTERACTIVE_DESKTOP.has(f) && !skippedKnown.includes(f)
+)
+const skippedSet = new Set([...skippedKnown, ...skippedDesktop])
+const target = files.filter((f) => !skippedSet.has(f))
 
 if (LIST_ONLY) {
   console.log('已知历史失败（默认跳过）：')
-  for (const f of skipped) console.log('  SKIP  ' + f)
+  for (const f of skippedKnown) console.log('  SKIP  ' + f)
+  if (skippedDesktop.length) {
+    console.log('\n无头 CI 环境跳过（依赖交互式桌面原生鼠标注入，CDP 用例仍执行）：')
+    for (const f of skippedDesktop) console.log('  SKIP  ' + f + ' [os-desktop]')
+  }
   console.log('\n待跑：')
   for (const f of target) {
-    const tag = NEEDS_ELECTRON.has(f) ? ' [electron]' : NEEDS_TSC.has(f) ? ' [tsc]' : ''
+    const tag = NEEDS_ELECTRON.has(f)
+      ? ' [electron]'
+      : NEEDS_TSC.has(f)
+        ? ' [tsc]'
+        : NEEDS_INTERACTIVE_DESKTOP.has(f)
+          ? ' [os-desktop]'
+          : ''
     console.log('  RUN   ' + f + tag)
   }
-  console.log(`\n共 ${target.length} 个，跳过 ${skipped.length} 个`)
+  console.log(`\n共 ${target.length} 个，跳过 ${skippedSet.size} 个`)
   process.exit(0)
 }
 
@@ -128,9 +153,13 @@ function runTscOnce() {
   return r.status === 0
 }
 
-if (skipped.length) {
-  console.log(`跳过 ${skipped.length} 个已知历史失败：${skipped.join(', ')}`)
+if (skippedKnown.length) {
+  console.log(`跳过 ${skippedKnown.length} 个已知历史失败：${skippedKnown.join(', ')}`)
   console.log('（用 --include-known-fail 可纳入）\n')
+}
+if (skippedDesktop.length) {
+  console.log(`跳过 ${skippedDesktop.length} 个无头 CI 不可用的桌面鼠标脚本：${skippedDesktop.join(', ')}`)
+  console.log('（用 --include-os-click 可强制纳入；等价 CDP 用例 verify-tabmenu-e2e.cjs 仍执行）\n')
 }
 
 if (!runTscOnce()) {

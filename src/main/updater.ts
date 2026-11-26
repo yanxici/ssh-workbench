@@ -117,6 +117,20 @@ let lastFailAt = 0
 /** 下载代数与取消令牌：换源/重下/teardown 时取消旧流并丢弃滞后事件 */
 let downloadGen = 0
 let downloadToken: CancellationToken | undefined
+/** 检查代数与探测取消控制器：换源/teardown 时中止在途探测并丢弃滞后事件 */
+let checkGen = 0
+let activeCheckGen: number | null = null
+let probeAbort: AbortController | null = null
+
+function abortActiveProbe(): void {
+  if (!probeAbort) return
+  try {
+    probeAbort.abort()
+  } catch {
+    /* 已中止的控制器忽略 */
+  }
+  probeAbort = null
+}
 
 function cancelDownload(): void {
   if (!downloadToken) return
@@ -129,8 +143,8 @@ function cancelDownload(): void {
   downloadGen++
 }
 
-/** 多通道探测/回退期间抑制 autoUpdater 提前发出的 error 事件，避免 UI 闪红 */
-let suppressAutoError = false
+/** 多通道探测/回退期间抑制 autoUpdater 提前发出的 error 事件，用计数避免重叠调用互相覆盖 */
+let suppressErrorCount = 0
 /** 下载失败切源并内部重查 updateInfoAndProvider 时，屏蔽中间状态事件避免进度条闪回「检查中」 */
 let silentResync = false
 /** 当前正在检查的通道上下文，供 update-available / update-not-available 监听读取 */
@@ -250,6 +264,11 @@ function applyMirror(mirror?: string): void {
   if (envOverrideUrl) return
   const next = (mirror ?? '').trim()
   if (next === currentMirror) return
+  // 换源时立即作废正在进行的检查与探测，避免旧源滞后结果/报错写回新源状态
+  checkGen++
+  activeCheckGen = null
+  probingContext = null
+  abortActiveProbe()
   if (state.phase === 'downloading') cancelDownload()
   currentMirror = next
   activeAttempt = null
@@ -302,19 +321,30 @@ function extractSha512(info: UpdateInfo): string | undefined {
   return typeof raw === 'string' && raw.trim() ? raw.trim() : undefined
 }
 
-/** 带 8 秒超时的会话级 fetch（走与 electron-updater 相同的代理分区） */
+/** 带 8 秒超时的会话级 fetch（走与 electron-updater 相同的代理分区，换源或卸载时可立即中止） */
 async function fetchWithTimeout(url: string, accept: string): Promise<Response> {
+  const ac = new AbortController()
+  probeAbort = ac
   await proxyReady
+  if (ac.signal.aborted) {
+    if (probeAbort === ac) probeAbort = null
+    throw new Error('aborted')
+  }
   const ses = getUpdaterSession()
-  const res = await ses.fetch(url, {
-    method: 'GET',
-    headers: {
-      Accept: accept,
-      'User-Agent': `ssh-workbench/${app.getVersion()}`
-    },
-    signal: AbortSignal.timeout(PROBE_TIMEOUT_MS)
-  })
-  return res
+  const timer = setTimeout(() => ac.abort(), PROBE_TIMEOUT_MS)
+  try {
+    return await ses.fetch(url, {
+      method: 'GET',
+      headers: {
+        Accept: accept,
+        'User-Agent': `ssh-workbench/${app.getVersion()}`
+      },
+      signal: ac.signal
+    })
+  } finally {
+    clearTimeout(timer)
+    if (probeAbort === ac) probeAbort = null
+  }
 }
 
 /** 探测指定 feed 目录下的 latest.yml，过滤 404/超时的同时挡住返回 HTML 验证页的坏镜像 */
@@ -426,6 +456,7 @@ export async function checkForUpdates(force = false): Promise<UpdateStatus> {
     return recheck
   }
 
+  const myGen = ++checkGen
   setPhase('checking', {
     error: undefined,
     percent: undefined,
@@ -437,16 +468,20 @@ export async function checkForUpdates(force = false): Promise<UpdateStatus> {
   const failures: string[] = []
   activeAttempt = null
 
-  suppressAutoError = true
+  suppressErrorCount++
   try {
     for (let i = 0; i < candidates.length; i++) {
+      if (!initialized || myGen !== checkGen) return getUpdateStatus()
       const spec = candidates[i]
       try {
         const resolved = await resolveChannel(spec)
+        if (!initialized || myGen !== checkGen) return getUpdateStatus()
         applyResolvedChannel(resolved)
         probingContext = { label: spec.label, fallbackNotes: resolved.fallbackNotes }
+        activeCheckGen = myGen
 
         const result = await autoUpdater.checkForUpdates()
+        if (!initialized || myGen !== checkGen) return getUpdateStatus()
         if (!result) {
           // updater 在「已禁用」时返回 null（如未打包且没开 forceDevUpdateConfig）
           setPhase('idle')
@@ -474,19 +509,28 @@ export async function checkForUpdates(force = false): Promise<UpdateStatus> {
         }
         return getUpdateStatus()
       } catch (err) {
+        if (!initialized || myGen !== checkGen) return getUpdateStatus()
         const reason = errorMessage(err)
         failures.push(`${spec.label}: ${reason}`)
         log(`[updater] channel failed (${spec.label}):`, reason)
       } finally {
-        probingContext = null
+        if (activeCheckGen === myGen) {
+          activeCheckGen = null
+          probingContext = null
+        }
       }
     }
 
-    fail(new Error(failures.length === 1 ? failures[0] : `全部通道均不可用（${failures.join('；')}）`))
+    if (initialized && myGen === checkGen) {
+      fail(new Error(failures.length === 1 ? failures[0] : `全部通道均不可用（${failures.join('；')}）`))
+    }
     return getUpdateStatus()
   } finally {
-    suppressAutoError = false
-    probingContext = null
+    suppressErrorCount = Math.max(0, suppressErrorCount - 1)
+    if (activeCheckGen === myGen) {
+      activeCheckGen = null
+      probingContext = null
+    }
   }
 }
 
@@ -506,8 +550,8 @@ export async function downloadUpdate(): Promise<UpdateStatus> {
     return getUpdateStatus()
   }
   if (isPortable()) {
-    log('[updater] portable build, skip download and open release page')
-    await openReleasePage()
+    log('[updater] portable build, skip download and open download page')
+    await openPortableDownloadPage()
     return getUpdateStatus()
   }
 
@@ -531,7 +575,7 @@ export async function downloadUpdate(): Promise<UpdateStatus> {
     : []
 
   const failures: string[] = []
-  suppressAutoError = true
+  suppressErrorCount++
   try {
     // 第 1 轮：直接使用检查阶段已经就绪的 updateInfoAndProvider，不重复查 latest.yml
     try {
@@ -616,7 +660,7 @@ export async function downloadUpdate(): Promise<UpdateStatus> {
   } finally {
     if (downloadToken === token) downloadToken = undefined
     silentResync = false
-    suppressAutoError = false
+    suppressErrorCount = Math.max(0, suppressErrorCount - 1)
   }
 }
 
@@ -630,8 +674,8 @@ export async function downloadUpdate(): Promise<UpdateStatus> {
 export function quitAndInstall(): void {
   if (!initialized) return
   if (isPortable()) {
-    log('[updater] portable build, open release page instead of installer')
-    void openReleasePage()
+    log('[updater] portable build, open download page instead of installer')
+    void openPortableDownloadPage()
     return
   }
   // 有正在跑的 SSH 会话时也照常退出：用户点的就是这个按钮，
@@ -640,6 +684,20 @@ export function quitAndInstall(): void {
     autoUpdater.quitAndInstall(false, true)
   } catch (err) {
     fail(err)
+  }
+}
+
+/** 便携版/免安装版按当前网络与通道偏好打开最可达的发布页（国内无代理优先 Gitee 镜像页） */
+async function openPortableDownloadPage(): Promise<void> {
+  const pref = currentMirror.toLowerCase()
+  const preferMirror =
+    Boolean(state.sourceLabel?.includes('Gitee')) ||
+    pref === 'gitee' ||
+    ((!pref || pref === 'auto') && !currentProxyUrl && state.sourceLabel !== 'GitHub 官方')
+  if (preferMirror) {
+    await openMirrorPage()
+  } else {
+    await openReleasePage()
   }
 }
 
@@ -726,12 +784,12 @@ export function initUpdater(options: InitUpdaterOptions): () => void {
   }
 
   bind('checking-for-update', () => {
-    if (silentResync) return
+    if (silentResync || activeCheckGen !== checkGen) return
     setPhase('checking', { error: undefined })
   })
 
   bind('update-available', (info: UpdateInfo) => {
-    if (silentResync) return
+    if (silentResync || activeCheckGen !== checkGen) return
     const ctx = probingContext
     log('[updater] available:', info.version, ctx ? `(${ctx.label})` : '')
     setPhase('available', {
@@ -746,7 +804,7 @@ export function initUpdater(options: InitUpdaterOptions): () => void {
   })
 
   bind('update-not-available', (info: UpdateInfo) => {
-    if (silentResync) return
+    if (silentResync || activeCheckGen !== checkGen) return
     const ctx = probingContext
     log('[updater] up to date:', info.version, ctx ? `(${ctx.label})` : '')
     setPhase('idle', {
@@ -784,7 +842,8 @@ export function initUpdater(options: InitUpdaterOptions): () => void {
   })
 
   bind('error', (err: Error) => {
-    if (suppressAutoError || silentResync) return
+    if (suppressErrorCount > 0 || silentResync) return
+    if (activeCheckGen !== checkGen && !downloadToken) return
     fail(err)
   })
 
@@ -825,6 +884,11 @@ export function initUpdater(options: InitUpdaterOptions): () => void {
     autoDownloadPref = false
     proxyReady = Promise.resolve()
     activeAttempt = null
+    checkGen++
+    activeCheckGen = null
+    probingContext = null
+    suppressErrorCount = 0
+    abortActiveProbe()
     cancelDownload()
     downloadToken = undefined
     initialized = false

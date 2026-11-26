@@ -43,11 +43,33 @@ boot.log       启动期诊断日志（仅当本机存在该文件时打包，�
 排障确实需要这些时，请在「连接管理」里用「导出连接」（会带凭据，注意保管）。
 `
 
+/** 脱敏 URL / 代理规则中内嵌的账号密码（如 http://user:pass@host 或 http=user:pass@host） */
+export function redactUrlCredentials(text: string): string {
+  return text
+    .replace(/(\b[a-z][a-z0-9+.-]*:\/\/)[^\s/?#@]+@/gi, '$1***@')
+    .replace(/(^|[=;\s])[^\s/=;@]+:[^\s/=;@]*@/g, '$1***@')
+}
+
+/** 脱敏 boot.log 中的口令、URL 凭据与私钥块（兜底旧版未脱敏落盘的历史日志） */
+function redactBootLog(text: string): string {
+  return redactUrlCredentials(text)
+    .replace(
+      /((?:password|passwd|pwd|passphrase|proxyPassword|proxy_password|secret|token|apikey|api_key)\s*[=:]\s*)([^\s,;'"`\]}]+)/gi,
+      '$1***'
+    )
+    .replace(
+      /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g,
+      '[PRIVATE KEY REDACTED]'
+    )
+    .replace(/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*$/g, '[PRIVATE KEY REDACTED]')
+}
+
 /**
  * 剔除设置里的敏感字段。
  *
- * 设置本身不含连接凭据（那些在 vault 里），但代理定义、外部集成配置里
- * 可能带口令；按字段名做一次通用过滤，比逐个 key 列举更抗后续新增。
+ * 设置本身不含连接凭据（那些在 vault 里），但代理定义（如 update.proxyUrl）、
+ * 镜像地址或外部集成配置里可能带内嵌口令；按键名剔除的同时对所有字符串值
+ * 执行 URL 凭据脱敏，避免 http://user:pass@host 原样落进诊断包。
  */
 export function redactSettings(json: string): string {
   let value: unknown
@@ -58,6 +80,7 @@ export function redactSettings(json: string): string {
   }
   const SENSITIVE = /pass|secret|token|key|credential/i
   const walk = (v: unknown): unknown => {
+    if (typeof v === 'string') return redactUrlCredentials(v)
     if (Array.isArray(v)) return v.map(walk)
     if (v && typeof v === 'object') {
       const out: Record<string, unknown> = {}
@@ -91,8 +114,16 @@ export function buildSupportEntries(input: SupportBundleInput): ZipEntry[] {
   ]
 
   if (input.bootLog && input.bootLog.trim()) {
-    const buf = Buffer.from(input.bootLog, 'utf-8')
-    const tail = buf.length > MAX_BOOT_LOG_BYTES ? buf.subarray(buf.length - MAX_BOOT_LOG_BYTES) : buf
+    const rawBuf = Buffer.from(input.bootLog, 'utf-8')
+    const sliced =
+      rawBuf.length > MAX_BOOT_LOG_BYTES
+        ? rawBuf.subarray(rawBuf.length - MAX_BOOT_LOG_BYTES).toString('utf-8')
+        : input.bootLog
+    const redacted = Buffer.from(redactBootLog(sliced), 'utf-8')
+    const tail =
+      redacted.length > MAX_BOOT_LOG_BYTES
+        ? redacted.subarray(redacted.length - MAX_BOOT_LOG_BYTES)
+        : redacted
     entries.push({ name: 'boot.log', data: tail })
   }
 

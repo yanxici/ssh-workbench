@@ -32,7 +32,8 @@ export function UpdateSection(): React.JSX.Element {
   const prefs: UpdatePrefs = settings.update ?? {}
 
   const setPrefs = (patch: Partial<UpdatePrefs>): void => {
-    void updateSettings({ update: { ...prefs, ...patch } })
+    // 仅传变更字段，交由主进程 mergeSettings 逐键合并，避免切开关时多余触发代理重置
+    void updateSettings({ update: patch })
   }
 
   const commitProxy = (): void => {
