@@ -12,20 +12,20 @@
 
 | 包 | 文件名 | 适合谁 |
 | --- | --- | --- |
-| 安装版（推荐） | `ssh-workbench-Setup-2.4.3.exe` | 装进系统，支持应用内自动更新 |
-| 便携版 | `ssh-workbench-2.4.3-portable.exe` | 拷 U 盘 / 跳板机直接用，不写注册表 |
-| 免安装压缩包 | `ssh-workbench-2.4.3-win.zip` | 解压即用，适合放进内网共享盘分发 |
+| 安装版（推荐） | `ssh-workbench-Setup-2.5.0.exe` | 装进系统，支持应用内自动更新 |
+| 便携版 | `ssh-workbench-2.5.0-portable.exe` | 拷 U 盘 / 跳板机直接用，不写注册表 |
+| 免安装压缩包 | `ssh-workbench-2.5.0-win.zip` | 解压即用，适合放进内网共享盘分发 |
 
 - 最新版固定入口：<https://github.com/yanxici/ssh-workbench/releases/latest>
-- 指定版本：<https://github.com/yanxici/ssh-workbench/releases/tag/v2.4.3>
+- 指定版本：<https://github.com/yanxici/ssh-workbench/releases/tag/v2.5.0>
 - 校验：同目录 `latest.yml` 里带 sha512，下载后可自行核对。
 
 **国内下载**
 
 1. 主入口：<https://gitee.com/w3554334905/ssh-workbench/releases> —— 三个包与 GitHub 同源同步，直连可用。
-2. 指定版本：`https://gitee.com/w3554334905/ssh-workbench/releases/download/v2.4.3/` + 上面的文件名。
-3. GitHub 备用（加速前缀）：<https://gh-proxy.com/https://github.com/yanxici/ssh-workbench/releases/download/v2.4.3/> + 文件名（第三方中转，可用性不由本项目保证）。
-4. 内网分发（最稳）：把 `ssh-workbench-2.4.3-win.zip` 放到公司共享盘或制品库，链接填在这里 —— `<内部镜像地址待填>`。
+2. 指定版本：`https://gitee.com/w3554334905/ssh-workbench/releases/download/v2.5.0/` + 上面的文件名。
+3. GitHub 备用（加速前缀）：<https://gh-proxy.com/https://github.com/yanxici/ssh-workbench/releases/download/v2.5.0/> + 文件名（第三方中转，可用性不由本项目保证）。
+4. 内网分发（最稳）：把 `ssh-workbench-2.5.0-win.zip` 放到公司共享盘或制品库，链接填在这里 —— `<内部镜像地址待填>`。
 
 > 应用内自动更新默认走「自动（优先国内）」多通道：未配代理时优先从 Gitee 国内同源镜像检查与下载，不通自动回退 GitHub 官方与内置加速站（且回退第三方代理时强制校验官方 sha512）；配了更新代理则优先走 GitHub 差量更新。也可在设置 → 软件更新中手动指定通道或点「从 Gitee 下载」。
 
@@ -137,9 +137,10 @@ Windows 下为 `%APPDATA%/ssh-workbench/data/`（设置面板里可以看到具�
 
 ## 版本
 
-当前版本：**v2.4.3**
+当前版本：**v2.5.0**
 
 最近更新：
+- **v2.5.0** —— 连接搜索精准匹配、折叠分组自动展开、「只看这组」明显状态条、长命令单行提示及全仓 60+ 项稳定性与安全加固：结构化字段（主机、端口、`host:port`、串口、用户名）与纯数字/IP 编号查询改走连续子串匹配，彻底消除搜 `1022` 误命中同 NAT IP 上千台设备的问题；搜索命中时自动临时展开已折叠分组（清空搜索恢复原状）；保留双击分组头「只看这组」并新增顶部高亮状态条、「显示全部」按钮、角标与悬停提示；命令栏长命令悬停改为单行精炼提示不再遮挡半屏；全仓同步完成 SFTP/ShellFS、路径守卫、`JsonStore`、代理粘包、多 `-R` 隧道、`trzsz`、分屏迁移、弹层栈及多通道自动更新的全链路加固（保留主仓技术栈与 Gitee 国内免代理更新通道）。
 - **v2.4.3** —— ZMODEM 全链路加固与中断卡死修复：所有中止路径改发标准 10×CAN+10×BS 序列（含补发兜底）彻底解决 `lrzsz` 中断后锁死原始模式终端的问题，抑制窗拦截在途 raw 日志正文并归还焦点；修复实时增长日志卡 100%、高延迟限流误杀、接收队列背压与异步串行落盘、`wx` 防并发覆盖与 Windows 保留名清洗、256MB 上传上限保护、看门狗/取消/关标签句柄释放、节流尾部刷新及侧栏/传输记录面板实时进度条显示。
 - **v2.4.2** —— 修复 `sz` 多文件批量下载（如 `sz robottest*`）在多帧 `ZDATA`、0 字节空文件、文件间重传或异步落盘时中止与状态串号的问题；统一接管接收侧协议状态机并延后 `ZRINIT` 至前一份文件落盘完成，传输浮层同步显示多文件批次序号（如 `2/3`）。
 - **v2.4.1** —— 修复内置远程编辑器在长/短文件下 `<textarea>` 塌陷成 ~3 行高、下方大片空白的问题；修复系统开启「减少动态效果」或关闭界面动效时 `.motion-off *` 误杀 xterm DOM 光标闪烁动画的问题；修复 Windows 解压版/便携版因无条件绑定 `AppUserModelID` 导致任务栏显示白图标的问题。

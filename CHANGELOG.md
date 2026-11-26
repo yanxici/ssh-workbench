@@ -5,6 +5,33 @@ All notable changes to SSH Workbench will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.5.0] - 2026-11-27
+
+<!-- release-notes:start -->
+### 这一版更新了什么
+
+- **连接搜索精准匹配与折叠分组自动展开**：针对数千台共用同一 NAT 出口 IP（不同端口）的设备库，重构连接搜索打分逻辑——对主机、端口、`host:port`、串口路径与用户名及纯数字/IP 编号查询严格使用连续子串匹配，彻底消除搜 `1022` 却子序列误命中 `10.42.42.200` 吐出全库数千台的问题，并新增按端口与串口设备名检索；搜索命中时临时自动展开被手动折叠的分组，清空搜索后自动恢复原有折叠偏好。
+- **「只看这组」显性状态条与长命令清爽悬停提示**：保留双击分组标题切换「只看这组」的快捷操作，同时新增顶部高亮状态条（含一键「显示全部」出口与操作提示）、分组头「仅看」角标及悬停「双击仅看」微提示，进入时自动展开该组，彻底告别“分组莫名消失”的错觉；右侧常用命令栏悬停预览对多行或超长脚本改为单行精炼提示（显示总行数/字数及 `Ctrl+单击编辑查看` 引导），不再撑满半屏遮挡终端。
+- **全仓深度审计与系统级稳定性、安全加固**：完成全仓 60+ 项核心缺陷修复与三轮交叉回归验证——涵盖 SFTP 短读循环补读与断线重连续传、ShellFS 暂停取消与通道中止、`pathGuard` 分场景读写守卫及多级联接点/凭据文件防绕过、`JsonStore` 原子写回滚与损坏读并发竞态保护、SOCKS5/HTTP 代理拉模式防丢粘包 SSH Banner、多 `-R` 反向隧道按 `Client` 独立分发、`trzsz` 二进制帧与跨帧握手重组、统一弹层栈（防 `Esc` 级联/远程编辑器丢修改/输入法误关/后台终端漏键）、分屏关主格零销毁 xterm 迁移与重启防倍增，以及自动更新便携解压版检测、换源取消在途下载与代理日志脱敏等全链路加固（保留发布库既有技术栈与 Gitee 国内免代理自动更新通道）。
+<!-- release-notes:end -->
+
+### Added
+
+- **连接侧栏检索与分组体验升级**（`src/renderer/src/stores/connectionStore.ts`、`src/renderer/src/components/connections/ConnectionSidebar.tsx`、`src/renderer/src/i18n/index.ts`、`scripts/verify-connection-search.cjs`）：
+  - `scoreConnection` 对 `host`、`port`、`host:port`、`serial.path`、`username` 及纯数字/IP/端口查询严格走连续子串匹配，非结构化名称/标签/分组查询保留模糊匹配。
+  - 搜索态通过独立临时折叠表自动展开命中的已折叠分组，清空搜索自动还原用户原折叠状态；进入「只看这组」自动展开该组并展示顶部状态条、「显示全部」按钮、角标及悬停提示。
+- **常用命令栏长命令单行提示**（`src/renderer/src/components/commands/CommandCardTip.tsx`、`src/renderer/src/i18n/index.ts`）：超过 3 行或 180 字符的命令在悬停浮层中改为单行精炼提示（展示行数/字数与 `Ctrl+单击编辑` 引导）。
+
+### Fixed
+
+- **主进程传输、网络与存储全链路修复**：
+  - SFTP/ShellFS（`src/main/ssh/sftpManager.ts`、`src/main/ssh/shellFs.ts`、`src/main/ipc/sftp.ts`）：`downloadFileChunked` 与 `readRemoteTail` 循环补读消除短读零洞与续传失败；递归与单文件下载净化远端路径防穿越；区分 `willReconnect` 与 `onReconnectGaveUp` 恢复断线续传并修复暂停关标签任务栏卡死；修复 `getSftp` 超时与孤儿通道、跨批次 `.part` 占位释放、ShellFS `onChannel`/`registerStream` 与暂停态取消竞态、UTF-16LE/BE 编解码 BOM 保留。
+  - 安全与路径守卫（`src/main/store/pathGuard.ts`、`src/main/util/urlGuard.ts`、`src/main/util/zip.ts`、`src/main/store/bundle.ts`、`src/main/store/errorLog.ts`、`src/main/windowRef.ts`）：`pathGuard` 拆分为破坏性/写入目录/只读三套守卫（放行 `homedir()`/非系统盘根/UNC，拦截系统目录、尾点、多级联接点及直接/软链 `secrets.json`）；`setWindowOpenHandler` 限制 `http:`/`https:` 并修复 `TerminalView` `WebLinksAddon` 回调；修复 `zipEntryName` ZIP Slip 与空段问题、`bundle.ts` 精确录屏匹配（`#N` 后缀防跨客户串漏）、`errorLog` 无 ReDoS 全字段脱敏与全部系统弹窗空窗口保护。
+  - SSH / 代理 / 隧道 / 串口 / TFTP / 录屏 / 更新（`src/main/util/proxySockets.ts`、`src/main/ssh/connectConfig.ts`、`src/main/ssh/portForward.ts`、`src/main/ssh/sessionManager.ts`、`src/main/ssh/trzszBridge.ts`、`src/main/ssh/recorder.ts`、`src/main/tftp/server.ts`、`src/main/util/parseProcSample.ts`、`src/main/updater.ts`、`src/main/store/jsonStore.ts`、`src/main/index.ts`）：代理改 `'readable'` 拉模式保留粘包 Banner 与 IPv6 `[host]:port`；ProxyJump 跳板机异常监听与泄漏清理；`-R` 按 `Client` 独立分发并支持 `[::1]`/`localhost`；`trzsz` 二进制帧与跨帧握手重组；`JsonStore` 写失败回滚、非 `ENOENT` 读保护、`SyntaxError` 串行隔离与退出循环刷盘；`updater` 在保留 Gitee 国内多通道架构基础上合入便携/解压版识别、换源取消在途下载（`CancellationToken` + 代数护栏）、代理日志脱敏、3 秒报错去重与监听器清理；MobaXterm 会话类型解析与 `connTransfer` 串口导入预览/跳过口径一致。
+- **渲染层终端、分屏、弹层栈与 UI 面板修复**：
+  - 统一弹层栈 `src/renderer/src/lib/overlayKeys.ts`（有序栈 + 冒泡阶段 + IME 防误关 + 自动失焦后台 `.xterm`），保护远程编辑器未保存修改及快捷键录制/下拉框/草稿输入，全站 9 个全屏面板及浮层支持 `Esc` 逐层关闭。
+  - `MainWorkspace` 扁平化窗格挂载使关主分屏格不再销毁存活 xterm；修复分屏重启指数倍增与关分屏瞬间复活；修复 `TerminalView` 后台隐藏标签误 resize、`highlightRuntime` 行偏移与 `IMarker` 泄漏、`sftpStore` 切会话/缓存竞态、`FirmwarePanel` 重传路径复活与关面板丢状态、`BackupPanel` 跨主机比对、`TunnelEditor` Zustand 5 选择器稳定化、`ErrorLogSection`/复制按钮 `void` IPC 判空、`TerminalSection` 数字草稿输入及 `ConnectionSidebar`/`BatchPanel`/`FileExplorer` 多处交互缺陷（Tailwind 3 保持 `z-[35]` 与 `rounded`）。
+
 ## [2.4.3] - 2026-11-25
 
 <!-- release-notes:start -->

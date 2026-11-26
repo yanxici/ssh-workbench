@@ -12,20 +12,20 @@ Windows 10/11 (x64) only. Pick one of the three packages — **use the [Gitee mi
 
 | Package | File name | Best for |
 | --- | --- | --- |
-| Installer (recommended) | `ssh-workbench-Setup-2.4.3.exe` | Installs into the system, supports in-app auto-update |
-| Portable | `ssh-workbench-2.4.3-portable.exe` | Run from a USB stick / jump host, writes no registry keys |
-| Zip bundle | `ssh-workbench-2.4.3-win.zip` | Unzip and run; easiest to mirror onto an internal share |
+| Installer (recommended) | `ssh-workbench-Setup-2.5.0.exe` | Installs into the system, supports in-app auto-update |
+| Portable | `ssh-workbench-2.5.0-portable.exe` | Run from a USB stick / jump host, writes no registry keys |
+| Zip bundle | `ssh-workbench-2.5.0-win.zip` | Unzip and run; easiest to mirror onto an internal share |
 
 - Always latest: <https://github.com/yanxici/ssh-workbench/releases/latest>
-- Pinned: <https://github.com/yanxici/ssh-workbench/releases/tag/v2.4.3>
+- Pinned: <https://github.com/yanxici/ssh-workbench/releases/tag/v2.5.0>
 - Integrity: `latest.yml` in the same release carries the sha512 of each artifact.
 
 **Mainland China**
 
 1. Primary: <https://gitee.com/w3554334905/ssh-workbench/releases> — mirrored in sync with GitHub, no proxy needed.
-2. Pinned: `https://gitee.com/w3554334905/ssh-workbench/releases/download/v2.4.3/` + the file name above.
-3. GitHub + proxy prefix (third-party relay, availability not guaranteed): `https://gh-proxy.com/https://github.com/yanxici/ssh-workbench/releases/download/v2.4.3/` + file name.
-4. Internal mirror (most reliable): copy `ssh-workbench-2.4.3-win.zip` to a company share or artifact store and link it here — `<internal mirror URL>`.
+2. Pinned: `https://gitee.com/w3554334905/ssh-workbench/releases/download/v2.5.0/` + the file name above.
+3. GitHub + proxy prefix (third-party relay, availability not guaranteed): `https://gh-proxy.com/https://github.com/yanxici/ssh-workbench/releases/download/v2.5.0/` + file name.
+4. Internal mirror (most reliable): copy `ssh-workbench-2.5.0-win.zip` to a company share or artifact store and link it here — `<internal mirror URL>`.
 
 > In-app auto-update now uses an automatic multi-channel feed: without a proxy it tries the official Gitee mirror first and falls back to GitHub Releases and built-in mirrors (verifying the first-party sha512 before downloading from any third-party relay); with an update proxy configured it prefers GitHub first for differential updates. You can also pick a specific channel or custom feed URL under Settings → Updates.
 
@@ -138,9 +138,10 @@ Architecture, directory layout and roadmap (Chinese): [DESIGN.md](./DESIGN.md)
 
 ## Version
 
-Current: **v2.4.3**
+Current: **v2.5.0**
 
 Recent updates:
+- **v2.5.0** — Precision connection search, auto-expanding groups, clear group-focus affordance, compact long-command tips & full-codebase hardening: restricted structured fields (`host`, `port`, `host:port`, `serial.path`, `username`) and numeric/ID queries to contiguous matching so searching `1022` no longer matches thousands of hosts sharing `10.42.42.200`; auto-expanded folded groups temporarily on search matches without overwriting fold preferences; added a visible "Only group" banner with a one-click "Show all" exit and hover double-click hint; replaced oversized multiline command hover previews with a single concise line; and completed a 60+ bug stability & security hardening pass across SFTP/ShellFS, `pathGuard`, `JsonStore`, SOCKS5/HTTP proxies, multi-`-R` tunnels, `trzsz`, split panes, overlay Escape layering, and the multi-channel updater (preserving the Electron 33 / React 18 / Tailwind 3 stack).
 - **v2.4.3** — Hardened the entire ZMODEM pipeline and fixed abort terminal deadlocks: switched all abort paths to the standard 10×CAN + 10×BS sequence (with follow-up guard) so remote `lrzsz` exits raw mode cleanly while blocking in-flight raw-mode log text from leaking onto the terminal; fixed growing log files stalling at 100%, high-RTT resync throttle false aborts, receive backpressure and async serialized disk writes, `wx` TOCTOU-safe naming with Windows reserved-device sanitization, 256MB upload guard, trailing progress flush, and live ZMODEM progress bars with batch counters in TransferTab and TransferPanel.
 - **v2.4.2** — Fixed multi-file ZMODEM `sz` batch downloads (e.g. `sz robottest*`) aborting after the first file or corrupting per-file state: unified the receive state machine (`primeReceiveSession`) to handle multi-frame `ZDATA` (`ZCRCW`/`ZCRCE`), 0-byte empty files (`ZEOF(0)` without `ZDATA`), `_file_info` cleanup on mismatched `ZEOF`, inter-file retransmits, and deferred `ZRINIT` until disk flush/finish completes, plus added batch index display (`i/N`) in the transfer overlay.
 - **v2.4.1** — Fixed the built-in remote editor `<textarea>` collapsing to ~3 rows with blank space below (and collapsing short files) due to `modal-body` (`flex: 1`) + `h-full` blocking flex stretch; exempted xterm DOM `.xterm-cursor-blink` from `.motion-off *` so terminal cursor blinking keeps working when Windows reduced motion or UI motion-off is active; fixed blank white taskbar icons on Windows unpacked/portable builds by binding `AppUserModelID` only when a matching Start Menu shortcut exists.
