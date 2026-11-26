@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 import type { MetricsEvent, MetricsSample } from '@shared/types'
 import { call } from '@/lib/ipc'
-import { useSessionStore } from './sessionStore'
+import { pickSshSession, useSessionStore } from './sessionStore'
 import { useToastStore } from './toastStore'
 
 /**
@@ -43,16 +43,20 @@ export const useMetricsStore = create<MetricsState>()((set, get) => ({
     const next = !get().panelOpen
     set({ panelOpen: next })
     if (next) {
-      void get().syncStates()
-      // 首次打开：自动监控当前活动会话（单台设备，采样负担小）
-      const { monitored } = get()
-      if (Object.keys(monitored).length === 0) {
-        const { sessions, activeId } = useSessionStore.getState()
-        const target =
-          sessions.find((s) => s.id === activeId && s.status === 'connected') ??
-          sessions.find((s) => s.status === 'connected')
-        if (target) void get().start(target.id)
-      }
+      /*
+       * 必须等对齐完成再判断「是否空」。
+       *
+       * 原来是 void syncStates() 之后立刻读 monitored：此时主进程可能还在
+       * 采样（比如窗口重载过），同步回来的结果会把 start() 刚写下的占位删掉，
+       * 于是卡片先出现再消失、过一帧又出现 —— 用户看到的是闪烁。
+       */
+      void (async () => {
+        await get().syncStates()
+        if (Object.keys(get().monitored).length > 0) return
+        // 首次打开：自动监控当前活动会话（单台设备，采样负担小）
+        const target = pickSshSession()
+        if (target) await get().start(target.id)
+      })()
     }
   },
 
@@ -88,7 +92,10 @@ export const useMetricsStore = create<MetricsState>()((set, get) => ({
   },
 
   startAllConnected: async () => {
-    const connected = useSessionStore.getState().sessions.filter((s) => s.status === 'connected')
+    // 串口会话没有 /proc 也没有 df，采样只会对着一台设备空转
+    const connected = useSessionStore
+      .getState()
+      .sessions.filter((s) => s.status === 'connected' && s.kind !== 'serial')
     for (const s of connected) {
       if (!get().monitored[s.id]) await get().start(s.id)
     }

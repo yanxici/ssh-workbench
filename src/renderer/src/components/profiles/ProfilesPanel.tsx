@@ -16,6 +16,7 @@ import {
 import type { Connection, DeviceProfile, DeviceProfileInput } from '@shared/types'
 import { connectionTarget } from '@shared/serialDisplay'
 import { cn, formatTime } from '@/lib/utils'
+import { useOverlayEscape } from '@/lib/overlayKeys'
 import { ConfirmDialog, EmptyState, Field } from '@/components/ui'
 import { useProfileStore } from '@/stores/profileStore'
 import { useConnectionStore } from '@/stores/connectionStore'
@@ -40,9 +41,10 @@ export function ProfilesPanel(): React.JSX.Element | null {
     if (panelOpen) void useDiagStore.getState().loadReports()
   }, [panelOpen])
 
-  if (!panelOpen) return null
-
   const close = (): void => useProfileStore.setState({ panelOpen: false })
+  // 面板按钮上写着「关闭 (Esc)」，这里必须真的响应 Esc
+  useOverlayEscape(panelOpen, close)
+  if (!panelOpen) return null
 
   const kw = keyword.trim().toLowerCase()
   const filtered = kw
@@ -63,7 +65,6 @@ export function ProfilesPanel(): React.JSX.Element | null {
 
   return (
     <div className="panel-shell fixed inset-x-0 z-30 flex flex-col bg-app">
-      {/* 标题栏 */}
       <div className="flex h-9 shrink-0 items-center gap-2 border-b border-edge bg-panel px-3">
         <BookUser size={14} className="text-accent" />
         <span className="text-xs font-semibold">客户 / 设备档案</span>
@@ -306,7 +307,6 @@ function ProfileDetail({
 
   return (
     <div className="scroll-thin h-full overflow-y-auto p-4">
-      {/* 操作条 */}
       <div className="mb-3 flex items-center gap-2">
         <span className="text-sm font-semibold text-ink">
           {isNew ? '新建档案' : form.customerName || '未命名客户'}
@@ -351,7 +351,6 @@ function ProfileDetail({
       {error && <div className="mb-2 text-2xs text-danger">{error}</div>}
 
       <div className="flex max-w-[760px] flex-col gap-5">
-        {/* 基本信息 */}
         <div className="rounded-lg border border-edge-soft bg-panel p-3.5">
           <div className="mb-2.5 text-2xs font-semibold tracking-wide text-ink-3">基本信息</div>
           <div className="grid grid-cols-2 gap-x-3 gap-y-3">
@@ -430,7 +429,6 @@ function ProfileDetail({
           </div>
         </div>
 
-        {/* 关联连接 */}
         <div className="rounded-lg border border-edge-soft bg-panel p-3.5">
           <div className="mb-2.5 flex items-center gap-2">
             <span className="text-2xs font-semibold tracking-wide text-ink-3">
@@ -498,7 +496,6 @@ function ProfileDetail({
               关联信息（自动汇总）
             </div>
             <div className="space-y-2.5">
-              {/* 诊断报告 */}
               <div>
                 <div className="mb-1 flex items-center gap-1.5">
                   <FileText size={11} className="text-ink-3" />
@@ -542,7 +539,6 @@ function ProfileDetail({
                 )}
               </div>
 
-              {/* 常用命令 */}
               <div className="flex items-center gap-2">
                 <ListFilter size={11} className="text-ink-3" />
                 <span className="text-2xs text-ink-2">

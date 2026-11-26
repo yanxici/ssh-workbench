@@ -37,7 +37,8 @@ interface CommandState {
 
   load: () => Promise<void>
   save: (input: CommandInput) => Promise<Command | null>
-  remove: (id: string) => Promise<void>
+  /** @returns 是否真的删掉了（false = IPC 失败，调用方不要弹成功提示） */
+  remove: (id: string) => Promise<boolean>
   reorder: (orderedIds: string[]) => Promise<void>
   importJson: (mode: 'merge' | 'replace') => Promise<void>
   exportJson: () => Promise<void>
@@ -74,9 +75,10 @@ export const useCommandStore = create<CommandState>()((set, get) => ({
   },
 
   remove: async (id) => {
-    const res = await call(window.api.command.remove(id), { silent: true })
-    if (res === null) return
+    const res = await call(window.api.command.remove(id), { errorTitle: '删除命令失败' })
+    if (res === null) return false
     set((s) => ({ commands: s.commands.filter((c) => c.id !== id) }))
+    return true
   },
 
   reorder: async (orderedIds) => {

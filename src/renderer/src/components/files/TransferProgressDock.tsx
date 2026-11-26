@@ -33,6 +33,7 @@ import { useSftpStore } from '@/stores/sftpStore'
 import { useSessionStore } from '@/stores/sessionStore'
 import { useToastStore } from '@/stores/toastStore'
 import { cn, formatBytes } from '@/lib/utils'
+import { closePanelsExcept } from '@/lib/panels'
 
 /** 超过该大小或持续该时长，才认为值得弹出进度浮层（避免小文件一闪而过） */
 const LONG_TASK_BYTES = 8 * 1024 * 1024
@@ -73,6 +74,8 @@ async function revealTask(task: TransferTask): Promise<void> {
     })
     return
   }
+  // 互斥：浮层里点定位时，底下可能还开着传输记录/固件等面板，不关就看不见文件面板
+  closePanelsExcept('sftp')
   await useSftpStore.getState().openFor(session.id, session.target)
   await useSftpStore.getState().navRemote(dir)
 }

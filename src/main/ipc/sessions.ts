@@ -1,7 +1,6 @@
-import { BrowserWindow, dialog } from 'electron'
 import { promises as fs } from 'node:fs'
 import { IPC } from '@shared/ipc'
-import { dialogParent } from '../windowRef'
+import { showSaveDialog } from '../windowRef'
 import { dialogDefaultPath, rememberDialogPick } from '../util/dialogDirs'
 import { handle } from './handle'
 import { sessionManager } from '../ssh/sessionManager'
@@ -55,7 +54,7 @@ export function registerSessionIpc(): void {
           .replace(/[<>:"/\\|?*]/g, '_')
           .trim() || 'terminal-output'
       const defaultName = safeName.endsWith('.txt') ? safeName : `${safeName}.txt`
-      const res = await dialog.showSaveDialog(dialogParent() as BrowserWindow, {
+      const res = await showSaveDialog({
         title: '导出终端输出',
         defaultPath: dialogDefaultPath('file', defaultName),
         filters: [{ name: '文本文件', extensions: ['txt'] }]

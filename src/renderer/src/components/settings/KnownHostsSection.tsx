@@ -218,7 +218,16 @@ export function KnownHostsSection(): React.JSX.Element {
                 className="btn-icon h-6 w-6 shrink-0 hover:text-danger"
                 title="删除该记录（设备重装后需要）"
                 onClick={() => {
-                  void call(window.api.knownHosts.remove(key), { silent: true }).then(() => {
+                  /*
+                   * 删失败不能再删本地行了。
+                   * 之前 silent 吞掉错误、无条件 filter + 弹「已删除」，
+                   * 界面显示删干净了，next 连接又拿旧指纹去比 —— 用户以为清过了，
+                   * 实际那条记录还在磁盘上，下次「主机指纹已变更」的告警会莫名其妙冒出来。
+                   */
+                  void call(window.api.knownHosts.remove(key), {
+                    errorTitle: '删除主机指纹记录失败'
+                  }).then((ok) => {
+                    if (ok === null) return
                     setKnownHosts((prev) =>
                       prev.filter((x) => !(x.host === h.host && x.port === h.port))
                     )

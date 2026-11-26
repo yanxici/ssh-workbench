@@ -92,16 +92,31 @@ async function attach(port, want) {
       ws.send(JSON.stringify({ id: i, method, params }))
     })
   const evalJs = async (expression, api = false) => {
-    const r = await send('Runtime.evaluate', {
-      expression,
-      awaitPromise: true,
-      returnByValue: true,
-      userGesture: true,
-      includeCommandLineAPI: api
-    })
-    if (r.exceptionDetails)
-      throw new Error(r.exceptionDetails.exception?.description || JSON.stringify(r.exceptionDetails))
-    return r.result.value
+    if (process.env.RESUME_TRACE) console.log('  > ' + expression.slice(0, 70))
+    // 页面刚 reload 时旧执行上下文会被销毁，Runtime.evaluate 会回 -32000；
+    // 这不是产品缺陷，等新上下文就绪后重试即可。
+    for (let attempt = 0; ; attempt++) {
+      let r
+      try {
+        r = await send('Runtime.evaluate', {
+          expression,
+          awaitPromise: true,
+          returnByValue: true,
+          userGesture: true,
+          includeCommandLineAPI: api
+        })
+      } catch (err) {
+        const msg = String(err && err.message)
+        const transient =
+          msg.includes('Execution context was destroyed') || msg.includes('Cannot find context')
+        if (!transient || attempt >= 40) throw err
+        await new Promise((res) => setTimeout(res, 250))
+        continue
+      }
+      if (r.exceptionDetails)
+        throw new Error(r.exceptionDetails.exception?.description || JSON.stringify(r.exceptionDetails))
+      return r.result.value
+    }
   }
   return { send, evalJs, close: () => ws.close() }
 }
@@ -248,7 +263,12 @@ async function main() {
       ', username: "lab", authType: "password", password: "labpass", group: "e2e", tags: [] }).then(r => JSON.stringify(r))'
   )
   check('建连接', /"ok":true/.test(String(conn)), String(conn).slice(0, 120))
-  await page.evalJs('location.reload(), 1')
+  /*
+   * reload 会销毁执行上下文，Runtime.evaluate 的 promise 往往回不来，
+   * 直接 await 会把整个脚本带崩（"Execution context was destroyed"）。
+   * 这里只求"发出刷新"，回来与否都不关心。
+   */
+  await page.evalJs('setTimeout(() => location.reload(), 0), 1').catch(() => {})
   await sleep(1800)
   page.close()
   page = await attach(APP_PORT, 'page')

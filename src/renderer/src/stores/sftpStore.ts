@@ -10,8 +10,9 @@ import type {
 import { call } from '@/lib/ipc'
 import { localDirname, localJoin, remoteDirname, remoteJoin } from '@/lib/utils'
 import { normalizeRemoteDir, rememberUploadDir, resolveUploadDir } from '@/lib/uploadDir'
-import { clearDirCache, invalidateDir, loadDir, peekDir } from '@/lib/dirCache'
+import { invalidateDir, loadDir, peekDir } from '@/lib/dirCache'
 import { useToastStore } from './toastStore'
+import { useFirmwareStore } from './firmwareStore'
 import { queueTransferNotify } from '@/lib/taskNotify'
 
 /**
@@ -160,6 +161,15 @@ interface SftpState {
   openFor: (sessionId: string, title: string) => Promise<void>
   close: () => void
 
+  /*
+   * 三个单调序号：每次开面板 / 导航 / 打开编辑器都 +1，回来后只认「还是自己那一号」。
+   * 光比对 sessionId + 目录名不够 —— A→B→A(force) 这种来回切，
+   * 最早的 A 请求回来时 sessionId 和 remoteDir 都对得上，照样把新列表覆盖成旧的。
+   */
+  openForSeq: number
+  navRemoteSeq: number
+  openEditorSeq: number
+
   navLocal: (dir: string) => Promise<void>
   /**
    * 切到某个远端目录。
@@ -282,6 +292,10 @@ export const useSftpStore = create<SftpState>()((set, get) => ({
 
   uploadRequest: null,
 
+  openForSeq: 0,
+  navRemoteSeq: 0,
+  openEditorSeq: 0,
+
   modeBySession: {},
 
   setMode: (sessionId, mode) =>
@@ -310,9 +324,32 @@ export const useSftpStore = create<SftpState>()((set, get) => ({
   /* ---------------- 开关 ---------------- */
 
   openFor: async (sessionId, title) => {
-    // 会话切换：旧会话的目录缓存不再有意义，清掉避免串味
-    if (get().sessionId !== sessionId) clearDirCache()
-    set({ open: true, sessionId, sessionTitle: title, localSel: [], remoteSel: [] })
+    const prev = get().sessionId
+    const seq = get().openForSeq + 1
+    if (prev !== sessionId) {
+      /*
+       * 切会话只清自己这一屏，不再 clearDirCache() 全清。
+       *
+       * 全清是对「串味」最粗暴的解法，代价是别的会话（包括后台正在展开的树）
+       * 刚读到的目录全部作废，来回切两下就在狂发 list 请求。
+       * 旧会话的缓存按 sessionId 隔离，本来就串不了，真正要防的是本界面
+       * 还挂着上一台的 remoteDir / remoteFiles。
+       */
+      if (prev) invalidateDir(prev)
+      set({
+        openForSeq: seq,
+        open: true,
+        sessionId,
+        sessionTitle: title,
+        localSel: [],
+        remoteSel: [],
+        remoteDir: '',
+        remoteFiles: [],
+        remoteLoading: true
+      })
+    } else {
+      set({ openForSeq: seq, open: true, sessionId, sessionTitle: title, localSel: [], remoteSel: [] })
+    }
 
     if (!get().localDir) {
       const home = await call(window.api.local.home(), { silent: true })
@@ -324,7 +361,16 @@ export const useSftpStore = create<SftpState>()((set, get) => ({
     const remoteHome = await call(window.api.sftp.home(sessionId), {
       errorTitle: '无法打开文件管理（请确认会话已连接）'
     })
+    /*
+     * 两次 await 期间用户完全可能又切到另一个会话（或关掉面板）。
+     * 不校验的话，慢的那个会话会把自己的 home 目录写进已经切走的界面：
+     * 标签写着 B，列表却是 A 的家目录，点上传直接传到错的机器上。
+     */
+    if (get().openForSeq !== seq || get().sessionId !== sessionId || !get().open) return
+    // home 拿不到（会话掉线/后端不支持）时必须自己收尾 loading，否则界面永远
+    // 转圈：navRemote 不会被调用，remoteLoading 没人复位。
     if (remoteHome) await get().navRemote(remoteHome)
+    else set({ remoteLoading: false })
   },
 
   close: () => set({ open: false, editing: null }),
@@ -341,6 +387,8 @@ export const useSftpStore = create<SftpState>()((set, get) => ({
   navRemote: async (dir, options) => {
     const sessionId = get().sessionId
     if (!sessionId) return
+    const seq = get().navRemoteSeq + 1
+    set({ navRemoteSeq: seq })
     // force：绕过 30 秒新鲜期，用户点了刷新就必须真发一次请求
     const force = options?.force === true
 
@@ -354,7 +402,12 @@ export const useSftpStore = create<SftpState>()((set, get) => ({
       set({ remoteDir: dir, remoteFiles: cached.files, remoteSel: [], remoteLoading: !fresh || force })
       if (fresh && !force) return
     } else {
-      set({ remoteLoading: true })
+      /*
+       * 缓存未命中时必须先把 remoteDir 落到目标目录：下面两处「只认当前目录
+       * 的结果」都靠它判断，不写就等于自己把自己的回包丢掉 ——
+       * 界面会永远转圈，且要再点一次（那时缓存已写好）才出内容。
+       */
+      set({ remoteDir: dir, remoteFiles: [], remoteSel: [], remoteLoading: true })
     }
 
     const files = await loadDir(
@@ -369,10 +422,23 @@ export const useSftpStore = create<SftpState>()((set, get) => ({
      * 从没进过的 B 时，A 的迟到响应会把界面拽回 A —— 与「用户刚点的 B」相反。
      * 现在只在「还是同一个目录」时接受结果；!cached 那条只对首屏兜底。
      */
-    if (files && get().sessionId === sessionId && get().remoteDir === dir) {
+    if (
+      files &&
+      get().navRemoteSeq === seq &&
+      get().sessionId === sessionId &&
+      get().remoteDir === dir
+    ) {
       set({ remoteFiles: files, remoteSel: get().remoteSel })
     }
-    if (get().remoteDir === dir) set({ remoteLoading: false })
+    // 慢响应回来时用户可能已经切走：只认本会话的当前目录，否则会把别的会话
+    // 的 loading 提前摘掉（或摘不掉）。
+    if (
+      get().navRemoteSeq === seq &&
+      get().sessionId === sessionId &&
+      get().remoteDir === dir
+    ) {
+      set({ remoteLoading: false })
+    }
   },
 
   refreshLocal: async () => {
@@ -481,7 +547,7 @@ export const useSftpStore = create<SftpState>()((set, get) => ({
      * 需要用到「这一帧算出来的终态」。所以用一个外置槽位把它带出来 ——
      * 比在 set 之后再 findIndex 查一遍更稳（并发多个 taskId 时查回来的可能是别人）。
      */
-    let terminal: TransferTask | null = null
+    const slot: { done: TransferTask | null } = { done: null }
 
     set((s) => {
       const idx = s.transfers.findIndex((t) => t.id === e.taskId)
@@ -517,7 +583,7 @@ export const useSftpStore = create<SftpState>()((set, get) => ({
         finishedAt: finished ? Date.now() : base.finishedAt
       }
 
-      if (finished) terminal = updated
+      if (finished) slot.done = updated
       const next = [...s.transfers]
       if (idx >= 0) next[idx] = updated
       else next.push(updated)
@@ -537,6 +603,21 @@ export const useSftpStore = create<SftpState>()((set, get) => ({
     }
 
     /*
+     * 固件上传完成 → 记下远端路径，供后续校验/升级使用。
+     *
+     * 以前这段逻辑挂在固件面板的组件 useEffect 里：面板一关（含按 Esc）上传
+     * 完成态就永远收不到；面板开着时又只比 status，不比对 taskId，第二轮上传
+     * 开始后旧记录会把旧固件路径复活。放在这里由 taskId 精确对齐，两个问题一起没。
+     */
+    const done = slot.done
+    if (done && done.status === 'done' && done.direction === 'upload' && done.remotePath) {
+      const firmware = useFirmwareStore.getState()
+      if (firmware.uploadTaskId === done.id && firmware.uploadedPath !== done.remotePath) {
+        firmware.markUploaded(done.remotePath)
+      }
+    }
+
+    /*
      * 完成/失败的通知。
      *
      * 必须去重：主进程的进度事件有节流队列，同一个 taskId 的 done 可能重复到达
@@ -544,9 +625,8 @@ export const useSftpStore = create<SftpState>()((set, get) => ({
      * 已通知过的 taskId 集合挡住重复 —— 每多弹一条"传输完成"，用户对这条
      * 提示的信任就掉一截。
      */
-    if (terminal && !notifiedTasks.has(e.taskId)) {
+    if (done && !notifiedTasks.has(e.taskId)) {
       notifiedTasks.add(e.taskId)
-      const done: TransferTask = terminal
       const name = done.remotePath || done.localPath || '文件'
       const base = name.split(/[\\/]/).pop() || name
       queueTransferNotify({
@@ -616,9 +696,13 @@ export const useSftpStore = create<SftpState>()((set, get) => ({
 
   openEditor: async (sessionId, path) => {
     if (!sessionId) return
+    const seq = get().openEditorSeq + 1
+    set({ openEditorSeq: seq })
     const read = await call(window.api.sftp.readText(sessionId, path), {
       errorTitle: '无法打开文件'
     })
+    // 慢文件后到就把快文件盖掉了：只认最后一次点击
+    if (get().openEditorSeq !== seq) return
     if (read !== null) {
       set({ editing: { sessionId, path, content: read.content, encoding: read.encoding } })
     }
@@ -646,8 +730,12 @@ export const useSftpStore = create<SftpState>()((set, get) => ({
       // In-place save: advance baseline content so dirty indicator clears
       set((s) => (s.editing ? { editing: { ...s.editing, content } } : s))
     }
-    // 保存后大小与修改时间都变了：旧缓存必须作废，侧栏文件树也要重挂
-    invalidateDir(sessionId, editing.path)
+    /*
+     * 作废的是**父目录**的缓存，不是文件本身。
+     * dirCache 按目录索引（key 是目录路径），传文件路径进去等于什么都没删：
+     * 保存完切回来，侧栏还显示旧的大小和修改时间。
+     */
+    invalidateDir(sessionId, remoteDirname(editing.path))
     get().bumpTree()
     await get().refreshRemote()
     return true

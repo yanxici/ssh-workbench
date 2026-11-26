@@ -14,7 +14,7 @@ export const METRICS_SAMPLE_COMMAND =
   "cat /proc/loadavg 2>/dev/null; echo '@@@'; " +
   "head -8 /proc/meminfo 2>/dev/null; echo '@@@'; " +
   "cat /proc/net/dev 2>/dev/null; echo '@@@'; " +
-  "df -k / 2>/dev/null | tail -n 1; echo '@@@'; " +
+  "(df -P -k / 2>/dev/null || df -k / 2>/dev/null) | tail -n 1; echo '@@@'; " +
   "cat /sys/class/thermal/thermal_zone0/temp 2>/dev/null"
 
 export interface ProcSnapshot {
@@ -125,11 +125,34 @@ export function parseSample(
     metrics.memPercent = round1((used / memTotal) * 100)
   }
 
-  /* ---------- 磁盘（df -k /） ---------- */
-  const dfFields = dfPart.split(/\s+/).filter(Boolean)
-  if (dfFields.length >= 3) {
-    const totalKb = toNum(dfFields[1])
-    const usedKb = toNum(dfFields[2])
+  /* ---------- 磁盘（df -P -k /） ---------- */
+  /*
+   * -P 保证一行一条、不折行（POSIX 格式）。没有 -P 时 LVM/长设备名
+   * （/dev/mapper/vg-root）会把文件系统列挤到下一行，字段位置整体错位：
+   * fields[1] 变成 Used、fields[2] 变成 Available，于是「已用/总量」
+   * 算出 >100% 的占比。
+   * 取最后一行再兜一层：万一设备不支持 -P，折行时真正的数据行在尾部。
+   */
+  const dfLine =
+    dfPart
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .filter(Boolean)
+      .pop() ?? ''
+  const dfFields = dfLine.split(/\s+/).filter(Boolean)
+  /*
+   * 列偏移不是固定的：POSIX 的 df -P -k 输出
+   *   Filesystem 1024-blocks Used Available Capacity Mounted on
+   * 首列是设备名；但 BusyBox / 部分嵌入式 df 省掉设备列，直接
+   *   1024-blocks Used Available Capacity Mounted on
+   * 此时按 [1]/[2] 取会把 Used 当总量、Available 当已用，算出离谱的占比。
+   * 用「首列是不是数字」来判定有没有设备列，比认命令更靠谱。
+   */
+  const hasFsColumn = toNum(dfFields[0]) === undefined
+  const totalIdx = hasFsColumn ? 1 : 0
+  if (dfFields.length >= totalIdx + 2) {
+    const totalKb = toNum(dfFields[totalIdx])
+    const usedKb = toNum(dfFields[totalIdx + 1])
     if (totalKb && totalKb > 0 && usedKb !== undefined) {
       metrics.diskTotalGb = round1(totalKb / 1024 / 1024)
       metrics.diskUsedGb = round1(usedKb / 1024 / 1024)

@@ -19,6 +19,7 @@ const path = require('path')
 const net = require('net')
 const esbuild = require('esbuild')
 const { Server, utils } = require('ssh2')
+const { ed25519HostKey } = require('./lib/testkeys.cjs')
 
 const ROOT = path.join(__dirname, '..')
 const OUT_DIR = path.join(ROOT, '.tsc-verify')
@@ -134,7 +135,7 @@ async function main() {
   const originPort = origin.address().port
 
   /* ---------- ssh2 测试服务器：shell + tcpip（forwardOut 出口） ---------- */
-  const hostKey = utils.generateKeyPairSync('ed25519').private
+  const hostKey = ed25519HostKey()
   const server = new Server({ hostKeys: [hostKey] }, (client) => {
     client.on('error', () => {})
     client.on('authentication', (ctx) => {

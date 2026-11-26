@@ -258,6 +258,9 @@ function ImportDialog({ onClose }: { onClose: () => void }): React.JSX.Element {
     if (res.invalid > 0) parts.push(`格式不对忽略 ${res.invalid}`)
     const details: string[] = []
     if (res.keysWritten > 0) details.push(`已保存 ${res.keysWritten} 个私钥文件`)
+    if (res.invalidKeys > 0) {
+      details.push(`${res.invalidKeys} 个私钥文件格式无法识别，已跳过（相关连接需重新选私钥）`)
+    }
     /*
      * 端口待确认要在导入完成的提示里说清楚：用户以为导入完就能连，
      * 结果点开发现连不上（本机没有那个 COM 号），会以为是导入坏了。
@@ -421,7 +424,12 @@ function ImportDialog({ onClose }: { onClose: () => void }): React.JSX.Element {
           </Field>
         )}
 
-        {!needPass && !preview && (
+        {/*
+         * 只有真的在等文件解析时才转圈。
+         * 旧条件是「没口令 && 没预览」，而刚打开对话框时这两个都成立 ——
+         * 用户看到的是一个永远转下去的「正在读取…」，明明还没选文件。
+         */}
+        {file && !needPass && !preview && (
           <div className="flex items-center gap-2 text-xs text-ink-3">
             <Loader2 size={13} className="animate-spin" />
             正在读取…

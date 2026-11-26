@@ -76,28 +76,59 @@ export const useBatchStore = create<BatchState>()((set, get) => ({
       return
     }
 
+    /*
+     * 勾选后会话可能已经断开或被关掉（勾选时还在线）。
+     * 这些 id 发给主进程只会立刻失败，还占着「执行（N 台）」的口径 ——
+     * 先按当前会话表过滤掉，全没了就提示重选。
+     */
+    const sessions = useSessionStore.getState().sessions
+    const live = selectedSessionIds.filter(
+      (id) => sessions.find((s) => s.id === id)?.status === 'connected'
+    )
+    if (live.length === 0) {
+      useToastStore.getState().push({
+        kind: 'warning',
+        title: '勾选的会话都已不在线',
+        detail: '请重新选择设备'
+      })
+      return
+    }
+
     const runId = uid()
     // 快照必须在 await 之前拿：await 之后 get().selectedSessionIds 可能已被
     // 用户改掉，那份"这次跑了哪些"的信息就丢了
-    const runOrderSnapshot = [...selectedSessionIds]
+    const runOrderSnapshot = [...live]
     const statuses: Record<string, BatchStatus> = {}
-    for (const id of selectedSessionIds) statuses[id] = 'running'
+    for (const id of live) statuses[id] = 'running'
 
     set({
       runId,
       running: true,
-      runOrder: [...selectedSessionIds],
+      runOrder: [...live],
       statuses,
       results: {}
     })
 
-    const results = await call(
-      window.api.batch.run(runId, selectedSessionIds, command, timeoutMs),
-      { errorTitle: '批量执行失败' }
-    )
+    const results = await call(window.api.batch.run(runId, live, command, timeoutMs), {
+      errorTitle: '批量执行失败'
+    })
+    // 旧批次的收尾不能覆盖刚发起的下一批（runId 是唯一能区分两者的东西）
+    if (get().runId !== runId) return
+    if (!results) {
+      /*
+       * 整批失败（IPC 报错 / 主进程异常）不会有任何 progress 事件回流，
+       * 每行的 status 还停在 'running' —— 面板上满是永不结束的转圈。
+       * 统一标成 error，配合已经弹出的错误提示。
+       */
+      const failed: Record<string, BatchStatus> = {}
+      for (const id of runOrderSnapshot) failed[id] = 'error'
+      set({ running: false, runId: null, statuses: failed })
+      return
+    }
     set({ running: false, runId: null })
     if (results) {
       const ok = results.filter((r) => r.status === 'done').length
+      const bad = results.length - ok
       /*
        * 走 notifyTask 而不是直接 push toast：
        * 批量执行是最典型的长任务（20 台设备各跑一条命令，动辄一两分钟），
@@ -112,7 +143,7 @@ export const useBatchStore = create<BatchState>()((set, get) => ({
       void notifyTask({
         kind: 'batch',
         title: `批量执行完成：${ok}/${results.length} 台正常返回`,
-        detail: ok === results.length ? undefined : `${results.length - ok} 台异常，详见批量面板`,
+        detail: bad === 0 ? undefined : `${bad} 台异常，详见批量面板`,
         connectionId: firstSess?.connectionId,
         sessionId: firstId
       })
@@ -140,6 +171,8 @@ export const useBatchStore = create<BatchState>()((set, get) => ({
        * - status 变了 → 只重建 statuses，results 引用保持不变（没结果的行不会重跑）
        * - 来了 result → 才重建 results
        */
+      // 取消后立刻重跑时，上一轮在途事件仍会到达：只认当前 runId
+      if (e.runId !== s.runId) return s
       const prevStatus = s.statuses[e.sessionId]
       const hasNewResult = e.result !== undefined && s.results[e.sessionId] !== e.result
 

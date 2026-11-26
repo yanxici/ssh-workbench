@@ -53,12 +53,13 @@ export class SshTransport implements Transport {
     this.client = client
 
     if (this.closing) {
-      // 建连期间用户已关闭标签：把刚建好的连接收掉，不留泄漏
-      try {
-        client.end()
-      } catch {
-        /* ignore */
-      }
+      /*
+       * 建连期间用户已关闭标签。**不能在这里 client.end()**：
+       * 子终端（同一连接上再开一个标签）复用的是宿主的 client，
+       * 关掉新标签就把宿主的 shell、SFTP、全部端口转发一起掐了。
+       * 连接的所有权在 sessionManager：它按 shared.refs 引用计数决定
+       * 何时真正断开（见 cleanup），本实现只负责自己的 shell 通道。
+       */
       throw new Error('会话已关闭')
     }
 

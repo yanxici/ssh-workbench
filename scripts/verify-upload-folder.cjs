@@ -38,7 +38,7 @@ fs.writeFileSync(
     list: () => [],
     statusOf: () => 'connected',
     isReconnecting: () => false,
-    getClient: () => ({ sftp: (cb) => cb(null, globalThis.__FAKE_SFTP__) })
+    getClient: () => globalThis.__CLIENT__ || (globalThis.__CLIENT__ = { sftp: (cb) => cb(null, globalThis.__FAKE_SFTP__) })
   }`
 )
 

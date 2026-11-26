@@ -1,6 +1,7 @@
-import { createWriteStream, promises as fs, type WriteStream } from 'node:fs'
+import { createWriteStream, existsSync, promises as fs, type WriteStream } from 'node:fs'
 import { join } from 'node:path'
 import { sessionLogDir } from '../store/sessionLogs'
+import { recordError } from '../store/errorLog'
 
 /**
  * 会话日志录制器 —— 把终端输入/输出带时间戳落盘。
@@ -106,11 +107,55 @@ function formatStamp(d: Date): string {
 }
 
 function sanitize(name: string): string {
-  return name.replace(/[\\/:*?"<>|]/g, '_').trim() || 'session'
+  // '#' 也替换：它是同秒重名后缀的分隔符，留在文件名里会让 bundle 的
+  // 「名#N」判据和用户自己的 '#' 撞车
+  return name.replace(/[\\/:*?"<>|#]/g, '_').trim() || 'session'
+}
+
+/**
+ * 同一秒内开两个同名会话时，后一个不能直接 append 到前一个的 .cast 上。
+ *
+ * 录音文件用 `时间戳-标题` 命名，时间戳精度到秒。追加模式（flags: 'a'）撞名时
+ * 两份会话的数据会写进同一个文件、各带一套相对时间 —— 回放出来是两台机器的
+ * 输出交错，两份记录同时作废。这里退到 `-2`、`-3`。
+ */
+/*
+ * 进程内已占用的文件名前缀。
+ *
+ * 光判 existsSync 不够：createWriteStream 是**异步**打开的，实测同一 tick 里
+ * 连续调两次 start 时，第二次的 existsSync 仍然返回 false，两个流于是写到
+ * 同一个 .cast 上交替追加，两份录屏一起作废。这里在进程内先占位。
+ * 跨进程的碰撞由 existsSync 兜底（同一 userData 只有一个主进程）。
+ */
+const reservedBases = new Set<string>()
+
+function reserveBase(dir: string, base: string): string {
+  for (let i = 1; i < 100; i += 1) {
+    // 后缀用 '#' 而不是 '-'：'web-1' 这种自带数字尾巴的连接名，用 '-' 分不开
+    // 是重名后缀还是名字本身（bundle 侧的归属判定就栽在这上面）
+    const candidate = i === 1 ? base : `${base}#${i}`
+    if (reservedBases.has(join(dir, candidate))) continue
+    const cast = join(dir, `${candidate}.cast`)
+    if (!existsSync(cast) && !existsSync(join(dir, `${candidate}.log`))) {
+      reservedBases.add(join(dir, candidate))
+      return candidate
+    }
+  }
+  const fallback = `${base}#${Date.now()}`
+  reservedBases.add(join(dir, fallback))
+  return fallback
 }
 
 class Recorder {
   private recordings = new Map<string, Recording>()
+  /**
+   * 每次 start 自增的代（R-H24）。
+   *
+   * start 里要先 await fs.mkdir。这期间 stop() 或第二次 start() 完全可能已经
+   * 跑完，回来的第一次 start 却照样创建并登记两条 WriteStream ——
+   * 后登记的覆盖先登记的，被覆盖的那对句柄再也没人关。
+   */
+  private startGen = new Map<string, number>()
 
   /** 日志目录：userData/sessions/（与日志管理的读取逻辑共用同一约定） */
   logDir(): string {
@@ -125,12 +170,34 @@ class Recorder {
     options: RecorderOptions = {}
   ): Promise<void> {
     if (this.recordings.has(sessionId)) return
-    await fs.mkdir(this.logDir(), { recursive: true })
+    const gen = (this.startGen.get(sessionId) ?? 0) + 1
+    this.startGen.set(sessionId, gen)
+    const dir = this.logDir()
+    await fs.mkdir(dir, { recursive: true })
+    // await 期间被 stop 或新的 start 抢跑：这次作废，别登记无人看管的流
+    if (this.startGen.get(sessionId) !== gen || this.recordings.has(sessionId)) return
 
     const stamp = formatStamp(new Date())
-    const base = `${stamp}-${sanitize(title)}`
-    const filePath = join(this.logDir(), `${base}.cast`)
+    const base = reserveBase(dir, `${stamp}-${sanitize(title)}`)
+    const baseKey = join(dir, base)
+    const filePath = join(dir, `${base}.cast`)
     const stream = createWriteStream(filePath, { flags: 'a', encoding: 'utf-8' })
+    /*
+     * 必须挂 error：磁盘满、目录被删、权限被改时 WriteStream 会 emit('error')，
+     * 没有监听就是进程级 uncaughtException（主进程弹崩溃框）。而且这条 stream
+     * 之后每次 write 都会继续抛 —— 只能摘掉整条录制。
+     */
+    // 必须核对 stream 身份：重连复用同一 sessionId 时，旧流关闭期迟到的
+    // 'error' 若无条件 drop(sessionId) 会把刚开的新录屏毁掉（R-H24）
+    stream.on('error', (err: Error) => this.drop(sessionId, err, stream))
+    /*
+     * 占位名必须等流真正 close 才释放。
+     * 旧实现（连同 stop/drop 里的 `filePath.replace(/.cast$/,''))` 有三重问题：
+     * 正则里的 . 没转义，且 stop() 一调用就同步释放 —— 此时 createWriteStream
+     * 还没 flush 完、文件甚至还没被 O_EXCL 建出来，紧接着同秒新开的同名会话
+     * 会抢到同一个文件名，两份录屏写进同一个 .cast。close 是唯一可靠时点。
+     */
+    stream.once('close', () => reservedBases.delete(baseKey))
     stream.write(
       `${JSON.stringify({
         version: 2,
@@ -149,8 +216,28 @@ class Recorder {
      */
     const plainText = options.plainText !== false
     const textStream = plainText
-      ? createWriteStream(join(this.logDir(), `${base}.log`), { flags: 'a', encoding: 'utf-8' })
+      ? createWriteStream(join(dir, `${base}.log`), { flags: 'a', encoding: 'utf-8' })
       : undefined
+    textStream?.on('error', (err: Error) => {
+      // 文本日志挂掉不该连累 .cast：只关掉这条通道，回放文件继续录
+      void recordError({
+        level: 'warn',
+        source: 'recorder',
+        title: '纯文本日志写入失败',
+        detail: err.message
+      })
+      const rec = this.recordings.get(sessionId)
+      // 同上：只处理属于这条文本流的记录
+      if (rec && rec.textStream === textStream) {
+        rec.textTruncated = true
+        rec.textStream = undefined
+      }
+      try {
+        textStream.destroy()
+      } catch {
+        /* ignore */
+      }
+    })
 
     this.recordings.set(sessionId, {
       filePath,
@@ -189,15 +276,83 @@ class Recorder {
   }
 
   stop(sessionId: string): void {
+    // 作废在途的 start（它可能正卡在 fs.mkdir 上）
+    this.startGen.set(sessionId, (this.startGen.get(sessionId) ?? 0) + 1)
     const rec = this.recordings.get(sessionId)
     if (!rec) return
     this.recordings.delete(sessionId)
+    // 占位名由流自己的 'close' 释放（见 start），这里不再提前删
     if (rec.inputTimer) clearTimeout(rec.inputTimer)
     if (rec.pendingInput.length > 0 && !rec.truncated) {
       this.writeLine(rec, 'i', rec.pendingInput.join(''))
     }
     rec.stream.end()
     rec.textStream?.end()
+  }
+
+  /**
+   * 退出前收尾：停掉所有录制并等到写盘流真正 flush 完成。
+   *
+   * stop() 只是 end()，数据还在用户态缓冲里；主进程紧接着退出，最后几秒
+   * 的终端输出就丢了。这里等 'finish'（或 'close'/'error'）再返回。
+   */
+  async stopAllAndFlush(): Promise<void> {
+    const ids = [...this.recordings.keys()]
+    const pending: Promise<void>[] = []
+    for (const id of ids) {
+      const rec = this.recordings.get(id)
+      if (!rec) continue
+      const wait = (
+        s?: { once: (ev: string, fn: () => void) => void; writableFinished: boolean; destroyed: boolean }
+      ): Promise<void> => {
+        if (!s) return Promise.resolve()
+        return new Promise<void>((resolve) => {
+          let done = false
+          const fin = (): void => {
+            if (done) return
+            done = true
+            resolve()
+          }
+          s.once('finish', fin)
+          s.once('close', fin)
+          s.once('error', fin)
+          /*
+           * 已经 end 过（或已被 destroy）的流不会再发 finish，兜底直接返回。
+           * writableEnded 只是「调用过 end()」，数据可能还没落盘；用
+           * writableFinished（已真正 flush 完）加 destroyed 才是终态判据。
+           */
+          if (s.writableFinished || s.destroyed) fin()
+        })
+      }
+      const streams = [wait(rec.stream), wait(rec.textStream)]
+      this.stop(id)
+      pending.push(...streams)
+    }
+    await Promise.all(pending)
+  }
+
+  /** 流写坏了：摘掉这条录制并销毁两条 stream，别让后续 write 继续炸 */
+  private drop(sessionId: string, err: Error, stream?: unknown): void {
+    const rec = this.recordings.get(sessionId)
+    if (!rec) return
+    // 迟到的旧流报错：记录已经被新的 start 换掉了，别毁掉新录屏
+    if (stream !== undefined && rec.stream !== stream) return
+    this.recordings.delete(sessionId)
+    // 同上：占位名等 'close' 释放；drop 会 destroy 两条流，close 必然到来
+    if (rec.inputTimer) clearTimeout(rec.inputTimer)
+    void recordError({
+      level: 'warn',
+      source: 'recorder',
+      title: '会话日志写入失败，已停止录制',
+      detail: err.message
+    })
+    for (const s of [rec.stream, rec.textStream]) {
+      try {
+        s?.destroy()
+      } catch {
+        /* ignore */
+      }
+    }
   }
   private writeLine(rec: Recording, type: 'o' | 'i', data: string): void {
     const elapsed = Number(((Date.now() - rec.startedAt) / 1000).toFixed(3))

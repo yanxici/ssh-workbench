@@ -16,6 +16,7 @@ import {
 } from 'lucide-react'
 import type { BatchStatus } from '@shared/types'
 import { call } from '@/lib/ipc'
+import { useOverlayEscape } from '@/lib/overlayKeys'
 import { cn } from '@/lib/utils'
 import { EmptyState } from '@/components/ui'
 import { useBatchStore } from '@/stores/batchStore'
@@ -30,13 +31,14 @@ import { useToastStore } from '@/stores/toastStore'
  */
 export function BatchPanel(): React.JSX.Element | null {
   const panelOpen = useBatchStore((s) => s.panelOpen)
-  if (!panelOpen) return null
 
   const close = (): void => useBatchStore.setState({ panelOpen: false })
+  // 标题栏写着「关闭 (Esc)」就得真能 Esc 关；走公共弹层栈保证不会被内层弹窗抢走
+  useOverlayEscape(panelOpen, close)
+  if (!panelOpen) return null
 
   return (
     <div className="panel-shell fixed inset-x-0 z-30 flex flex-col bg-app">
-      {/* 标题栏 */}
       <div className="flex h-9 shrink-0 items-center gap-2 border-b border-edge bg-panel px-3">
         <Boxes size={14} className="text-accent" />
         <span className="text-xs font-semibold">批量执行</span>
@@ -65,13 +67,15 @@ function SessionPicker(): React.JSX.Element {
 
   const connected = useMemo(() => sessions.filter((s) => s.status === 'connected'), [sessions])
   const selSet = new Set(selected)
+  /* 口径按「在线且已选」算：断线会话还挂在已选集合里时不该被计入台数 */
+  const liveSelected = connected.filter((s) => selSet.has(s.id)).length
 
   return (
     <div className="flex rail-w shrink-0 flex-col border-r border-edge bg-panel">
       <div className="flex shrink-0 items-center gap-1.5 border-b border-edge-soft px-2.5 py-1.5">
         <span className="text-2xs font-semibold text-ink-2">目标设备</span>
         <span className="text-2xs text-ink-3">
-          {selected.length}/{connected.length}
+          {liveSelected}/{connected.length}
         </span>
         <span className="flex-1" />
         <button
@@ -108,7 +112,11 @@ function SessionPicker(): React.JSX.Element {
                   : 'cursor-not-allowed text-ink-3/70'
               )}
               title={selectable ? s.target : '会话未连接，无法参与批量执行'}
-              onClick={() => selectable && useBatchStore.getState().toggleSession(s.id)}
+              /* 断线/已关的会话也必须能点掉：否则它卡在已选集合里，
+               * 既执行不了也去不掉，「已选 N 台」跟着虚高 */
+              onClick={() => {
+                if (selectable || on) useBatchStore.getState().toggleSession(s.id)
+              }}
             >
               {on ? (
                 <CheckSquare size={11} className="shrink-0 text-accent" />
@@ -147,7 +155,22 @@ function CommandAndResults(): React.JSX.Element {
   const running = useBatchStore((s) => s.running)
   const view = useBatchStore((s) => s.view)
   const runOrder = useBatchStore((s) => s.runOrder)
-  const selectedCount = useBatchStore((s) => s.selectedSessionIds.length)
+  const selectedIds = useBatchStore((s) => s.selectedSessionIds)
+  const allSessions = useSessionStore((s) => s.sessions)
+  /*
+   * 按钮上的台数必须和左边「已选 / 在线」用同一口径。
+   * 原来直接数 selectedSessionIds.length：勾了两台、关掉其中一台标签后，
+   * 左边写着 1/1，按钮仍然显示「执行（2 台）」并且可点 —— 发出去才发现
+   * 有一台根本不存在。
+   */
+  const selectedCount = useMemo(
+    () =>
+      selectedIds.filter((id) => {
+        const s = allSessions.find((x) => x.id === id)
+        return s?.status === 'connected' && s.kind !== 'serial'
+      }).length,
+    [selectedIds, allSessions]
+  )
 
   const commands = useCommandStore((s) => s.commands)
 
@@ -160,7 +183,6 @@ function CommandAndResults(): React.JSX.Element {
 
   return (
     <div className="flex min-w-0 flex-1 flex-col">
-      {/* 命令区 */}
       <div className="shrink-0 border-b border-edge-soft p-3 pb-2">
         <textarea
           className="textarea selectable min-h-[64px] font-mono text-xs leading-relaxed"
@@ -232,7 +254,6 @@ function CommandAndResults(): React.JSX.Element {
         </div>
       </div>
 
-      {/* 结果工具条 */}
       {runOrder.length > 0 && (
         <div className="flex shrink-0 items-center gap-2 border-b border-edge-soft px-3 py-1">
           <span className="text-2xs text-ink-3">结果</span>
@@ -262,7 +283,6 @@ function CommandAndResults(): React.JSX.Element {
         </div>
       )}
 
-      {/* 结果区 */}
       <div className="scroll-thin min-h-0 flex-1 overflow-y-auto p-3">
         {runOrder.length === 0 ? (
           <EmptyState
@@ -341,9 +361,9 @@ function BatchResultCard({ sessionId }: { sessionId: string }): React.JSX.Elemen
 
   const copyOutput = (): void => {
     const text = result ? (result.stdout || result.stderr || result.error || '') : ''
-    void call(window.api.clip.write(text), { silent: true }).then(() =>
-      useToastStore.getState().push({ kind: 'success', title: `已复制「${title}」输出` })
-    )
+    void call(window.api.clip.write(text), { silent: true }).then((ok) => {
+      if (ok !== null) useToastStore.getState().push({ kind: 'success', title: `已复制「${title}」输出` })
+    })
   }
 
   return (

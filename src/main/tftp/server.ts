@@ -69,6 +69,8 @@ interface Transfer {
   timer?: NodeJS.Timeout
   /** OACK 已发、还没收到 ACK 0 */
   negotiating: boolean
+  /** 正在读盘/发包：重复 ACK 与超时重传都会触发 sendBlock，串行化避免乱序 */
+  sending: boolean
   closed: boolean
 }
 
@@ -152,6 +154,12 @@ export class TftpServer {
   private socket: dgram.Socket | null = null
   private onLog: TftpLogHandler | null = null
   private transfer: Transfer | null = null
+  /**
+   * 传输代次。beginTransfer 里有两个 await（开文件、绑端口），
+   * 期间可能又来一个 RRQ 或者用户点了停止 —— 那时代次已经变了，
+   * 这次启动必须自己收尾退出，否则会覆盖 this.transfer 把上一份 FD/UDP/定时器漏掉。
+   */
+  private transferGen = 0
   private dir: string | null = null
   private file: string | null = null
   private filePath: string | null = null
@@ -319,12 +327,19 @@ export class TftpServer {
   ): Promise<void> {
     const filePath = this.filePath
     if (!filePath) return
+    const gen = ++this.transferGen
+    const size = this.fileSize
 
     let handle: fs.FileHandle
     try {
       handle = await fs.open(filePath, 'r')
     } catch (err) {
       this.log('error', `打开固件失败：${err instanceof Error ? err.message : String(err)}`)
+      return
+    }
+    // 开文件期间又来了新的 RRQ / 用户停止：这份句柄没人接手，自己关掉
+    if (gen !== this.transferGen) {
+      void handle.close().catch(() => {})
       return
     }
 
@@ -353,24 +368,37 @@ export class TftpServer {
       void handle.close().catch(() => {})
       return
     }
+    if (gen !== this.transferGen) {
+      void handle.close().catch(() => {})
+      try {
+        socket.close()
+      } catch {
+        // 已关
+      }
+      return
+    }
 
     const transfer: Transfer = {
       socket,
       address: rinfo.address,
       port: rinfo.port,
       handle,
-      size: this.fileSize,
+      size,
       blockSize,
       block: 0,
       lastPacket: Buffer.alloc(0),
       retries: 0,
       negotiating: accepted !== null,
+      sending: false,
       closed: false
     }
     this.transfer = transfer
+    this.transferred = 0
 
-    socket.on('message', (msg) => this.handleTransferMessage(transfer, msg))
+    socket.on('message', (msg, from) => this.handleTransferMessage(transfer, msg, from))
     socket.on('error', (err) => {
+      // 已被新一轮传输替换掉的旧 socket 迟到的 error 不能把新传输关掉
+      if (transfer.closed || this.transfer !== transfer) return
       this.log('error', `TFTP 传输错误：${err.message}`)
       this.closeTransfer('传输出错')
     })
@@ -384,8 +412,20 @@ export class TftpServer {
     else void this.sendBlock(transfer, 1)
   }
 
-  private handleTransferMessage(transfer: Transfer, msg: Buffer): void {
+  private handleTransferMessage(transfer: Transfer, msg: Buffer, from: dgram.RemoteInfo): void {
     if (transfer.closed || msg.length < 4) return
+    /*
+     * TID 校验（RFC 1350）：一个传输只认同一个对端地址+端口。
+     *
+     * 原来完全不看 rinfo，于是这里收到的任何杂包都会让服务器往
+     * transfer.port（正在刷机的板子）回一个 ERR_UNKNOWN_TID ——
+     * 板子收到自己传输上的错误包会立刻中止，刷机就断在半路。
+     * 错误包只能发给真正的发送方。
+     */
+    if (from.address !== transfer.address || from.port !== transfer.port) {
+      transfer.socket.send(errorPacket(ERR_UNKNOWN_TID, 'Unknown transfer ID'), from.port, from.address)
+      return
+    }
     const opcode = msg.readUInt16BE(0)
 
     if (opcode === OP_ERROR) {
@@ -397,12 +437,7 @@ export class TftpServer {
     }
 
     if (opcode !== OP_ACK) {
-      // 传输 socket 上收到非 ACK：多半是别的进程/别的 TID 打过来的
-      transfer.socket.send(
-        errorPacket(ERR_UNKNOWN_TID, 'Unknown transfer ID'),
-        transfer.port,
-        transfer.address
-      )
+      // 同一个 TID 上的非 ACK 包：协议外的东西，忽略即可，不能回错误把它踢掉
       return
     }
 
@@ -436,18 +471,34 @@ export class TftpServer {
 
   private async sendBlock(transfer: Transfer, block: number): Promise<void> {
     if (transfer.closed) return
-    const offset = (block - 1) * transfer.blockSize
-    let payload: Buffer = Buffer.alloc(0)
-    if (offset < transfer.size) {
-      const want = Math.min(transfer.blockSize, transfer.size - offset)
-      const buf = Buffer.alloc(want)
-      const { bytesRead } = await transfer.handle.read(buf, 0, want, offset)
-      payload = buf.subarray(0, bytesRead)
+    /*
+     * 串行化：重复 ACK 与超时重传都会再进来一次，两次 read 并发会读到
+     * 同一段偏移并把包发出两遍，板子那边看着像丢包重传，实际是乱序覆盖。
+     */
+    if (transfer.sending) return
+    transfer.sending = true
+    try {
+      const offset = (block - 1) * transfer.blockSize
+      let payload: Buffer = Buffer.alloc(0)
+      if (offset < transfer.size) {
+        const want = Math.min(transfer.blockSize, transfer.size - offset)
+        const buf = Buffer.alloc(want)
+        const { bytesRead } = await transfer.handle.read(buf, 0, want, offset)
+        payload = buf.subarray(0, bytesRead)
+      }
+      if (transfer.closed) return
+      transfer.block = block
+      this.transferred = Math.min(offset + payload.length, transfer.size)
+      this.sendPacket(transfer, dataPacket(block, payload))
+    } catch (err) {
+      // read 失败以前是裸 rejection（void 掉的 Promise），进程会直接崩。
+      // 但旧传输的 read 失败不能把已经开始的下一轮传输关掉。
+      if (transfer.closed || this.transfer !== transfer) return
+      this.log('error', `读取固件失败：${err instanceof Error ? err.message : String(err)}`)
+      this.closeTransfer('读取失败')
+    } finally {
+      transfer.sending = false
     }
-    if (transfer.closed) return
-    transfer.block = block
-    this.transferred = Math.min(offset + payload.length, transfer.size)
-    this.sendPacket(transfer, dataPacket(block, payload))
   }
 
   /** 发包并排一次超时重传；收到 ACK 后由 handleTransferMessage 重排 */
@@ -478,6 +529,8 @@ export class TftpServer {
   }
 
   private closeTransfer(reason: string | null): void {
+    // 在途的 beginTransfer 一律作废（它会在每个 await 之后自查代次）
+    this.transferGen += 1
     const t = this.transfer
     if (!t) return
     this.transfer = null

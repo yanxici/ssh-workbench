@@ -527,13 +527,22 @@ export function CommandPanel({
             onKeyDown={(e) => {
               // 输入法组合态：Enter/↑↓ 属于候选词选择，不能当列表导航
               if (isImeComposing(e)) return
-              // ↑↓ 从输入框直接跳到列表，不必先点空白处
-              if (e.key === 'ArrowDown' || e.key === 'Enter') {
+              /*
+               * 必须 stopPropagation：容器上的 onKeyDown 也会处理 Enter/方向键，
+               * 否则 ↓ 会在这里定位一次、再冒泡上去整行跳一次，Ctrl+Enter
+               * 更是先执行命令再弹编辑框。带修饰键的组合（Ctrl+F 等）也留给外层。
+               */
+              if (e.ctrlKey || e.metaKey || e.altKey) return
+              if (e.key === 'ArrowDown') {
                 e.preventDefault()
-                if (flat.length > 0) {
-                  if (e.key === 'ArrowDown') setCursor(0)
-                  else if (activeItem) runCommand(activeItem)
-                }
+                e.stopPropagation()
+                if (flat.length > 0) setCursor(0)
+                return
+              }
+              if (e.key === 'Enter') {
+                e.preventDefault()
+                e.stopPropagation()
+                if (activeItem) runCommand(activeItem)
               }
             }}
           />
@@ -593,7 +602,6 @@ export function CommandPanel({
         </button>
       </div>
 
-      {/* ---------- 列表 ---------- */}
       <div
         ref={wallRef}
         className={cn(
@@ -637,7 +645,6 @@ export function CommandPanel({
               onDragOver={(e) => handleGroupDragOver(e, group)}
               onDrop={(e) => handleGroupDrop(e, group)}
             >
-              {/* 分组拖拽落点指示线 */}
               {groupDrop?.group === group && dragGroup && dragGroup !== group && (
                 <span
                   className={cn(
@@ -858,7 +865,6 @@ export function CommandPanel({
         />
       )}
 
-      {/* 新建分组 */}
       <PromptDialog
         open={newGroupDialog}
         title="新建分组"
@@ -871,7 +877,6 @@ export function CommandPanel({
         }}
       />
 
-      {/* 重命名分组 */}
       <PromptDialog
         open={renamingGroup !== null}
         title="重命名分组"
@@ -885,7 +890,6 @@ export function CommandPanel({
         }}
       />
 
-      {/* 删除分组确认 */}
       <ConfirmDialog
         open={pendingDeleteGroup !== null}
         title="删除分组"
@@ -932,9 +936,11 @@ export function CommandPanel({
           const target = pendingDelete
           setPendingDelete(null)
           if (!target) return
-          void remove(target.id).then(() =>
-            useToastStore.getState().push({ kind: 'success', title: `已删除「${target.name}」` })
-          )
+          void remove(target.id).then((ok) => {
+            if (ok) {
+              useToastStore.getState().push({ kind: 'success', title: `已删除「${target.name}」` })
+            }
+          })
         }}
       />
     </div>

@@ -85,6 +85,12 @@ export async function testConnection(input: TestConnectionInput): Promise<TestCo
     return result
   } finally {
     try {
+      /*
+       * 关闭期也要有 'error' 监听：connectClient 已在成功路径常驻兜底，
+       * 但没连上（client 为 undefined）或走了别的分支时仍可能对端先发 RST，
+       * 而 end() 之后 ssh2 的迟到 error 没有监听 = 主进程 uncaughtException。
+       */
+      if (client && client.listenerCount('error') === 0) client.on('error', () => {})
       client?.end()
     } catch {
       /* ignore */

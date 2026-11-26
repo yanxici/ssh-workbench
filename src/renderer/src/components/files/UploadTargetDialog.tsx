@@ -93,12 +93,22 @@ export function UploadTargetDialog({
   const normalized = normalizeRemoteDir(dir)
 
   const submit = (): void => {
-    if (!normalized) {
+    /*
+     * 先读输入框再退回 dir：用户手输目录后不按回车直接点「确定」时，
+     * dir 还停在上一级，只读 dir 会把文件静默传到旧目录。
+     */
+    /*
+     * 只认输入框当前内容，不再 || 回退到 dir。
+     * 回退看起来"更宽容"，实际是把「用户清空输入框」这个明确的否定
+     * 悄悄变成一个肯定：清空后点确定，文件照样传到旧目录，用户全程无感。
+     */
+    const target = normalizeRemoteDir(input)
+    if (!target) {
       setError('请先选择或填写目标目录')
       return
     }
-    rememberUploadDir(sessionId, normalized)
-    onConfirm(normalized, force)
+    rememberUploadDir(sessionId, target)
+    onConfirm(target, force)
   }
 
   const goInput = (): void => {
@@ -118,7 +128,9 @@ export function UploadTargetDialog({
   }
 
   const createDir = async (name: string): Promise<void> => {
-    const base = normalized || '/'
+    // 用户可能在输入框里打了路径却没回车；新建要落在他眼前那个目录，
+    // 不是浏览器栏里还没跟上的旧 dir
+    const base = normalizeRemoteDir(input) || normalized || '/'
     const target = remoteJoin(base, name)
     const done = await call(window.api.sftp.mkdir(sessionId, target), {
       errorTitle: '新建文件夹失败'

@@ -36,6 +36,7 @@ import { ensureZmodem, detachZmodem, bytesToBase64, requestZmodemConfirm } from 
 import { writeSessionData } from '@/lib/highlightRuntime'
 import { isCanvasFontApplied } from '@/lib/canvasFont'
 import { isImeComposing } from '@/lib/ime'
+import { hasOpenOverlay } from '@/lib/overlayKeys'
 import { useI18n } from '@/i18n'
 import {
   decideRightClickAction,
@@ -52,6 +53,43 @@ import { paneOwnerOf } from '@/lib/paneRegistry'
 import { resolveSyncTargets } from '@/lib/tabUnread'
 import { PasteConfirmDialog } from './PasteConfirmDialog'
 import { SerialBootBar } from './SerialBootBar'
+
+/**
+ * 重新 fit 一屏，并把新尺寸告诉远端 PTY。
+ *
+ * 只调 fit.fit() 是不够的：fit 改的是本地 cols/rows，远端还按旧尺寸排版，
+ * vim / htop / tmux 会画出半屏错位。而 resize IPC 原本只挂在 ResizeObserver
+ * 上 —— 改字号、拖分隔条松手这两种场景容器像素经常一点没变，
+ * ResizeObserver 根本不会再触发，于是本地重排了、远端没跟上。
+ * 所有「补一次 fit」的地方都必须走这里。
+ */
+function fitAndSyncSize(sessionId: string): void {
+  const entry = terminalRegistry.get(sessionId)
+  if (!entry) return
+  /*
+   * 隐藏的标签必须直接跳过，**不能**指望 fit.fit() 抛异常。
+   *
+   * 后台标签是靠 style.display = 'none' 藏起来的，而它的父元素是
+   * w-full h-full（width/height: 100%）。addon-fit 的 proposeDimensions()
+   * 此时读 getComputedStyle 得到的是 "100%"，parseInt 出来是 100 —— 既不是
+   * NaN 也不抛错，于是它「算出」一个约 10×5 的尺寸，下面的 resize IPC 就
+   * 把某个后台标签的远端 PTY 缩成 10 列。用户在 A 标签拖一下分隔条或改个
+   * 字号，B 标签里跑着的 vim/htop 就被压花，切回去一片错乱。
+   * 判据与 doFit 一致：拿真实像素，为 0 就是没显示。
+   */
+  const parent = entry.term.element?.parentElement
+  if (!parent || parent.clientWidth === 0 || parent.clientHeight === 0) return
+  try {
+    entry.fit.fit()
+  } catch {
+    /* 极端时序下（容器正在被移除）fit 仍可能抛，忽略即可 */
+    return
+  }
+  if (entry.term.cols > 0 && entry.term.rows > 0) {
+    useSessionStore.getState().setSize(sessionId, entry.term.cols, entry.term.rows)
+    void window.api.session.resize(sessionId, entry.term.cols, entry.term.rows)
+  }
+}
 
 function ReconnectButton({ sessionId }: { sessionId: string }): React.JSX.Element {
   return (
@@ -303,7 +341,27 @@ export function TerminalView({
     const search = new SearchAddon()
     term.loadAddon(fit)
     term.loadAddon(search)
-    term.loadAddon(new WebLinksAddon())
+    /*
+     * 必须自己给 linkHandler。
+     *
+     * 无参默认处理器是 `const t = window.open(); ...; t.location.href = uri` ——
+     * 先开空白窗再改地址，Electron 的 setWindowOpenHandler 收到的是
+     * about:blank，被 isWebUrl() 判否后 deny，window.open() 返回 null，
+     * 于是终端里所有链接点击都是死的（只在控制台留一句警告）。
+     * 直接把真实 URL 交出去，主进程才能校验并 shell.openExternal。
+     */
+    term.loadAddon(
+      new WebLinksAddon((_event, uri) => {
+        try {
+          const parsed = new URL(uri)
+          if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+            window.open(parsed.href, '_blank', 'noopener,noreferrer')
+          }
+        } catch {
+          /* 非法 URL 直接忽略 */
+        }
+      })
+    )
     term.open(el)
     /*
      * 渲染后端：**默认 DOM，WebGL 改为可选**（settings.experimental.terminalRenderer）。
@@ -356,8 +414,8 @@ export function TerminalView({
         renderer === 'dom'
           ? '[terminal] 按设置使用 DOM 渲染器（默认）'
           : canvasFontOk
-            ? '[terminal] WebGL 不可用，已回落到 DOM 渲染'
-            : '[terminal] canvas 未能应用终端字体（WebGL 会把字画小），已回落到 DOM 渲染'
+            ? '[terminal] WebGL 不可用，回落到 DOM 渲染'
+            : '[terminal] canvas 未应用终端字体，回落到 DOM 渲染'
       )
     }
 
@@ -438,6 +496,12 @@ export function TerminalView({
      * 这样用户改完键位立刻生效，不必重建终端（init effect 只依赖 sessionId）。
      */
     term.attachCustomKeyEventHandler((e) => {
+      /*
+       * 有弹层时一律让 xterm 别管（必须排在 e.type !== 'keydown' 之前）：
+       * 否则 keydown 返回 false 不设 _keyDownHandled，随后的 keypress/keyup 仍会进 xterm
+       * 把可打印字符/Enter 漏发给远端 SSH 或重新把焦点拉回终端。
+       */
+      if (hasOpenOverlay()) return false
       if (e.type !== 'keydown') return true
       const map = resolveShortcuts(useSettingsStore.getState().settings.shortcuts)
       const copyAction = decideTerminalCopy(e, map.terminalCopy, term.hasSelection())
@@ -504,6 +568,26 @@ export function TerminalView({
     }
     el.addEventListener('wheel', onWheel, { passive: false, capture: true })
 
+    /*
+     * 接管原生粘贴。
+     *
+     * Ctrl+V 走的是上面那个 keydown 处理器（已经过 requestPaste），但
+     * Shift+Insert、鼠标右键系统菜单、输入法工具栏走的都是浏览器原生 paste ——
+     * xterm 自己监听 textarea 的 paste 直接写进终端，多行 / 危险命令确认框
+     * 全程被绕过。这里在捕获阶段拦下来，把所有来源统一送回唯一入口。
+     *
+     * 用 capture 且挂在容器上：textarea 是 xterm 内部创建的，我们拿不到稳定引用；
+     * 捕获阶段会先经过容器，抢在 xterm 的处理器之前。
+     */
+    const onNativePaste = (e: ClipboardEvent): void => {
+      const text = e.clipboardData?.getData('text') ?? ''
+      if (!text) return
+      e.preventDefault()
+      e.stopPropagation()
+      requestPaste(text)
+    }
+    el.addEventListener('paste', onNativePaste, { capture: true })
+
     terminalRegistry.set(sessionId, { term, fit, search })
 
     // ZMODEM：挂上 Sentry，之后本会话的输出统一经它转发
@@ -531,6 +615,7 @@ export function TerminalView({
       if (copyTimer) clearTimeout(copyTimer)
       selectionDisposer.dispose()
       el.removeEventListener('wheel', onWheel, { capture: true })
+      el.removeEventListener('paste', onNativePaste, { capture: true })
       cancelAnimationFrame(fitRaf)
       resizeObserver.disconnect()
       dataDisposer.dispose()
@@ -562,28 +647,16 @@ export function TerminalView({
     entry.term.options.cursorBlink = terminalPrefs.cursorBlink
     entry.term.options.scrollback = terminalPrefs.scrollback
     entry.term.options.theme = getXtermTheme(colorTheme, resolveDark(themeMode))
-    requestAnimationFrame(() => {
-      try {
-        entry.fit.fit()
-      } catch {
-        /* 容器不可见时忽略 */
-      }
-    })
+    // 不带 cancel 的 rAF 在设置连续变更（拖字号滑块）时会积压一堆待执行回调
+    const raf = requestAnimationFrame(() => fitAndSyncSize(sessionId))
+    return () => cancelAnimationFrame(raf)
   }, [sessionId, terminalPrefs, themeMode, colorTheme])
 
   /* ---------- 分隔条松手后统一补一次 fit ---------- */
   const refitTick = useSplitStore((s) => s.refitTick)
   useEffect(() => {
     if (refitTick === 0) return
-    const raf = requestAnimationFrame(() => {
-      const entry = terminalRegistry.get(sessionId)
-      if (!entry) return
-      try {
-        entry.fit.fit()
-      } catch {
-        /* 容器此刻不可见（标签被切走）时忽略 */
-      }
-    })
+    const raf = requestAnimationFrame(() => fitAndSyncSize(sessionId))
     return () => cancelAnimationFrame(raf)
   }, [refitTick, sessionId])
 
@@ -593,22 +666,40 @@ export function TerminalView({
     const raf = requestAnimationFrame(() => {
       const entry = terminalRegistry.get(sessionId)
       if (!entry) return
-      try {
-        entry.fit.fit()
-      } catch {
-        /* ignore */
-      }
-      entry.term.focus()
+      fitAndSyncSize(sessionId)
+      if (!hasOpenOverlay()) entry.term.focus()
     })
     return () => cancelAnimationFrame(raf)
   }, [active, sessionId])
 
   /* ---------- 搜索 ---------- */
+  /*
+   * 必须带 decorations 调用 findNext/findPrevious。
+   *
+   * @xterm/addon-search 在 options.decorations 缺省时会直接短路返回，
+   * 既不画匹配括号也不派发 onDidChangeResults —— 于是查找框永远显示「无结果」，
+   * 命中了也看不见。颜色用半透明，深浅两套主题下都不至于糊掉文字。
+   */
+  const searchOptions = {
+    caseSensitive: false,
+    decorations: {
+      matchBackground: 'rgba(255, 196, 0, 0.35)',
+      matchOverviewRuler: '#ffc400',
+      activeMatchBackground: 'rgba(255, 122, 0, 0.65)',
+      activeMatchColorOverviewRuler: '#ff7a00'
+    }
+  }
   const runSearch = (text: string, backwards = false): void => {
     const entry = terminalRegistry.get(sessionId)
-    if (!entry || !text) return
-    if (backwards) entry.search.findPrevious(text, { caseSensitive: false })
-    else entry.search.findNext(text, { caseSensitive: false })
+    if (!entry) return
+    if (!text) {
+      /* 清空输入时把高亮一起收掉，别留一块黄底在屏幕上 */
+      entry.search.clearDecorations()
+      setSearchCount({ index: -1, count: 0 })
+      return
+    }
+    if (backwards) entry.search.findPrevious(text, searchOptions)
+    else entry.search.findNext(text, searchOptions)
   }
 
   const closeSearch = (): void => {
@@ -726,7 +817,9 @@ export function TerminalView({
     return sessionId
   })()
   const paneTotal = splitTrees[paneOwner] ? countLeaves(splitTrees[paneOwner]) : 1
-  const canSplit = session.status === 'connected' && paneTotal < MAX_PANES
+  // 串口是独占的 COM 句柄，分屏会开第二个抢同一口的会话，两个都读不到数据
+  const canSplit =
+    session.status === 'connected' && session.kind !== 'serial' && paneTotal < MAX_PANES
 
   /* ---------- 右键菜单 ---------- */
   const menuItems: MenuEntry[] = [
@@ -950,7 +1043,6 @@ export function TerminalView({
         )}
       </div>
 
-      {/* 搜索条 */}
       {searchOpen && (
         <div className="absolute right-3 top-2 z-10 flex animate-pop-in items-center gap-1 rounded-lg border border-edge bg-panel px-2 py-1 shadow-pop">
           <Search size={12} className="text-ink-3" />
@@ -996,7 +1088,6 @@ export function TerminalView({
         </div>
       )}
 
-      {/* 连接中 / 错误 / 已断开 覆盖层 */}
       {showOverlay && (
         <div className="absolute inset-0 z-20 flex items-center justify-center bg-app/[0.88]">
           {session.status === 'connecting' && (
@@ -1028,10 +1119,7 @@ export function TerminalView({
         </div>
       )}
 
-      {/*
-        多行粘贴确认框。挂在终端容器之外（同一层 relative），
-        这样它不会成为 xterm 的兄弟节点被 fit 计算影响。
-      */}
+      {/* 多行粘贴确认框：挂在终端容器之外，免得成为 xterm 兄弟节点影响 fit */}
       {pasteRequest && (
         <PasteConfirmDialog
           target={session.title || session.target}

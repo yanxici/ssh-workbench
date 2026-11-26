@@ -2,6 +2,11 @@ import type * as React from 'react'
 import { useEffect, useRef, useState } from 'react'
 import type { ConnKind } from '@shared/types'
 import { envLabel, normalizeEnvs } from '@shared/commandEnv'
+import { useI18n } from '@/i18n'
+
+/** 超过该行数或字符数的长命令不在悬停浮层里铺开全文，改显示单行提示，避免浮层盖住半个窗口 */
+const LONG_COMMAND_MAX_LINES = 3
+const LONG_COMMAND_MAX_CHARS = 180
 
 /**
  * 命令卡片的悬停浮层。
@@ -29,6 +34,7 @@ export function CommandCardTip({
   /** 适用环境；缺省 = 两者都适用，此时不显示这一行，避免满屏都是「全部环境」 */
   envs?: ConnKind[]
 }): React.JSX.Element | null {
+  const { t } = useI18n()
   const ref = useRef<HTMLDivElement>(null)
   const [pos, setPos] = useState<{ x: number; y: number } | null>(null)
 
@@ -55,6 +61,9 @@ export function CommandCardTip({
 
   if (!anchor) return null
 
+  const lineCount = command.split(/\r?\n/).length
+  const isLongCommand = lineCount > LONG_COMMAND_MAX_LINES || command.length > LONG_COMMAND_MAX_CHARS
+
   return (
     <div
       ref={ref}
@@ -64,13 +73,20 @@ export function CommandCardTip({
     >
       {/*
         名称单独一个块 + 命令单独一个块。
-        命令用 break-all：命令里没有空格的长串（URL、sqlite3 语句、-mS 参数）必须能断，
-        否则 460px 的 max-w 也压不住，会横向溢出。
+        短命令用 break-all 完整预览；多行/超长脚本改为单行提示，避免浮层撑满半屏遮挡终端。
       */}
       <div className="text-xs font-medium leading-snug text-ink">{name}</div>
-      <div className="mt-1 selectable whitespace-pre-wrap break-all font-mono text-3xs leading-relaxed text-ink-2">
-        {command}
-      </div>
+      {isLongCommand ? (
+        <div className="mt-1 text-3xs italic text-ink-3">
+          {lineCount > 1
+            ? t('command.tip.longMultiline', { lines: lineCount })
+            : t('command.tip.longSingleline', { chars: command.length })}
+        </div>
+      ) : (
+        <div className="mt-1 selectable whitespace-pre-wrap break-all font-mono text-3xs leading-relaxed text-ink-2">
+          {command}
+        </div>
+      )}
       <div className="mt-1 text-3xs text-ink-3">
         {useCount > 0 ? `用过 ${useCount} 次` : '还没用过'}
         <span className="mx-1 text-ink-3/50">·</span>

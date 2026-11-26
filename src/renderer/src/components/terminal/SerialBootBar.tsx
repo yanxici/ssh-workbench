@@ -414,7 +414,6 @@ export function SerialBootBar({ session }: Props): React.JSX.Element {
             </span>
           </div>
 
-          {/* TFTP 服务端 */}
           <div className="mt-0.5 flex flex-wrap items-center gap-1.5 border-t border-edge/60 pt-2">
             <span className="text-2xs text-ink-2">TFTP 服务端</span>
             <button className="btn h-6 px-2 text-2xs" onClick={() => void pickFirmware()}>

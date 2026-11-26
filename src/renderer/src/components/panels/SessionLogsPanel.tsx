@@ -51,7 +51,6 @@ export function SessionLogsPanel(): React.JSX.Element {
 
   return (
     <div className="flex h-full flex-col">
-      {/* 头部 */}
       <div className="panel-head">
         <ScrollText size={13} className="shrink-0 text-ink-3" />
         <span className="panel-title">会话日志</span>
@@ -69,7 +68,6 @@ export function SessionLogsPanel(): React.JSX.Element {
         </button>
       </div>
 
-      {/* 搜索 */}
       <div className="panel-toolbar">
         <div className="relative flex-1">
           <Search
@@ -85,7 +83,6 @@ export function SessionLogsPanel(): React.JSX.Element {
         </div>
       </div>
 
-      {/* 列表 */}
       <div className="panel-body">
         {filtered.length === 0 && (
           <EmptyState

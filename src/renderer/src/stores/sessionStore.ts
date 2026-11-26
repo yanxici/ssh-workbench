@@ -11,8 +11,17 @@ import { useToastStore } from './toastStore'
 import { forgetCwd } from './cwdStore'
 import { forgetSession as forgetHighlight } from '@/lib/highlightRuntime'
 import { forgetNotifySession } from '@/lib/taskNotify'
+import { invalidateDir } from '@/lib/dirCache'
+import { forgetUploadDir } from '@/lib/uploadDir'
+import { useTunnelStore } from './tunnelStore'
 import { useTrzszStore } from './trzszStore'
 import { useSftpStore } from './sftpStore'
+/*
+ * batchStore 也 import 本文件（取 sessions），是循环引用。
+ * 安全的原因：两边都只在函数体内取 useXStore.getState()，模块顶层没有
+ * 互相求值，谁先加载都能拿到完整的 store 对象。
+ */
+import { useBatchStore } from './batchStore'
 
 /**
  * 终端实例注册表：TerminalView 挂载时注册，卸载时注销。
@@ -237,6 +246,18 @@ export const useSessionStore = create<SessionState>()((set, get) => ({
       })
       return null
     }
+    /*
+     * 串口没有「再开一个 shell」这回事：所谓新终端只会复用一个物理串口，
+     * 两条界面争同一份字节流。UI 上的按钮已经禁用了，但 Ctrl+Shift+T
+     * 直接调这个函数，绕过了 disabled。
+     */
+    if (host.kind === 'serial') {
+      useToastStore.getState().push({
+        kind: 'warning',
+        title: '串口会话不支持多开终端，请直接在当前标签里操作'
+      })
+      return null
+    }
     const id = uid()
     const n = sessions.filter((x) => x.connectionId === host.connectionId).length + 1
     const session: SessionUi = {
@@ -301,18 +322,53 @@ export const useSessionStore = create<SessionState>()((set, get) => ({
     useTrzszStore.getState().clear(id)
     // 文件通道模式同理：id 被复用后残留的 'shell' 会让新会话一上线就顶着兼容角标
     useSftpStore.getState().clearMode(id)
+    /*
+     * 批量执行面板的勾选也要跟着摘掉。
+     * 会话关了还留在已选集合里，那台设备既不在列表里出现（列表只列活会话），
+     * 也就没有地方能取消勾选 —— 只能整批清空重选。
+     */
+    const batch = useBatchStore.getState()
+    if (batch.selectedSessionIds.includes(id)) {
+      useBatchStore.setState({
+        selectedSessionIds: batch.selectedSessionIds.filter((x) => x !== id)
+      })
+    }
+    /*
+     * 这几项原来跟着会话一起泄漏（id 复用后还会串味）：
+     * - 目录缓存：不失效的话新会话进同一路径直接看到上一台机器的列表；
+     * - 上次上传目录：会默认传到对端不存在的路径；
+     * - 隧道端口探测结果 + 「探测中」标记：面板会永久转圈；
+     * - 延迟/重连进度：新会话一上线就顶着一个旧数字。
+     */
+    invalidateDir(id)
+    forgetUploadDir(id)
+    useTunnelStore.getState().clearSessionDiscovery(id)
     // 静默记账同理：id 若被复用（重连沿用），残留的 lastOutputAt 会让新会话
     // 一上线就被判成"静默很久"，凭空收到一条疑似完成通知。
     forgetNotifySession(id)
     // 未读与「离开时刻」同理：id 复用后残留的 true 会让新标签一出生就带个圆点
-    const { unreadById, tabLeftAt } = get()
+    const { unreadById, tabLeftAt, latencyById, reconnectById } = get()
+    const patch: Partial<SessionState> = {}
     if (unreadById[id] || tabLeftAt[id] !== undefined) {
       const nextUnread = { ...unreadById }
       const nextLeft = { ...tabLeftAt }
       delete nextUnread[id]
       delete nextLeft[id]
-      set({ unreadById: nextUnread, tabLeftAt: nextLeft })
+      patch.unreadById = nextUnread
+      patch.tabLeftAt = nextLeft
     }
+    // 延迟与重连进度同样按会话记账，关会话必须带走
+    if (latencyById[id] !== undefined) {
+      const next = { ...latencyById }
+      delete next[id]
+      patch.latencyById = next
+    }
+    if (reconnectById[id] !== undefined) {
+      const next = { ...reconnectById }
+      delete next[id]
+      patch.reconnectById = next
+    }
+    if (Object.keys(patch).length > 0) set(patch)
   },
 
   closeOthers: (id) => {
@@ -433,10 +489,17 @@ export const useSessionStore = create<SessionState>()((set, get) => ({
      */
     const tabs = sessions.filter((s) => !isNestedPane(s.id))
     if (tabs.length < 2) return
-    const idx = tabs.findIndex((s) => s.id === activeId)
+    /*
+     * 按标签（pane owner）定位当前位次，不是按 activeId 本身：
+     * 焦点在子窗格里时 activeId 是 s3 这种嵌套 id，tabs 里根本找不到，
+     * idx 永远 -1 → base 永远 0 → 每次都跳到第 2 个标签。
+     */
+    const owner = activeId ? paneOwnerOf(activeId) : null
+    const idx = owner ? tabs.findIndex((s) => s.id === owner) : -1
     const base = idx >= 0 ? idx : 0
     const next = tabs[(base + delta + tabs.length) % tabs.length]
-    if (next) set({ activeId: next.id })
+    // 必须走 setActive：直接 set({activeId}) 不清未读圆点、不记离开时刻
+    if (next) get().setActive(next.id)
   }
 }))
 
@@ -459,6 +522,18 @@ export function activeSession(): SessionUi | null {
  */
 export function useSessionById(id: string | null): SessionUi | null {
   return useSessionStore((s) => (id ? (s.sessions.find((x) => x.id === id) ?? null) : null))
+}
+
+/**
+ * 为 SSH 专属面板（诊断/监控/备份/固件/隧道）挑选在线会话。
+ *
+ * 串口会话也是 connected，但上面没有 shell：面板拿它去跑 ps/git/rsync
+ * 只会得到一串报错，还会把错误日志刷满。所以一律排除 kind === 'serial'。
+ */
+export function pickSshSession(): SessionUi | null {
+  const { sessions, activeId } = useSessionStore.getState()
+  const online = sessions.filter((s) => s.status === 'connected' && s.kind !== 'serial')
+  return online.find((s) => s.id === activeId) ?? online[0] ?? null
 }
 
 /** 会话 id -> 会话对象的索引，供需要遍历多个会话的场景（如侧栏状态点） */

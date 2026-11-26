@@ -1,5 +1,5 @@
 import type * as React from 'react'
-import { useEffect, useState, type ReactNode } from 'react'
+import { useState, type ReactNode } from 'react'
 import {
   CheckCircle2,
   Circle,
@@ -13,8 +13,9 @@ import {
   X
 } from 'lucide-react'
 import { cn, formatBytes } from '@/lib/utils'
+import { useOverlayEscape } from '@/lib/overlayKeys'
 import { ConfirmDialog } from '@/components/ui'
-import { useFirmwareStore } from '@/stores/firmwareStore'
+import { expandFilePlaceholder, shellQuotePath, useFirmwareStore } from '@/stores/firmwareStore'
 import { useSftpStore } from '@/stores/sftpStore'
 import { useSshSessions } from '@/stores/sessionStore'
 
@@ -24,13 +25,14 @@ import { useSshSessions } from '@/stores/sessionStore'
  */
 export function FirmwarePanel(): React.JSX.Element | null {
   const panelOpen = useFirmwareStore((s) => s.panelOpen)
-  if (!panelOpen) return null
 
   const close = (): void => useFirmwareStore.setState({ panelOpen: false })
+  // 面板按钮上写着「关闭 (Esc)」，这里必须真的响应 Esc
+  useOverlayEscape(panelOpen, close)
+  if (!panelOpen) return null
 
   return (
     <div className="panel-shell fixed inset-x-0 z-30 flex flex-col bg-app">
-      {/* 标题栏 */}
       <div className="flex h-9 shrink-0 items-center gap-2 border-b border-edge bg-panel px-3">
         <Rocket size={14} className="text-accent" />
         <span className="text-xs font-semibold">固件升级助手</span>
@@ -178,12 +180,11 @@ function StepUpload(): React.JSX.Element {
   const transfers = useSftpStore((s) => s.transfers)
   const task = transfers.find((t) => t.id === uploadTaskId)
 
-  // 上传完成 → 记录远端路径，供后续校验/升级使用
-  useEffect(() => {
-    if (task?.status === 'done' && task.remotePath && !uploadedPath) {
-      useFirmwareStore.getState().markUploaded(task.remotePath)
-    }
-  }, [task?.status, task?.remotePath, uploadedPath])
+  /*
+   * 上传完成 → 记录远端路径这条链路已移到 sftpStore.applyProgress：
+   * 面板关掉（含按 Esc）后组件内 useEffect 不再运行，上传完成态会永久丢失；
+   * 而且组件里无法只在「本轮」触发，重传时会把旧固件路径复活。
+   */
 
   const pct = task && task.total > 0 ? Math.round((task.transferred / task.total) * 100) : 0
 
@@ -314,7 +315,7 @@ function StepUpgrade(): React.JSX.Element {
             const base = command.trim()
             useFirmwareStore
               .getState()
-              .setUpgradeCommand(base ? `${base} ${uploadedPath}` : uploadedPath)
+              .setUpgradeCommand(base ? `${base} ${shellQuotePath(uploadedPath)}` : shellQuotePath(uploadedPath))
           }}
         >
           插入文件路径
@@ -323,7 +324,8 @@ function StepUpgrade(): React.JSX.Element {
           className="btn h-6 px-2 text-2xs"
           disabled={!uploadedPath}
           onClick={() =>
-            uploadedPath && useFirmwareStore.getState().setUpgradeCommand(`sysupgrade -n ${uploadedPath}`)
+            uploadedPath &&
+            useFirmwareStore.getState().setUpgradeCommand(`sysupgrade -n ${shellQuotePath(uploadedPath)}`)
           }
         >
           模板：sysupgrade -n
@@ -332,7 +334,7 @@ function StepUpgrade(): React.JSX.Element {
           className="btn h-6 px-2 text-2xs"
           disabled={!uploadedPath}
           onClick={() =>
-            uploadedPath && useFirmwareStore.getState().setUpgradeCommand(`fwupdate ${uploadedPath}`)
+            uploadedPath && useFirmwareStore.getState().setUpgradeCommand(`fwupdate ${shellQuotePath(uploadedPath)}`)
           }
         >
           模板：fwupdate
@@ -406,7 +408,11 @@ function StepUpgrade(): React.JSX.Element {
           <>
             将在设备上执行：
             <div className="mt-2 selectable break-all rounded border border-edge bg-app px-2 py-1.5 font-mono text-2xs text-ink-2">
-              {command}
+              {/*
+               * 必须展示真正要执行的命令：占位符没展开时，用户确认的是一句带
+               * {{file}} 的假命令
+               */}
+              {expandFilePlaceholder(command, uploadedPath)}
             </div>
             <div className="mt-2 text-2xs text-danger">
               升级过程中请勿断电断网，否则设备可能无法启动。

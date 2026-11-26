@@ -47,8 +47,23 @@ const NEEDS_ELECTRON = new Set([
   'verify-xcmd-import.cjs'
 ])
 
-/** 需要先生成 .tsc-verify 编译产物 */
-const NEEDS_TSC = new Set(['verify-zip.cjs'])
+/**
+ * 需要先生成 .tsc-verify 编译产物。
+ *
+ * 旧名单只有 verify-zip，于是 --only=mdns 这类单跑会直接 MODULE_NOT_FOUND；
+ * 名单要从「真的 require 了 .tsc-verify」的脚本里来，不能靠记忆维护。
+ */
+const NEEDS_TSC = new Set([
+  'verify-zip.cjs',
+  'verify-diff.cjs',
+  'verify-mdns.cjs',
+  'verify-metrics.cjs',
+  'verify-net.cjs',
+  'verify-parse.cjs',
+  'verify-proxy.cjs',
+  'verify-report.cjs',
+  'verify-socks5.cjs'
+])
 
 const argv = process.argv.slice(2)
 const onlyArg = argv.find((a) => a.startsWith('--only='))
@@ -58,12 +73,13 @@ const INCLUDE_KNOWN = argv.includes('--include-known-fail')
 
 /**
  * 必须在最先跑的脚本。
- * verify-synonyms.cjs:154 会 rmSync 整个 .tsc-verify 目录，而 verify-zip.cjs
- * 依赖 .tsc-verify/main/util/zip.js —— 按字母序 synonyms 在 zip 之前，
- * 会把 zip 的编译产物顺手删掉，表现为 MODULE_NOT_FOUND。
- * 显式把依赖 tsc 产物的脚本排到最前面，不依赖字母序的巧合。
+ *
+ * verify-synonyms.cjs:154 会 rmSync 整个 .tsc-verify 目录，而所有依赖编译产物的
+ * 脚本都 require .tsc-verify 下的文件 —— 按字母序 synonyms 排在多数脚本之前，
+ * 跑完就把产物删了，后续表现一律是 MODULE_NOT_FOUND。
+ * 名单直接从 NEEDS_TSC 派生：手写清单漏一个就复现一次这个坑。
  */
-const RUN_FIRST = ['verify-zip.cjs']
+const RUN_FIRST = [...NEEDS_TSC]
 
 let files = fs
   .readdirSync(SCRIPTS)

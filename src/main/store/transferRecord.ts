@@ -201,10 +201,10 @@ export async function markRetried(oldId: string, newId: string): Promise<void> {
  * 而且用户可以据此重试。让渲染层自己「找不到活任务就猜中断」是不行的 ——
  * 排队中或渲染层刚重载时都会误判。
  */
-export async function sweepStale(): Promise<void> {
+export async function sweepStale(): Promise<number> {
   const list = await store.read()
   const stale = list.filter((r) => r.status === 'running' || r.status === 'pending')
-  if (stale.length === 0) return
+  if (stale.length === 0) return 0
   await store.update((all) =>
     all.map((r) =>
       r.status === 'running' || r.status === 'pending'
@@ -218,6 +218,8 @@ export async function sweepStale(): Promise<void> {
     )
   )
   scheduleEmit()
+  // 调用方（preload 声明成 Promise<number>）要知道改判了几条
+  return stale.length
 }
 
 /** 供面板/诊断读取规模 */

@@ -130,5 +130,25 @@ console.log('== BusyBox df 变体（6 列）==')
   check('ubi 根分区解析成功', metrics.diskPercent === 50 && metrics.diskUsedGb !== undefined, JSON.stringify(metrics))
 }
 
+console.log('== df 折行（5 列，无设备列）==')
+{
+  // LVM 长设备名在不支持 -P 的 df 上会把文件系统列挤到上一行：
+  //   设备名独占一行，真正的数字行只剩 5 列且没有设备列。
+  // 若取首行或按「有设备列」取值，会把 Used 当总量、Available 当已用。
+  const frame = [
+    'cpu  1 1 1 1 1 0 0 0 0 0',
+    '0.00',
+    '',
+    '',
+    // 注意：两行必须在同一段内（段间用 @@@ 分隔，换行才是折行）
+    '/dev/mapper/vg-root\n               20480000  10240000  10240000  50% /',
+    ''
+  ].join('\n@@@\n')
+  const { metrics } = parseSample(frame, null, T0)
+  check('折行后取到真正的数据行', metrics.diskPercent === 50, String(metrics.diskPercent))
+  check('总量按 GB 换算正确（20480000KB ≈ 19.5GB）', metrics.diskTotalGb === 19.5, String(metrics.diskTotalGb))
+  check('已用按 GB 换算正确', metrics.diskUsedGb === 9.8, String(metrics.diskUsedGb))
+}
+
 console.log(`\n结果：${pass} 通过 / ${fail} 失败`)
 process.exit(fail === 0 ? 0 : 1)

@@ -203,6 +203,8 @@ export interface ConnImportResult {
   updated: number
   skipped: number
   keysWritten: number
+  /** 文件里格式不对、被丢弃的私钥数（这些连接会退回原私钥或不带私钥） */
+  invalidKeys: number
   invalid: number
   /** 端口待确认的串口连接数（见 ConnImportPreview.pendingPorts） */
   pendingPorts: number

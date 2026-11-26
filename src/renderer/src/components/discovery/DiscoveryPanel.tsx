@@ -1,6 +1,8 @@
 import type * as React from 'react'
 import { Copy, Plug, Radar, RefreshCw, Search, Wifi, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { call } from '@/lib/ipc'
+import { useOverlayEscape } from '@/lib/overlayKeys'
 import { guessVendor } from '@shared/arpVendor'
 import { EmptyState } from '@/components/ui'
 import { useDiscoveryStore } from '@/stores/discoveryStore'
@@ -17,13 +19,25 @@ import { useToastStore } from '@/stores/toastStore'
  */
 const MAX_HOSTS = 500
 
+/**
+ * 网段扫描结果里新建连接用哪个端口。
+ *
+ * 旧实现取 openPorts[0]，可那是扫描顺序不是优先级 —— 一台开着 111 和 22 的机器
+ * 会被建成连 rpcbind 的连接，点开就失败。
+ */
+function pickPort(openPorts: number[]): number {
+  if (openPorts.includes(22)) return 22
+  return openPorts[0] ?? 22
+}
+
 export function DiscoveryPanel(): React.JSX.Element | null {
   const panelOpen = useDiscoveryStore((s) => s.panelOpen)
   const tab = useDiscoveryStore((s) => s.tab)
 
-  if (!panelOpen) return null
-
   const close = (): void => useDiscoveryStore.setState({ panelOpen: false })
+  // 面板按钮上写着「关闭 (Esc)」，这里必须真的响应 Esc
+  useOverlayEscape(panelOpen, close)
+  if (!panelOpen) return null
 
   return (
     <div className="panel-shell fixed inset-x-0 z-30 flex flex-col bg-app">
@@ -214,8 +228,12 @@ function ScanView(): React.JSX.Element {
                 className="btn-icon h-6 w-6"
                 title="复制 IP"
                 onClick={() => {
-                  void window.api.clip.write(h.ip)
-                  useToastStore.getState().push({ kind: 'success', title: `已复制 ${h.ip}` })
+                  // 写剪贴板也会失败（无焦点窗口 / 被占用），失败就别报成功
+                  void call(window.api.clip.write(h.ip), { silent: true }).then((ok) => {
+                    if (ok !== null) {
+                      useToastStore.getState().push({ kind: 'success', title: `已复制 ${h.ip}` })
+                    }
+                  })
                 }}
               >
                 <Copy size={11} />
@@ -223,7 +241,7 @@ function ScanView(): React.JSX.Element {
               <button
                 className="btn h-6 px-2 text-2xs"
                 title={`为 ${h.ip} 新建连接`}
-                onClick={() => useDiscoveryStore.getState().makeConnection(h.ip, h.openPorts[0] ?? 22)}
+                onClick={() => useDiscoveryStore.getState().makeConnection(h.ip, pickPort(h.openPorts))}
               >
                 <Plug size={11} />
                 新建连接
@@ -293,7 +311,10 @@ function MdnsView(): React.JSX.Element {
               {s.address && (
                 <button
                   className="btn h-6 px-2 text-2xs"
-                  onClick={() => useDiscoveryStore.getState().makeConnection(s.address as string, 22)}
+                  /* 设备自己广播的端口才是它在这个网络上对外服务的端口，写死 22 只是猜 */
+                  onClick={() =>
+                    useDiscoveryStore.getState().makeConnection(s.address as string, s.port ?? 22)
+                  }
                 >
                   <Plug size={11} />
                   新建连接

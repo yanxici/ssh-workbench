@@ -263,7 +263,19 @@ export function startHeuristicSweep(): void {
   sweepTimer = window.setInterval(() => {
     const p = prefs()
     if (!p.enabled || !p.heuristic) return
-    if (!document.hidden && document.hasFocus()) return
+    /*
+     * 窗口在前台时不弹通知 —— 但必须把「已经看过了」记下来。
+     * 原来直接 return，notifiedAt 一直停在很早以前的值；用户切走窗口的那一刻，
+     * 所有早就静默结束的旧会话同时满足「静默够久 且 没提醒过」，
+     * 于是刷屏式弹出一整批「疑似完成」。人就在屏幕前面看着的输出，
+     * 不该在他离开时被当成新闻补发。
+     */
+    if (!document.hidden && document.hasFocus()) {
+      for (const rec of idleSince.values()) {
+        if (rec.notifiedAt < rec.lastOutputAt) rec.notifiedAt = rec.lastOutputAt
+      }
+      return
+    }
     const now = Date.now()
     for (const [sessionId, rec] of idleSince) {
       if (!heuristicHit({ now, lastOutputAt: rec.lastOutputAt, notifiedAt: rec.notifiedAt, prefs: p }))

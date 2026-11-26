@@ -17,6 +17,7 @@ import {
   useUpdateStore
 } from '@/stores/updateStore'
 import { cn } from '@/lib/utils'
+import { useOverlayEscape } from '@/lib/overlayKeys'
 
 /**
  * 标题栏右侧的更新入口。
@@ -79,7 +80,13 @@ export function UpdateBadge(): React.JSX.Element | null {
     setPos({ top: r.bottom + 6, right: Math.max(8, window.innerWidth - r.right) })
   }, [panelOpen, status?.phase, status?.percent])
 
-  /* 点面板外 / 按 Esc 收起 */
+  const visible = isUpdateVisible(status)
+
+  /* Esc 收起走弹层栈：自己挂 capture 监听会抢在设置面板/确认框之前关掉它；
+   * 仅当徽章可见时才占栈位，避免状态切到 error/idle 渲染 null 后留下幽灵条目锁死全局快捷键 */
+  useOverlayEscape(panelOpen && visible, () => setPanelOpen(false))
+
+  /* 点面板外收起 */
   useEffect(() => {
     if (!panelOpen) return
     const onDown = (e: MouseEvent): void => {
@@ -88,27 +95,17 @@ export function UpdateBadge(): React.JSX.Element | null {
       if (btnRef.current?.contains(t)) return
       setPanelOpen(false)
     }
-    const onKey = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') {
-        e.stopPropagation()
-        setPanelOpen(false)
-      }
-    }
     document.addEventListener('mousedown', onDown, true)
-    document.addEventListener('keydown', onKey, true)
-    return () => {
-      document.removeEventListener('mousedown', onDown, true)
-      document.removeEventListener('keydown', onKey, true)
-    }
+    return () => document.removeEventListener('mousedown', onDown, true)
   }, [panelOpen, setPanelOpen])
 
-  // 面板打开着却没有任何可提示的内容（例如检查完是最新）→ 自动收起
+  // 面板打开着却不再可见（例如检查完是最新、或下载/检查切到 error 隐藏）→ 自动收起
   useEffect(() => {
     if (!panelOpen) return
-    if (status && status.phase === 'idle') setPanelOpen(false)
-  }, [panelOpen, status, setPanelOpen])
+    if (!visible) setPanelOpen(false)
+  }, [panelOpen, visible, setPanelOpen])
 
-  if (!isUpdateVisible(status) || !status) return null
+  if (!visible || !status) return null
 
   const chip = chipContent(status)
 
@@ -186,7 +183,6 @@ export function UpdateBadge(): React.JSX.Element | null {
             </button>
           </div>
 
-          {/* 下载进度 */}
           {status.phase === 'downloading' && (
             <div className="border-b border-edge-soft px-3 py-2.5">
               <div className="h-1.5 overflow-hidden rounded-full bg-raised">
@@ -207,7 +203,6 @@ export function UpdateBadge(): React.JSX.Element | null {
             </div>
           )}
 
-          {/* 更新说明 */}
           {status.releaseNotes && (status.phase === 'available' || status.phase === 'downloaded') && (
             <div className="scroll-thin max-h-40 overflow-y-auto border-b border-edge-soft px-3 py-2">
               <pre className="whitespace-pre-wrap break-words font-sans text-2xs leading-relaxed text-ink-2">
@@ -216,7 +211,6 @@ export function UpdateBadge(): React.JSX.Element | null {
             </div>
           )}
 
-          {/* 底部动作 */}
           <div className="flex items-center gap-1.5 px-3 py-2">
             {status.phase === 'available' && (
               <>

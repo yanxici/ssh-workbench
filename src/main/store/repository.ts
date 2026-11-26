@@ -27,6 +27,7 @@ export {
   deleteConnections,
   getConnection,
   listConnections,
+  markSerialPathPending,
   renameConnectionGroup,
   saveConnection,
   updateConnectionsTags,

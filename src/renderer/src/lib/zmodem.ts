@@ -93,6 +93,17 @@ interface SessionState {
   active: ZmodemSession | null
   /** 是否已经向用户弹出确认（避免重复弹窗） */
   prompting: boolean
+  /**
+   * 确认/选目录流程的代次。每次 handleDetect 开启新流程都自增一次，
+   * 长 await（弹窗、选目录）回来时用它判断「这次流程还是不是当初那次」。
+   *
+   * 不能只看 prompting/promptSessionId：state 是按会话存的，promptSessionId
+   * 恒等于 sessionId 永远相等；而 detachZmodem 后重建的 state 是新对象，
+   * 旧流程拿着闭包里的 state 继续跑，能通过身份校验却已经没人认它了 ——
+   * 它会回填 lastProgress、向一个已关闭的会话发 10×CAN。
+   * 代次一旦对不上就整段放弃。
+   */
+  promptGen: number
   /** 回落写终端用（无原始字节或解析异常时） */
   hooks: ZmodemHooks
   /** 已进入 ZMODEM 协议态（此期间终端上出现的是协议残渣，需记账） */
@@ -178,6 +189,16 @@ interface SessionState {
   batchIndex: number
   /** 本次接收批次估算的总文件数 */
   batchTotal: number
+  /** 接收方向是否跳过目标目录中已下载过的同名同大小文件 */
+  skipExisting: boolean
+  /** 本次接收批次实际下载保存成功的文件数 */
+  batchSaved: number
+  /** 本次接收批次因已存在而跳过的文件数 */
+  batchSkipped: number
+  /** 最近一次跳过的文件名/路径/字节数（用于全批跳过或尾文件跳过时收尾提示） */
+  lastSkippedName: string
+  lastSkippedPath: string
+  lastSkippedSize: number
   /** 唤醒正在等待 ZEOF 的当前 handleOffer（用于 feedZmodem 不可恢复异常或用户中断时收尾） */
   abortOffer: ((kind: 'error' | 'canceled', reason?: string) => void) | null
   /** 上次向 UI watcher 推送 active 进度的时间戳（节流高频 1KB 分包重渲） */
@@ -292,8 +313,8 @@ const SEND_KEEPALIVE_MS = 5000
  * 识别「协议残渣」行：远端传输结束后残留的控制字符回显、重发的 ZRINIT 头、
  * 以及 sz/rz 的进度文案。用于把这类内容记入 residueChars 而不是当作正常输出。
  */
-/* eslint-disable no-control-regex -- ZMODEM 的 ZDLE(0x18)/DLE(0x10) 本来就是控制字符，
-   不写进正则根本无法识别协议帧；这里是有意的，不是手滑。 */
+/* eslint-disable no-control-regex -- 见下一行注释 */
+/* ZDLE(0x18)/DLE(0x10) 是控制字符，写进正则才能认协议帧，有意为之 */
 const RESIDUE_PATTERNS: RegExp[] = [
   /\*\*[\x18\x10]?B[0-9A-Fa-f]{2}/, // ZMODEM 头魔数 **\x18B01 等
   /\*\*\x18?[0-9A-Fa-f]{2}/,
@@ -515,13 +536,16 @@ function formatAbortMessage(reason: string, savedBytes = 0): string {
 
 export type SendBytesOutcome = { ok: boolean; reason?: string }
 
+/** 确认弹窗返回值：兼容历史 boolean，以及带接收选项的对象 */
+export type ZmodemConfirmResult = boolean | { accepted: boolean; skipExisting?: boolean }
+
 export interface ZmodemHooks {
   /** 写回终端（普通输出或被协议交回的字节） */
   write: (text: string) => void
   /** 向 SSH 通道发送原始字节；若返回 Promise<{ok:false, reason}>，渲染层立即报错中止 */
   send: (bytes: Uint8Array) => void | Promise<SendBytesOutcome | void>
-  /** 询问用户是否开始传输；resolve(true) 才接管 */
-  confirm: (direction: ZmodemDirection, sessionId?: string) => Promise<boolean>
+  /** 询问用户是否开始传输；resolve(true) 或 resolve({ accepted: true }) 才接管 */
+  confirm: (direction: ZmodemDirection, sessionId?: string) => Promise<ZmodemConfirmResult>
   /**
    * 传输结束后的收尾（可选）。
    * 远端 sz/rz 退出时一般不会补 \r\n，提示符会与传输进度挤在同一行，
@@ -621,6 +645,7 @@ export function attachZmodem(sessionId: string, hooks: ZmodemHooks): void {
     decoder: new TextDecoder('utf-8'),
     active: null,
     prompting: false,
+    promptGen: 0,
     hooks,
     inProtocol: false,
     protocolEnded: false,
@@ -650,6 +675,12 @@ export function attachZmodem(sessionId: string, hooks: ZmodemHooks): void {
     pendingZrinit: false,
     batchIndex: 0,
     batchTotal: 0,
+    skipExisting: true,
+    batchSaved: 0,
+    batchSkipped: 0,
+    lastSkippedName: '',
+    lastSkippedPath: '',
+    lastSkippedSize: 0,
     abortOffer: null,
     lastWatchAt: 0,
     lastWatchKey: '',
@@ -740,6 +771,9 @@ async function handleDetect(
   if (state.prompting) return
 
   state.prompting = true
+  // 记下这次流程的代次：确认弹窗与选目录都是长 await，回来时必须能判断
+  // 期间会话有没有被关掉/重开，以及这次流程是不是已经被更新的一次取代
+  const promptGen = ++state.promptGen
   emit(sessionId, {
     phase: 'detected',
     direction,
@@ -749,11 +783,11 @@ async function handleDetect(
 
   // 确认询问必须可被取消：用户点「中断」时 abortZmodem 会调用 cancelConfirm，
   // 让这里立刻得到 false 继续走拒绝分支，而不是永远吊在 await 上。
-  let ok = false
+  let answer: ZmodemConfirmResult = false
   try {
-    ok = await new Promise<boolean>((resolve) => {
+    answer = await new Promise<ZmodemConfirmResult>((resolve) => {
       let settled = false
-      const finish = (v: boolean): void => {
+      const finish = (v: ZmodemConfirmResult): void => {
         if (settled) return
         settled = true
         if (state.cancelConfirm === cancel) state.cancelConfirm = null
@@ -764,13 +798,24 @@ async function handleDetect(
       state.hooks.confirm(direction, sessionId).then(finish, () => finish(false))
     })
   } catch {
-    ok = false
+    answer = false
   } finally {
     state.cancelConfirm = null
   }
 
+  /*
+   * 确认弹窗关掉之后、写任何状态之前先校验代次：会话被关闭（detachZmodem
+   * 已把 state 从表里摘掉）或用户已中断（recoverFromError 自增代次）时，
+   * 这里必须静默退出 —— 否则会给一个已经不存在的会话 emit 进度、
+   * 甚至发出中止序列。
+   */
+  if (states.get(sessionId) !== state || state.promptGen !== promptGen) return
+
+  const ok = typeof answer === 'boolean' ? answer : !!answer?.accepted
+  const skipExisting = typeof answer === 'boolean' ? true : answer?.skipExisting !== false
+
   if (!ok) {
-    state.prompting = false;
+    state.prompting = false
     // 用户拒绝：发送中止序列，让远端退出 sz/rz
     state.autoConfirm = null
     state.pendingDetect = false
@@ -790,11 +835,23 @@ async function handleDetect(
     return
   }
 
+  if (direction === 'receive') {
+    state.skipExisting = skipExisting
+  }
+
   // 接收方向：先定下保存文件夹（多文件 sz 只问一次），再向远端要数据。
   // 顺序很重要 —— 必须在 confirm/start 之前问，否则远端已经在等 ZRPOS，
   // 用户挑目录的几十秒会被它当成超时。
   if (direction === 'receive' && !state.saveDirToken) {
     const picked = await pickSaveDir()
+    /*
+     * 选目录期间会话可能已被关闭（detachZmodem 会 states.delete）或用户已中断。
+     * 旧代码不看这个，选完目录照样 startSession，于是在一个已经关掉的标签上
+     * 把传输"复活"，或者拿失效的 Detection 去 confirm 而抛 Stale。
+     */
+    if (states.get(sessionId) !== state || state.promptGen !== promptGen || !state.latest) {
+      return
+    }
     if (!picked) {
       state.prompting = false
       state.autoConfirm = null
@@ -817,6 +874,8 @@ async function handleDetect(
     state.saveDirToken = picked.token
   }
 
+  // 选目录回来后到真正 start 之间还可能被外部打断（关标签、Esc 中断），再校验一次代次
+  if (states.get(sessionId) !== state || state.promptGen !== promptGen) return
   state.prompting = false
   startSession(sessionId, state, detection, direction)
 }
@@ -870,6 +929,17 @@ function startSession(
   state.protocolEnded = false
 
   session.on('session_end', () => {
+    const wasReceive = state.direction === 'receive'
+    const skippedCount = state.batchSkipped
+    const savedCount = state.batchSaved
+    const lastSkippedName = state.lastSkippedName
+    const lastSkippedPath = state.lastSkippedPath
+    const lastSkippedSize = state.lastSkippedSize
+    const finalIndex = state.batchIndex
+    const finalTotal = state.batchTotal
+    const rawSess = session as unknown as { aborted?: () => boolean }
+    const abortedSession = typeof rawSess.aborted === 'function' ? rawSess.aborted() : false
+
     state.active = null
     state.inProtocol = false
     state.direction = null
@@ -895,12 +965,44 @@ function startSession(
     state.pendingZrinit = false
     state.batchIndex = 0
     state.batchTotal = 0
+    state.skipExisting = true
+    state.batchSaved = 0
+    state.batchSkipped = 0
+    state.lastSkippedName = ''
+    state.lastSkippedPath = ''
+    state.lastSkippedSize = 0
     state.lastWatchAt = 0
     state.lastWatchKey = ''
     clearAutoTimer(state)
     clearStallTimer(state)
     // 会话结束后排一次清理：远端可能还会补发一点残渣，给它一个短暂窗口
     scheduleResidueFlush(state)
+
+    // 批量下载尾文件（或全批）走 ZSKIP 跳过时，收尾由 ZFIN -> session_end 落定，
+    // 这里把状态从 active 切到 done 并给出汇总（不带 transferId，不污染传输记录表）
+    if (wasReceive && !abortedSession && skippedCount > 0) {
+      const prev = lastProgress.get(sessionId)
+      if (prev && prev.phase === 'active') {
+        const batchMeta = finalTotal > 1 ? { fileIndex: finalIndex, fileCount: finalTotal } : {}
+        const singleSkip = savedCount === 0 && skippedCount === 1
+        const msg =
+          savedCount > 0
+            ? `接收完成（下载 ${savedCount} 个，跳过 ${skippedCount} 个已存在）`
+            : skippedCount > 1
+              ? `全部已跳过（${skippedCount} 个文件均已存在）`
+              : `已跳过（已存在：${lastSkippedPath || lastSkippedName}）`
+        emit(sessionId, {
+          phase: 'done',
+          direction: 'receive',
+          fileName: lastSkippedName || prev.fileName,
+          bytesDone: singleSkip ? lastSkippedSize : 0,
+          bytesTotal: singleSkip ? lastSkippedSize : 0,
+          ...batchMeta,
+          localPath: singleSkip ? lastSkippedPath || undefined : undefined,
+          message: msg
+        })
+      }
+    }
   })
 
   // 接收方向进传输前补齐状态机短板（多帧 ZDATA / 0 字节文件 ZEOF / _file_info 清理 /
@@ -1165,16 +1267,39 @@ export async function chooseZmodemSaveDir(sessionId: string): Promise<boolean> {
   return true
 }
 
+type BeginSaveOptions = {
+  skipExisting?: boolean
+  size?: number | null
+  mtime?: number | null
+}
+
 type BeginSaveResult =
-  | { ok: true; data: { saveId: string; path: string } }
+  | { ok: true; skipped: true; path: string; size: number }
+  | { ok: true; skipped: false; data: { saveId: string; path: string } }
   | { ok: false; canceled: true; reason?: string }
   | { ok: false; canceled: false; reason: string }
 
+/** 提取 ZFILE 的修改时间（统一换算为 epoch 秒，无效返回 null） */
+function extractMtimeSeconds(mtime: Date | number | null | undefined): number | null {
+  if (mtime instanceof Date) {
+    const sec = Math.floor(mtime.getTime() / 1000)
+    return Number.isFinite(sec) && sec > 0 ? sec : null
+  }
+  if (typeof mtime === 'number' && Number.isFinite(mtime) && mtime > 0) {
+    return mtime > 1e12 ? Math.floor(mtime / 1000) : Math.floor(mtime)
+  }
+  return null
+}
+
 /**
- * 在已选目录里建目标文件（重名自动编号）。
+ * 在已选目录里建目标文件（开启 skipExisting 时先判定是否已下载过；否则重名自动编号）。
  * 只有目录令牌过期才重选一次目录；磁盘/权限等真实落盘失败直接返回 error，绝不伪装成用户取消。
  */
-async function beginSave(state: SessionState, fileName: string): Promise<BeginSaveResult> {
+async function beginSave(
+  state: SessionState,
+  fileName: string,
+  opts?: BeginSaveOptions
+): Promise<BeginSaveResult> {
   let lastError = 'saveBegin failed'
   for (let attempt = 0; attempt < 2; attempt++) {
     if (!state.saveDirToken) {
@@ -1183,8 +1308,17 @@ async function beginSave(state: SessionState, fileName: string): Promise<BeginSa
       state.saveDirToken = picked.token
     }
     try {
-      const res = await window.api.zmodem.saveBegin(state.saveDirToken, fileName)
-      if (res.ok) return { ok: true, data: res.data }
+      const res = await window.api.zmodem.saveBegin(state.saveDirToken, fileName, opts)
+      if (res.ok) {
+        if ('skipped' in res.data && res.data.skipped) {
+          return { ok: true, skipped: true, path: res.data.path, size: res.data.size }
+        }
+        return {
+          ok: true,
+          skipped: false,
+          data: { saveId: res.data.saveId, path: res.data.path }
+        }
+      }
       lastError = res.error || lastError
       if (!/已失效/.test(lastError)) return { ok: false, canceled: false, reason: lastError }
     } catch (err) {
@@ -1252,14 +1386,24 @@ async function handleOffer(
   state.pendingZrinit = false
   state.deferNextZrinit = false
 
-  let details: { name?: string; size?: number; files_remaining?: number }
+  let details: {
+    name?: string
+    size?: number | null
+    mtime?: Date | number | null
+    files_remaining?: number
+  }
   try {
     details = offer.get_details()
   } catch {
-    details = { name: 'download.bin', size: 0 }
+    details = { name: 'download.bin', size: null }
   }
   const fileName = details.name || 'download.bin'
-  const total = details.size || 0
+  const remoteSize =
+    typeof details.size === 'number' && Number.isFinite(details.size) && details.size >= 0
+      ? details.size
+      : null
+  const remoteMtime = extractMtimeSeconds(details.mtime)
+  const total = remoteSize ?? 0
 
   // 批次序号：对端 ZFILE 的 files_remaining 包含当前文件本身（如 3 -> 2 -> 1）
   const myFileIndex = ++state.batchIndex
@@ -1273,7 +1417,11 @@ async function handleOffer(
     myFileCount > 1 ? { fileIndex: myFileIndex, fileCount: myFileCount } : {}
 
   clearStallTimer(state)
-  const saveRes = await beginSave(state, fileName)
+  const saveRes = await beginSave(state, fileName, {
+    skipExisting: state.skipExisting,
+    size: remoteSize,
+    mtime: remoteMtime
+  })
   if (!saveRes.ok) {
     if (saveRes.canceled) {
       // 用户放弃选目录：跳过这个文件，协议照常继续（多文件时下次还会问）
@@ -1306,11 +1454,46 @@ async function handleOffer(
     })
     return
   }
+
+  // 目标目录已有同名同大小且未过期的文件：直接发 ZSKIP 跳过，零流量进入下一份或 ZFIN
+  if (saveRes.skipped) {
+    if (state.offerGen !== myGen || !state.active) return
+    state.batchSkipped += 1
+    state.lastSkippedName = fileName
+    state.lastSkippedPath = saveRes.path
+    state.lastSkippedSize = saveRes.size
+    state.transferId = null
+    state.transferLocalPath = ''
+    state.fileOffset = 0
+    state.startupStalls = 0
+    state.lastProgressAt = 0
+    emit(sessionId, {
+      phase: 'active',
+      direction: 'receive',
+      fileName,
+      bytesDone: saveRes.size,
+      bytesTotal: Math.max(total, saveRes.size),
+      ...batchMeta,
+      localPath: saveRes.path,
+      message: myFileCount > 1 ? `(${myFileIndex}/${myFileCount}) 已跳过（已存在）` : '已跳过（已存在）'
+    })
+    const raw = state.active as unknown as RawReceiveSession | null
+    if (raw) raw._current_transfer = null
+    try {
+      offer.skip()
+    } catch {
+      /* 会话可能已结束或中止 */
+    }
+    if (state.offerGen === myGen && state.active) {
+      armStallTimer(sessionId, state, undefined, myGen)
+    }
+    return
+  }
   const target = saveRes.data
 
-  // 等待 beginSave IPC 期间若会话已中止或已切到新 offer，释放本文件句柄并退出
+  // 等待 beginSave IPC 期间若会话已中止或已切到新 offer，释放本文件句柄并清理占位/临时覆盖文件
   if (state.offerGen !== myGen || !state.active) {
-    await window.api.zmodem.saveFinish(target.saveId).catch(() => null)
+    await window.api.zmodem.saveFinish(target.saveId, { canceled: true }).catch(() => null)
     return
   }
 
@@ -1511,7 +1694,9 @@ async function handleOffer(
       if (!failed) flush(true)
       await queue.catch(() => undefined)
       const reason = abortBox.outcome.reason || 'ZMODEM error'
-      const finErr = await window.api.zmodem.saveFinish(target.saveId).catch(() => null)
+      const finErr = await window.api.zmodem
+        .saveFinish(target.saveId, { aborted: true })
+        .catch(() => null)
       const savedBytes = finErr?.ok ? finErr.data.size : written
       const message = formatAbortMessage(reason, savedBytes)
       emit(sessionId, {
@@ -1532,6 +1717,11 @@ async function handleOffer(
     await queue
 
     if (failed) {
+      /*
+       * 写盘失败（磁盘满等）必须把主进程那边的句柄和 claimedPaths 一起放掉：
+       * 只 emit 不给 saveFinish，那个文件会被锁 30 分钟，且 .part 一直留着。
+       */
+      await window.api.zmodem.saveFinish(target.saveId, { aborted: true }).catch(() => null)
       emit(sessionId, {
         phase: 'error',
         direction: 'receive',
@@ -1549,6 +1739,8 @@ async function handleOffer(
 
     const fin = await window.api.zmodem.saveFinish(target.saveId)
     if (!fin.ok) {
+      // 收尾本身失败也要放掉主进程占位，否则下一个同名文件会撞 claimedPaths
+      await window.api.zmodem.saveFinish(target.saveId, { aborted: true }).catch(() => null)
       emit(sessionId, {
         phase: 'error',
         direction: 'receive',
@@ -1563,6 +1755,8 @@ async function handleOffer(
       flushPendingZrinit(state, myGen)
       return
     }
+    state.batchSaved += 1
+    const skipSuffix = state.batchSkipped > 0 ? `（已跳过 ${state.batchSkipped} 个）` : ''
     emit(sessionId, {
       phase: 'done',
       direction: 'receive',
@@ -1572,7 +1766,10 @@ async function handleOffer(
       ...batchMeta,
       transferId: myTransferId,
       localPath: fin.data.path,
-      message: myFileCount > 1 ? `(${myFileIndex}/${myFileCount}) 已保存到 ${fin.data.path}` : `已保存到 ${fin.data.path}`
+      message:
+        myFileCount > 1
+          ? `(${myFileIndex}/${myFileCount}) 已保存到 ${fin.data.path}${skipSuffix}`
+          : `已保存到 ${fin.data.path}`
     })
     flushPendingZrinit(state, myGen)
   } catch (err) {
@@ -1580,7 +1777,9 @@ async function handleOffer(
     // 已经收到的字节先落盘，不论后面是续传还是放弃都不能丢。
     // 异常本身不代表停滞，所以这里只落盘、不碰 lastProgressAt：
     // 续传后若对端仍不推进，看门狗会按原有时钟正常升级到报错。
-    flush()
+    // 必须 flush(true)：异常路径下收尾残留（Zrinit/ZFIN 之类）也要落盘，
+    // 只 flush() 会把手上这段丢掉，续传从错误偏移接上，文件被写坏。
+    flush(true)
     await queue.catch(() => undefined)
 
     if (resyncReceive(sessionId, state, err)) {
@@ -1591,12 +1790,22 @@ async function handleOffer(
 
     // 真的失败：把远端还在喷的二进制挡在终端之外，并把已收到的部分收尾，
     // 否则用户既丢了文件又看不到任何解释。
+    /*
+     * 先掐掉静默看门狗。旧实现在这条分支上既不 clearStallTimer 也不
+     * recoverFromError：state.active 仍非空、inProtocol 仍为 true，Sentry 继续
+     * 吞掉终端的所有后续输出且不会向远端发 10×CAN；15 秒后僵尸定时器还会拿着
+     * 已作废的 offerGen 再发一次脏 ZRPOS，弹出第二条互不相干的报错。
+     * 结果是「报了一次错，终端从此变哑巴」—— 只能重开标签。
+     */
+    clearStallTimer(state)
     if (state.offerGen === myGen) {
       state.deferNextZrinit = false
       state.pendingZrinit = false
     }
     state.suppressUntil = Date.now() + GARBLE_SUPPRESS_MS
-    const fin2 = await window.api.zmodem.saveFinish(target.saveId).catch(() => null)
+    const fin2 = await window.api.zmodem
+      .saveFinish(target.saveId, { aborted: true })
+      .catch(() => null)
     const saved2 = fin2?.ok ? fin2.data.size : 0
     const message = saved2 > 0 ? formatAbortMessage(errText(err), saved2) : errText(err)
     emit(sessionId, {
@@ -1610,6 +1819,12 @@ async function handleOffer(
       localPath: myLocalPath,
       message
     })
+    /*
+     * 收尾完成后再复位协议状态（recoverFromError 会清 active / inProtocol
+     * 并停掉 Sentry 的吞字节逻辑）。必须排在 emit 与 saveFinish 之后：
+     * 它会把 batchIndex / latest 等字段清空，emit 里那几行还要用。
+     */
+    recoverFromError(state)
   }
 }
 
@@ -1812,6 +2027,12 @@ async function runSend(
   const total = picked.files.reduce((a, f) => a + f.size, 0)
   let sent = 0
   let currentFile: string | undefined
+  /**
+   * 被对端 ZSKIP 掉的文件名。
+   * lrzsz 的 rz 默认「目标已存在就跳过」，这是最常见的一种「正常但什么都没传」：
+   * 必须记下来 —— 全部被跳过时界面会永远停在 detected，单文件被跳过还会谎报 done。
+   */
+  const skipped: string[] = []
 
   /**
    * 失败统一走这里：先停保活，再 abort。
@@ -1858,6 +2079,11 @@ async function runSend(
         `等待远端接受 ${file.name}`
       )
       if (!step.ok) {
+        // 超时多半是对端已经跳过这个文件（rz 目标已存在），批量时不能整批失败
+        if (picked.files.length > 1 && /无回应|超时|timeout/i.test(step.message)) {
+          skipped.push(file.name)
+          continue
+        }
         fail(step.message)
         return
       }
@@ -1868,7 +2094,10 @@ async function runSend(
     }
 
     // 对端跳过该文件（ZSKIP），换下一个
-    if (!transfer) continue
+    if (!transfer) {
+      skipped.push(file.name)
+      continue
+    }
 
     // 数据帧马上开始：这一段里再插 ZSINIT 只会打乱对端的解包状态
     keepaliveOff()
@@ -1941,6 +2170,24 @@ async function runSend(
     abortSessionCleanly(state, session)
   }
 
+  // 一个文件都没送出去（全被 ZSKIP）：这是「没传成」，绝不能报 done
+  if (skipped.length === picked.files.length) {
+    emit(sessionId, {
+      phase: 'canceled',
+      direction: 'send',
+      fileName: skipped.length === 1 ? skipped[0] : `${skipped.length} 个文件`,
+      bytesDone: 0,
+      bytesTotal: total,
+      message: closeNote ?? '远端已存在同名文件，全部跳过'
+    })
+    return
+  }
+
+  const skipNote =
+    skipped.length > 0
+      ? `（${skipped.length} 个同名文件已存在，被跳过${closeNote ? '；' + closeNote : ''}）`
+      : closeNote
+
   if (picked.files.length === 1) {
     emit(sessionId, {
       phase: 'done',
@@ -1948,9 +2195,9 @@ async function runSend(
       fileName: picked.files[0].name,
       bytesDone: sent,
       bytesTotal: total,
-      message: closeNote
+      message: skipNote
     })
-  } else if (closeNote) {
+  } else if (skipNote) {
     emit(sessionId, {
       phase: 'done',
       direction: 'send',
@@ -1958,7 +2205,7 @@ async function runSend(
       bytesDone: sent,
       bytesTotal: total,
       transferId: undefined,
-      message: closeNote
+      message: skipNote
     })
   }
 }
@@ -2381,6 +2628,9 @@ function recoverFromError(state: SessionState): void {
   const cancel = state.cancelConfirm
   state.cancelConfirm = null
   state.prompting = false
+  // 自增代次：让还在 await 里的那次确认/选目录流程回来时判定自己已过期，
+  // 否则它复位状态之后照样往下走，把刚中止的传输又拉起来
+  state.promptGen += 1
   state.receivedBytes = 0
   state.fileOffset = 0
   state.resyncFrom = -1
@@ -2401,6 +2651,12 @@ function recoverFromError(state: SessionState): void {
   state.pendingZrinit = false
   state.batchIndex = 0
   state.batchTotal = 0
+  state.skipExisting = true
+  state.batchSaved = 0
+  state.batchSkipped = 0
+  state.lastSkippedName = ''
+  state.lastSkippedPath = ''
+  state.lastSkippedSize = 0
   state.abortOffer = null
   state.lastWatchAt = 0
   state.lastWatchKey = ''
@@ -2419,7 +2675,14 @@ export function abortZmodem(sessionId: string): void {
   if (!state) return
 
   const wasActive = !!state.active
-  const hadRemoteWait = state.pendingDetect || !!state.autoConfirm || state.inProtocol
+  /*
+   * 「在等」也分好几种：等远端重发、等用户确认、等用户选目录。
+   * 这些状态下 state.active 是 null，旧代码因此一条终态事件都不发 ——
+   * lastProgress 永远停在 detected，切走再切回来浮层又活了，
+   * 而且捕获阶段的 Esc 监听器还在，用户按 Esc 只关掉浮层关不掉流程。
+   */
+  const hadRemoteWait =
+    state.pendingDetect || !!state.autoConfirm || state.inProtocol || state.prompting
   const direction = state.direction ?? 'receive'
   const abortOffer = state.abortOffer
   const prevTransferId = state.transferId ?? undefined
@@ -2431,7 +2694,8 @@ export function abortZmodem(sessionId: string): void {
   }
   abortOffer?.('canceled')
 
-  if (wasActive) {
+  // 只要还有任何在途/等待中的流程，就必须发终态：这是浮层与 Esc 监听的唯一出口
+  if (wasActive || hadRemoteWait) {
     emit(sessionId, {
       phase: 'canceled',
       direction,
@@ -2472,7 +2736,10 @@ export function isZmodemActive(sessionId: string): boolean {
  *  确认交互：由 UI 注册处理器，模块只负责发起询问
  * ------------------------------------------------------------------ */
 
-type ConfirmHandler = (sessionId: string, direction: ZmodemDirection) => Promise<boolean>
+type ConfirmHandler = (
+  sessionId: string,
+  direction: ZmodemDirection
+) => Promise<ZmodemConfirmResult>
 
 let confirmHandler: ConfirmHandler | null = null
 
@@ -2485,7 +2752,7 @@ export function setZmodemConfirmHandler(fn: ConfirmHandler | null): void {
 export function requestZmodemConfirm(
   sessionId: string,
   direction: ZmodemDirection
-): Promise<boolean> {
+): Promise<ZmodemConfirmResult> {
   if (!confirmHandler) return Promise.resolve(false)
   return confirmHandler(sessionId, direction)
 }

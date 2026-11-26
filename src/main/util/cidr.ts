@@ -60,6 +60,16 @@ export function expandCidrHosts(cidr: string, maxHosts = 1024): string[] {
   if (count > maxHosts + 2) {
     throw new Error(`网段过大（${count - 2} 台主机），请使用 /22 及更小的范围`)
   }
+  /*
+   * /31 与 /32 没有「网络号 + 广播地址」的概念：
+   *   - /32 只有一个地址，就是它自己（常用于单点探测）；
+   *   - /31 是 RFC 3021 的点对点链路，两个地址都可用。
+   * 原来无条件从 1 数到 count-1，这两种网段直接返回空数组 ——
+   * 用户填了 /32 会看到「扫描完成，发现 0 台设备」，像设备没开机。
+   */
+  if (prefix >= 31) {
+    return Array.from({ length: count }, (_, i) => intToIp((network + i) >>> 0))
+  }
   const hosts: string[] = []
   for (let i = 1; i < count - 1; i++) {
     hosts.push(intToIp((network + i) >>> 0))

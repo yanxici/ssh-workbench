@@ -24,30 +24,37 @@ import {
   abortZmodem,
   getZmodemProgress,
   chooseZmodemSaveDir,
+  type ZmodemConfirmResult,
   type ZmodemProgress,
   type ZmodemDirection
 } from '@/lib/zmodem'
+import { useI18n } from '@/i18n'
 import { setZmodemIdentityResolver } from '@/lib/zmodemRecord'
 import { terminalRegistry, useSessionStore } from '@/stores/sessionStore'
+import { hasOpenOverlay, overlayDepth, useOverlayEscape } from '@/lib/overlayKeys'
 
 interface PendingConfirm {
   direction: ZmodemDirection
-  resolve: (ok: boolean) => void
+  resolve: (res: ZmodemConfirmResult) => void
   sessionName: string
+  /** 弹窗属于哪个会话：该会话关掉后弹窗必须自动作废，不能挡住别的会话 */
+  sessionId: string
 }
 
 export function ZmodemOverlay(): React.JSX.Element | null {
+  const { t } = useI18n()
   const sessions = useSessionStore((s) => s.sessions)
   const activeId = useSessionStore((s) => s.activeId)
 
   const [progress, setProgress] = useState<ZmodemProgress | null>(null)
   const [pending, setPending] = useState<PendingConfirm | null>(null)
+  const [skipExisting, setSkipExisting] = useState(true)
 
   // 注册确认处理器：协议层检测到 ZMODEM 时调用
   useEffect(() => {
     setZmodemConfirmHandler(
       (sessionId, direction) =>
-        new Promise<boolean>((resolve) => {
+        new Promise<ZmodemConfirmResult>((resolve) => {
           const src = useSessionStore.getState().sessions.find((s) => s.id === sessionId)
           const sessionName = src ? src.title || src.host : ''
           setPending((prev) => {
@@ -56,7 +63,7 @@ export function ZmodemOverlay(): React.JSX.Element | null {
               resolve(false)
               return prev
             }
-            return { direction, resolve, sessionName }
+            return { direction, resolve, sessionName, sessionId }
           })
         })
     )
@@ -122,29 +129,69 @@ export function ZmodemOverlay(): React.JSX.Element | null {
   const canAbort =
     !!progress && (progress.phase === 'active' || progress.phase === 'detected')
 
+  /*
+   * 确认弹窗是**模态**的：接进弹层栈，Esc 由栈统一分发（只关最上层）。
+   * 自己挂 capture 监听会抢在设置面板/其他弹窗之前，按一次 Esc 把两个都关掉。
+   */
+  const cancelPending = (): void => {
+    setPending((prev) => {
+      prev?.resolve(false)
+      return null
+    })
+    // 只有当前确认弹窗自己是唯一弹层时才把焦点还给终端，避免压在下面的设置面板/弹窗被抢焦点
+    if (activeId && overlayDepth() <= 1) terminalRegistry.get(activeId)?.term.focus()
+  }
+  useOverlayEscape(Boolean(pending), cancelPending)
+
+  /*
+   * 角落里的进度条不是模态：没有弹窗时要能按 Esc 中断卡死的传输，
+   * 但**别人开着弹窗时绝不能响应** —— 用户在设置页里按 Esc 撤销输入，
+   * 却把正在跑的 ZMODEM 传输杀掉，是最难解释的那类数据损坏。
+   */
   useEffect(() => {
-    if (!pending && (!canAbort || !activeId)) return
+    if (pending || !canAbort || !activeId) return
     const onKey = (e: KeyboardEvent): void => {
       if (e.key !== 'Escape') return
+      if (e.isComposing || e.keyCode === 229) return
+      if (hasOpenOverlay()) return
       e.preventDefault()
       e.stopPropagation()
-      // 确认弹窗还在：Esc 就是「取消」。只关掉弹窗不动协议层，
-      // 否则弹窗会一直挂在界面上点了也没反应。
-      if (pending) {
-        pending.resolve(false)
-        setPending(null)
-        if (activeId) terminalRegistry.get(activeId)?.term.focus()
-        return
-      }
-      if (!activeId) return
       abortZmodem(activeId)
       setProgress(null)
       terminalRegistry.get(activeId)?.term.focus()
     }
-    // 捕获阶段抢在 xterm / 弹窗之前，避免 Esc 被当成终端输入
+    // 捕获阶段抢在 xterm 之前，避免 Esc 被当成终端输入发往远端
     window.addEventListener('keydown', onKey, true)
     return () => window.removeEventListener('keydown', onKey, true)
   }, [canAbort, activeId, pending])
+
+  /*
+   * 来源会话关掉后确认弹窗必须自己作废：旧代码只看 pending，会话没了弹窗还在，
+   * 于是 sources 表里待确认的 resolve 永远不兑现，后续所有会话的 ZMODEM 都被
+   * 「已有一个待确认」挡回去 —— 表现为整个程序再也弹不出传输确认。
+   *
+   * 只看「还在不在列表里」不够：会话对象还在、状态已经掉线/出错时弹窗照样挂着，
+   * 用户点「接收」把数据发往一个断了的管理通道，界面只会一直转圈。
+   * 另外 pending 期间协议层自己也可能判失败（超时 watchdog、对端发中止帧），
+   * 那些走 watchZmodem 的 error/canceled 相位，同样要收起弹窗。
+   */
+  useEffect(() => {
+    if (!pending) return
+    const source = sessions.find((s) => s.id === pending.sessionId)
+    const alive = Boolean(source) && source!.status !== 'disconnected' && source!.status !== 'error'
+    if (alive) return
+    pending.resolve(false)
+    setPending(null)
+  }, [pending, sessions])
+
+  useEffect(() => {
+    if (!pending) return
+    return watchZmodem(pending.sessionId, (p) => {
+      if (p.phase !== 'error' && p.phase !== 'canceled') return
+      pending.resolve(false)
+      setPending(null)
+    })
+  }, [pending])
 
   const activeSession = sessions.find((s) => s.id === activeId) ?? null
 
@@ -154,9 +201,9 @@ export function ZmodemOverlay(): React.JSX.Element | null {
     const confirmSessionName =
       pending.sessionName || (activeSession ? activeSession.title || activeSession.host : '')
     const answer = (ok: boolean): void => {
-      pending.resolve(ok)
+      pending.resolve(ok ? (receiving ? { accepted: true, skipExisting } : true) : false)
       setPending(null)
-      if (!ok && activeId) terminalRegistry.get(activeId)?.term.focus()
+      if (!ok && activeId && overlayDepth() <= 1) terminalRegistry.get(activeId)?.term.focus()
     }
     return (
       <div
@@ -169,31 +216,40 @@ export function ZmodemOverlay(): React.JSX.Element | null {
         <div className="modal max-w-sm">
           <div className="modal-header">
             <div className="modal-title">
-              {receiving ? '接收远端文件' : '发送文件到远端'}
+              {receiving ? t('zmodem.title.receive') : t('zmodem.title.send')}
             </div>
           </div>
           <div className="modal-body space-y-2 text-xs leading-relaxed text-ink-2">
             <div className="flex items-center gap-2 text-ink-1">
               {receiving ? <ArrowDownToLine size={15} /> : <ArrowUpFromLine size={15} />}
               <span>
-                {receiving
-                  ? '远端发起了 ZMODEM 传输（sz），是否接收文件到本机？'
-                  : '远端已进入接收状态（rz），是否选择本机文件发送？'}
+                {receiving ? t('zmodem.prompt.receive') : t('zmodem.prompt.send')}
               </span>
             </div>
-            {confirmSessionName && <div className="text-ink-3">会话：{confirmSessionName}</div>}
+            {confirmSessionName && (
+              <div className="text-ink-3">{t('zmodem.session', { name: confirmSessionName })}</div>
+            )}
             <div className="text-ink-3">
-              {receiving
-                ? '接收需要先选一个保存文件夹（多文件只问一次），同名文件自动加序号，不会覆盖。'
-                : '同意后将接管该会话的字节流直到传输结束。'}
+              {receiving ? t('zmodem.hint.receive') : t('zmodem.hint.send')}
             </div>
+            {receiving && (
+              <label className="flex cursor-pointer select-none items-center gap-2 pt-0.5 text-ink-1">
+                <input
+                  type="checkbox"
+                  className="accent-accent"
+                  checked={skipExisting}
+                  onChange={(e) => setSkipExisting(e.target.checked)}
+                />
+                <span>{t('zmodem.skipExisting')}</span>
+              </label>
+            )}
           </div>
           <div className="modal-footer">
             <button className="btn" onClick={() => answer(false)}>
-              取消
+              {t('zmodem.cancel')}
             </button>
             <button className="btn-primary" onClick={() => answer(true)} autoFocus>
-              {receiving ? '接收' : '选择文件并发送'}
+              {receiving ? t('zmodem.accept.receive') : t('zmodem.accept.send')}
             </button>
           </div>
         </div>

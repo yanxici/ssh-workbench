@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useSftpStore } from '@/stores/sftpStore'
 import { normalizeRemoteDir, resolveUploadDir } from '@/lib/uploadDir'
 
@@ -43,12 +43,28 @@ export function useUploadTarget(
   const uploadFileDialog = useSftpStore((s) => s.uploadFileDialog)
   const uploadFolder = useSftpStore((s) => s.uploadFolder)
 
+  /*
+   * 当前会话 id 的实时值。request() 里 await resolveUploadDir 会跨若干帧，
+   * 期间用户可能已经切到另一台主机 —— 那个 dir 是拿旧 sessionId 解析的，
+   * 直接 setOpen 就把 A 机的落点摆到 B 机面前了。
+   */
+  const sessionRef = useRef(sessionId)
+  sessionRef.current = sessionId
+
+  // 换会话：对话框和 busy 都作废，否则新会话一进来就顶着一个旧落点的弹窗
+  useEffect(() => {
+    setOpen(false)
+    setBusy(false)
+  }, [sessionId])
+
   const request = useCallback(
     async (preferred?: string | null, hintText?: string, nextKind: 'file' | 'folder' = 'file'): Promise<void> => {
       if (!sessionId) return
       // 当前目录 → 上次用的目录 → 远端 home；都拿不到就留空让用户自己填，
       // 绝不静默退化成远端根目录（历史上就是这么把文件传到 / 下的）
       const dir = await resolveUploadDir(sessionId, preferred ?? undefined)
+      // 等目录的这段时间里换了会话：这个落点已经属于上一台主机，丢弃
+      if (sessionRef.current !== sessionId) return
       setDefaultDir(dir)
       setHint(hintText)
       setKind(nextKind)

@@ -26,6 +26,7 @@ import {
   shellReadText,
   shellRemove,
   shellRename,
+  safeRelativeSegments,
   shellUploadFile,
   shellWalkRemote,
   shellWriteText,
@@ -49,6 +50,17 @@ import { recordError } from '../store/errorLog'
 type ProgressHandler = (event: TransferProgressEvent) => void
 
 /**
+ * 每个「批次占位 Set」对应一份小写归一后的副本。
+ *
+ * 调用方传进来的 allocated 是原样的路径，不能就地改成小写（返回值还要用）；
+ * 又不想让调用方多传一个参数，就用 WeakMap 挂在那个 Set 上 —— 批次结束
+ * 调用方丢掉 Set，这里跟着回收。
+ *
+ * 这是**唯一的**占位来源。曾经还有一个模块级 allocatedLower 给「没传 allocated」
+ * 的调用兜底，那是个纯粹的坑：它永不清空，文件删了也照样占着名字，
+ * 同一个文件在整个进程生命周期里每次下载都被迫多加一个 (1)(2)(3)。
+ */
+/**
  * 同名文件自动加序号，绝不覆盖已有文件。
  *
  * 与 ipc/zmodem.ts 的 uniquePath 保持同一套规则（`名字 (1).ext`）——
@@ -60,15 +72,27 @@ export function uniqueLocalPath(
   dir: string,
   name: string,
   /**
-   * 本批次已分配的路径（可选）。
-   * 只靠 existsSync 判断是不够的：批量下载时文件还没落盘，同一批里两个同名
-   * 远端文件（不同目录下的 config.bak）会算出同一个候选路径，
-   * 两个任务并发 `fs.open(localPath,'w')` 互相截断，内容混杂。
-   * 调用方在同一批里传同一个 Set，分配即占位。
+   * 本批次或全局在途已分配的路径（可选）。
+   * 只靠 existsSync 判断是不够的：批量下载时文件还没落盘，同一批或跨批次的
+   * 同名远端文件会算出同一个候选路径，并发 `fs.open` 互相截断。
+   * 这里每次按当前 allocated 实时生成折叠视图，避免长生命周期 Set 删除条目后
+   * 与旁路 WeakMap 缓存永久失步。
    */
   allocated?: Set<string>
 ): string {
-  const taken = (p: string): boolean => existsSync(p) || (allocated?.has(p) ?? false)
+  /*
+   * Windows 文件系统大小写不敏感：A.txt 与 a.txt 是同一个文件，而 existsSync
+   * 与 Set 都按字面比较。批量下载里两个只差大小写的远端文件会算出同一个候选
+   * 路径，双双往同一个 .part 里写。归一成小写再比对（POSIX 上保持原样）。
+   */
+  const fold = (p: string): string => (process.platform === 'win32' ? p.toLowerCase() : p)
+  const takenLower = allocated ? new Set([...allocated].map(fold)) : null
+  /*
+   * 没传 allocated 时只看磁盘。另外必须连 .part 一起看：并发下载写的是
+   * <目标>.part，两个任务算出同一目标就等于两个句柄写同一个半成品。
+   */
+  const taken = (p: string): boolean =>
+    existsSync(p) || existsSync(partPathOf(p)) || (takenLower?.has(fold(p)) ?? false)
   const candidate = join(dir, name)
   if (!taken(candidate)) {
     allocated?.add(candidate)
@@ -138,6 +162,13 @@ const RECOVER_POLL_MS = 500
 const CHUNK_TIMEOUT_MS = 30000
 /** open / stat 这类控制请求的超时 */
 const META_TIMEOUT_MS = 15000
+/**
+ * 挂载 SFTP 子系统的等待上限。
+ *
+ * 比控制请求宽：握手刚完成时服务器可能还在初始化子系统，正常几百毫秒就回来了。
+ * 但绝不能再短到正常慢机（跳板机三跳）会误报。10 秒足够。
+ */
+const SFTP_MOUNT_TIMEOUT_MS = 10000
 /**
  * 关闭句柄的等待上限。比 META_TIMEOUT_MS 短得多：通道断掉时这个 close 无论如何
  * 都不会回包，多等一秒就是把「断线后 3 秒恢复」拖成「断线后 18 秒恢复」。
@@ -210,6 +241,38 @@ function isRetryable(err: unknown): boolean {
   )
 }
 
+/**
+ * 这个错误是不是「路径确实不存在」。
+ *
+ * 与 isRetryable 互补：SSH 服务器的 NOT_FOUND 在各实现里文案不一致（code 有的是
+ * 数字 2，有的是字符串 'ENOENT'，有的干脆只有一句 No such file），所以文案和 code 都要看；
+ * 超时那种「拿不到答案」绝不能算不存在。
+ */
+function isMissingEntry(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err)
+  const code = (err as { code?: unknown } | undefined)?.code
+  if (code === 2 || code === 'ENOENT' || code === 'NO_SUCH_FILE') return true
+  return /no such file|not exist|不存在|NoSuchFile/i.test(msg)
+}
+
+/**
+ * 这条路径是不是远端根（'/'、'//'、'/.、/./' 都算）。
+ *
+ * 递归删除的唯一黑名单：ShellFS 侧的 assertSafeRemovePath 早就拒了根，
+ * SFTP 侧没有，于是 `rm -rf /` 在 sftp 通道上是能真跑起来的。
+ */
+function isRemoteRoot(path: string): boolean {
+  return path.split('/').every((seg) => seg === '' || seg === '.')
+}
+
+/** 这个错误是不是「目录已经在了」（并发建目录时的正常结果） */
+function isExistsEntry(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err)
+  const code = (err as { code?: unknown } | undefined)?.code
+  if (code === 4 || code === 'EEXIST' || code === 'FILE_ALREADY_EXISTS') return true
+  return /already exists|已存在|EEXIST/i.test(msg)
+}
+
 /** 断线重试的协作面：由 SftpManager 提供，分块引擎只管「失败 → 续传」 */
 interface ResumeHooks {
   /** 断线后重新拿一个可用通道（内部会等 SSH 自动重连完成） */
@@ -251,6 +314,22 @@ interface TransferControl {
   release?: () => void
   /** 忽略「远端已是最新」的跳过判据，强制全量重传 */
   force: boolean
+  /**
+   * 目录传输的「非失败说明」：跳过链接、空目录、命中上限、兼容模式全量重传……
+   *
+   * 以前只在 running 事件里带 note，收尾事件不带，于是 transfer-records.json
+   * 里那些记录全都没有 note —— 面板上看不出「这次少传了 3 个链接」。
+   * 存在控制块上，收尾时再补进去。
+   */
+  note?: string
+  /**
+   * shell 后端传输通道的中断句柄（由 registerStream 挂上）。
+   *
+   * 取消不能只置 ctl.cancelled 就完事：shell 后端跑的是远端 cat / cat > 一条命令，
+   * 它不会自己看标志位。不主动 close 通道，远端命令会一直被背压卡着，
+   * 大文件看起来「取消了还在传」。
+   */
+  abortStream?: () => void
   waiters: Array<() => void>
 }
 
@@ -303,8 +382,13 @@ function detectTextEncoding(buf: Buffer): { content: string; encoding: TextEncod
     return { content: buf.subarray(2).toString('utf-16le'), encoding: 'utf-16le' }
   }
   if (buf.length >= 2 && buf[0] === 0xfe && buf[1] === 0xff) {
-    // Node 没有 utf-16be，用字节交换绕过去
-    const swapped = Buffer.from(buf.subarray(2))
+    /*
+     * Node 没有 utf-16be，用字节交换绕过去。
+     * 截断的文件（奇数个字节）会让 swap16() 抛 RangeError，直接崩在打开文件上；
+     * 丢掉最后那个孤立字节，把剩下的照常显示出来。
+     */
+    const pairs = buf.length >= 3 ? buf.subarray(2, 2 + ((buf.length - 2) & ~1)) : Buffer.alloc(0)
+    const swapped = Buffer.from(pairs)
     swapped.swap16()
     return { content: swapped.toString('utf-16le'), encoding: 'utf-16be' }
   }
@@ -326,14 +410,22 @@ function detectTextEncoding(buf: Buffer): { content: string; encoding: TextEncod
   return { content: buf.toString('utf-8'), encoding: 'utf-8' }
 }
 
-/** 按编码把文本编回字节（写回远程文件时用，必须与读入时一致） */
+/**
+ * 按编码把文本编回字节（写回远程文件时用，必须与读入时一致）。
+ *
+ * UTF-16 必须把 detectTextEncoding 剥掉的 BOM 补回去：
+ * 第一，没有 BOM 时 detect 会把它当成含 NUL 的二进制而拒绝打开，用户保存一次就再也打不开原文件；
+ * 第二，Windows 记事本/PowerShell 5 缺 BOM 会按 ANSI 解释，中文全变乱码。
+ * 能走到 utf-16 两个分支的一定是原本带 BOM 的文件，所以补 BOM 是无损还原。
+ * utf-8 / gb18030 没有这个约定，保持原样不加。
+ */
 function encodeText(content: string, encoding: TextEncoding): Buffer {
   if (encoding === 'utf-8') return Buffer.from(content, 'utf-8')
-  if (encoding === 'utf-16le') return Buffer.from(content, 'utf16le')
+  if (encoding === 'utf-16le') return Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(content, 'utf16le')])
   if (encoding === 'utf-16be') {
     const buf = Buffer.from(content, 'utf16le')
     buf.swap16()
-    return buf
+    return Buffer.concat([Buffer.from([0xfe, 0xff]), buf])
   }
   return iconv.encode(content, 'gb18030')
 }
@@ -344,21 +436,27 @@ function wake(ctl: TransferControl): void {
   for (const w of waiters) w()
 }
 
-/** 暂停点：可在每个分块之间调用 */
+/**
+ * 暂停点：可在每个分块之间调用。
+ *
+ * 一条铁律：**挂起等待期间绝不能占着并发位**。旧实现只在 pauseTransfer 里
+ * 尝试让位，而排队中的任务那时 holding 还是 false，release 是空操作；等它终于
+ * 轮到并拿到位再进 checkpoint，就变成攥着位子等唤醒 —— 暂停 3 个排队任务
+ * （MAX_CONCURRENT_TRANSFERS=3）即永久死锁整条队列。所以让位放在暂停循环里做。
+ */
 async function checkpoint(ctl: TransferControl): Promise<void> {
-  if (ctl.cancelled) throw new TransferCancelledError()
-  if (ctl.halt) throw new TransferAbortedError()
-  while (ctl.paused && !ctl.cancelled && !ctl.halt) {
+  for (;;) {
+    if (ctl.cancelled) throw new TransferCancelledError()
+    if (ctl.halt) throw new TransferAbortedError()
+    if (!ctl.paused) {
+      if (ctl.holding || !ctl.acquire) return
+      await ctl.acquire()
+      // 排队拿位可能等很久，拿到后必须重检：期间完全可能被取消或再次暂停
+      continue
+    }
+    ctl.release?.()
     await new Promise<void>((resolve) => ctl.waiters.push(resolve))
   }
-  if (ctl.cancelled) throw new TransferCancelledError()
-  if (ctl.halt) throw new TransferAbortedError()
-  /*
-   * 暂停时已经把并发位让出去了（否则三个暂停任务就把队列永久卡死），
-   * 继续时在这里重新排队拿回来 —— 不在 resumeTransfer 里同步抢，
-   * 那个函数是同步的，抢不到就只能干等着没人再来唤醒它。
-   */
-  if (!ctl.holding && ctl.acquire) await ctl.acquire()
 }
 
 /* ------------------------------ 工具 ------------------------------ */
@@ -372,7 +470,20 @@ function joinRemote(dir: string, name: string): string {
 function formatMode(mode: number): string {
   const perm = (m: number): string =>
     `${m & 4 ? 'r' : '-'}${m & 2 ? 'w' : '-'}${m & 1 ? 'x' : '-'}`
-  const type = mode & 0o40000 ? 'd' : mode & 0o120000 ? 'l' : '-'
+  /*
+   * 文件类型必须先把高位掩出来再**整体比较**：
+   * 原来写成 mode & 0o120000 取的是「这几个掩码位有没有置上」，
+   * 普通文件 0o100644 与 0o120000 有共同位，于是所有普通文件都显示成 lrwxrwxrwx。
+   */
+  const fmt = mode & 0o170000
+  const type =
+    fmt === 0o040000 ? 'd'
+    : fmt === 0o120000 ? 'l'
+    : fmt === 0o140000 ? 's'
+    : fmt === 0o060000 ? 'b'
+    : fmt === 0o020000 ? 'c'
+    : fmt === 0o010000 ? 'p'
+    : '-'
   return type + perm((mode >> 6) & 7) + perm((mode >> 3) & 7) + perm(mode & 7)
 }
 
@@ -494,6 +605,63 @@ function pOpen(sftp: SFTPWrapper, path: string, mode: OpenMode): Promise<Buffer>
   )
 }
 
+/*
+ * mkdir / chmod / realpath / readFile / writeFile 也必须带超时。
+ *
+ * 旧实现里这几处是裸回调，链路静默断开时回调永不触发：IPC 永不返回、
+ * 传输并发位永不归还，最后整个文件面板和队列一起僵住。文案统一带
+ * 「链路中断」——isRetryable 认这个词，超时才能走重连而不是直接报错。
+ */
+function pMkdir(sftp: SFTPWrapper, path: string): Promise<void> {
+  return withTimeout(
+    new Promise<void>((resolve, reject) => {
+      sftp.mkdir(path, (err) => (err ? reject(err) : resolve()))
+    }),
+    META_TIMEOUT_MS,
+    '创建远端目录'
+  )
+}
+
+function pChmod(sftp: SFTPWrapper, path: string, mode: number): Promise<void> {
+  return withTimeout(
+    new Promise<void>((resolve, reject) => {
+      sftp.chmod(path, mode, (err) => (err ? reject(err) : resolve()))
+    }),
+    META_TIMEOUT_MS,
+    '修改远端权限'
+  )
+}
+
+function pRealpath(sftp: SFTPWrapper, path: string): Promise<string> {
+  return withTimeout(
+    new Promise<string>((resolve, reject) => {
+      sftp.realpath(path, (err, abs) => (err ? reject(err) : resolve(abs)))
+    }),
+    META_TIMEOUT_MS,
+    '解析远端真实路径'
+  )
+}
+
+function pReadFile(sftp: SFTPWrapper, path: string): Promise<Buffer> {
+  return withTimeout(
+    new Promise<Buffer>((resolve, reject) => {
+      sftp.readFile(path, (err, data) => (err ? reject(err) : resolve(data)))
+    }),
+    EDIT_WRITE_TIMEOUT_MS,
+    '读取远端文件'
+  )
+}
+
+function pWriteFile(sftp: SFTPWrapper, path: string, data: Buffer): Promise<void> {
+  return withTimeout(
+    new Promise<void>((resolve, reject) => {
+      sftp.writeFile(path, data, (err) => (err ? reject(err) : resolve()))
+    }),
+    EDIT_WRITE_TIMEOUT_MS,
+    '写入远端文件'
+  )
+}
+
 /**
  * 关闭远端句柄。
  *
@@ -512,9 +680,13 @@ function pClose(sftp: SFTPWrapper, handle: Buffer): Promise<void> {
 }
 
 function pFstat(sftp: SFTPWrapper, handle: Buffer): Promise<Stats> {
-  return new Promise((resolve, reject) => {
-    sftp.fstat(handle, (err, stats) => (err ? reject(err) : resolve(stats)))
-  })
+  return withTimeout(
+    new Promise<Stats>((resolve, reject) => {
+      sftp.fstat(handle, (err, stats) => (err ? reject(err) : resolve(stats)))
+    }),
+    META_TIMEOUT_MS,
+    '读取远端文件属性'
+  )
 }
 
 function pRead(
@@ -531,6 +703,37 @@ function pRead(
       else resolve(bytesRead)
     })
   })
+}
+
+/**
+ * 读完远端一段数据，直到读满 len 或确实到 EOF。
+ *
+ * 为什么不能只调一次 read：CHUNK_SIZE 是 256 KB，而 OpenSSH sftp-server 的
+ * 单包上限通常只有 64 KB（Dropbear / Go pkg/sftp / 老设备为 32 KB 或 16 KB）。
+ * 服务端返回短读（bytesRead < len）是常态，不是 EOF。旧实现把短读当整块写完，
+ * 再把下一块的偏移直接推到 pos + 256 KB —— 中间那段从没写过的字节在 .part
+ * 里就是一片零洞，而文件大小照样正确：用户拿到的是「大小对、内容坏」。
+ *
+ * @returns 实际读到的字节（长度 < len 才表示真的到 EOF）
+ */
+async function readRemoteRange(
+  sftp: SFTPWrapper,
+  handle: Buffer,
+  length: number,
+  position: number
+): Promise<Buffer> {
+  const buf = Buffer.allocUnsafe(length)
+  let filled = 0
+  while (filled < length) {
+    const got = await withTimeout(
+      pRead(sftp, handle, buf, filled, length - filled, position + filled),
+      CHUNK_TIMEOUT_MS,
+      '下载分块'
+    )
+    if (got <= 0) break
+    filled += got
+  }
+  return buf.subarray(0, filled)
 }
 
 function pWrite(
@@ -670,13 +873,18 @@ async function setRemoteMtime(
   mtime: number
 ): Promise<void> {
   if (typeof sftp.utimes !== 'function') return
-  await new Promise<void>((resolve) => {
-    try {
-      sftp.utimes(path, atime, mtime, () => resolve())
-    } catch {
-      resolve()
-    }
-  })
+  // 超时/失败都当放弃：mtime 对不齐最多是下次全量重传，不该让上传失败
+  await withTimeout(
+    new Promise<void>((resolve) => {
+      try {
+        sftp.utimes(path, atime, mtime, () => resolve())
+      } catch {
+        resolve()
+      }
+    }),
+    META_TIMEOUT_MS,
+    '对齐远端修改时间'
+  ).catch(() => undefined)
 }
 
 /**
@@ -701,25 +909,27 @@ async function isUpToDate(
 }
 
 async function silentUnlinkRemote(sftp: SFTPWrapper, path: string): Promise<void> {
-  await new Promise<void>((resolve) => {
-    sftp.unlink(path, () => resolve())
-  })
+  await pUnlink(sftp, path, false).catch(() => undefined)
 }
 
-/** 读远端文件的一段（用于续传前的尾部指纹比对） */
+/**
+ * 读远端文件的一段（用于续传前的尾部指纹比对）。
+ *
+ * 必须是循环补读，不能是单次 pRead。指纹长度是 64 KB，而 OpenSSH sftp-server
+ * 单包上限 64 KB、Dropbear / Go pkg/sftp / 老嵌入式设备只有 32 KB 或 16 KB。
+ * 单次读在这些设备上只回来 32 KB，于是：
+ *   - 下载侧 `remoteTail.length === len` 恒 false → 断点续传永远从头开始；
+ *   - 上传侧 `!remoteTail.equals(localTail)` 恒 true → 直接把已传的远端数据 'w' 截断。
+ * 也就是说这两类设备上「续传」从来没用过，每次都是全量重传。
+ * 直接复用 readRemoteRange，短读在那里已经被当成常态补读。
+ */
 async function readRemoteTail(
   sftp: SFTPWrapper,
   handle: Buffer,
   position: number,
   length: number
 ): Promise<Buffer> {
-  const buf = Buffer.allocUnsafe(length)
-  const got = await withTimeout(
-    pRead(sftp, handle, buf, 0, length, position),
-    CHUNK_TIMEOUT_MS,
-    '读取续传指纹'
-  )
-  return buf.subarray(0, got)
+  return readRemoteRange(sftp, handle, length, position)
 }
 
 /**
@@ -833,6 +1043,16 @@ export class SftpManager {
   private wrappers = new Map<string, SFTPWrapper>()
   /** 正在挂载中的 SFTP 通道（并发请求共享同一次挂载，避免重复 sftp 子系统） */
   private pendingMounts = new Map<string, Promise<SFTPWrapper>>()
+
+  /**
+   * 已被占位、但还没落盘的下载目标路径（原样大小写）。
+   *
+   * 每个批次各自一个 allocated Set 只挡得住**同一批**内的重名：用户先后两次
+   * 下载同名文件时，第一批还在传、磁盘上没有目标文件，第二批的 existsSync
+   * 全是 false，于是两边算出同一个路径，双双往同一个 .part 里写。
+   * 所以占位必须跨批次，入队时占、任务收尾时放（enqueue 的 finally）。
+   */
+  private activeDownloadTargets = new Set<string>()
   /**
    * 每个会话的远端 home 绝对路径缓存。
    * home() 走一次 realpath，打开文件面板时至少多点一次往返；
@@ -936,6 +1156,12 @@ export class SftpManager {
     ctl.cancelled = true
     ctl.paused = false
     wake(ctl)
+    // shell 后端：立刻掐掉远端 cat / cat >，否则它只会被背压拖着慢慢跑完
+    try {
+      ctl.abortStream?.()
+    } catch {
+      /* 通道可能已关 */
+    }
     // 立刻回一帧 canceled：排队中的任务可能要等并发位空出来才真正退出，
     // 界面不该在这段时间里继续显示"传输中"。
     this.emit({
@@ -957,7 +1183,25 @@ export class SftpManager {
     return this.controls.size > 0
   }
 
-  /** 会话关闭时清理对应 SFTP 通道 */
+  /**
+   * 会话真的关闭了：清通道 + 结束该会话名下的所有传输（含暂停中的）。
+   *
+   * 与 clearSession 分开是必须的：clearSession 也会被 recoverChannel 用来
+   * 「丢掉坏通道再重挂」，那是**续传路径**。把它当成关会话处理，
+   * 每次断线自愈都会当场取消正在恢复的任务 —— 任务永远落 canceled。
+   * 只有这里（sessionManager.setOnClosed 那条线）才代表「这活不干了」。
+   *
+   * 不取消的话，暂停中的任务永远停在 checkpoint 里等一个不会到来的 wake：
+   * 没有人再发终态事件，任务栏进度条会一直卡在中间值直到应用退出。
+   */
+  closeSession(sessionId: string): void {
+    for (const [taskId, ctl] of [...this.controls]) {
+      if (ctl.sessionId === sessionId) this.cancelTransfer(taskId)
+    }
+    this.clearSession(sessionId)
+  }
+
+  /** 会话的 SFTP 通道不可用（断线/协议错误）：只丢缓存，不动传输任务 */
   clearSession(sessionId: string): void {
     this.pendingMounts.delete(sessionId)
     this.homes.delete(sessionId)
@@ -987,20 +1231,73 @@ export class SftpManager {
     const inflight = this.pendingMounts.get(sessionId)
     if (inflight) return inflight
 
-    const mounting = (async (): Promise<SFTPWrapper> => {
+    // 先声明再赋值：IIFE 内部要用 mounting 做「还是不是当前这次挂载」的判断
+    let mounting!: Promise<SFTPWrapper>
+    // eslint-disable-next-line prefer-const -- 唯一赋值必须晚于声明，IIFE 内要比对自身引用
+    mounting = (async (): Promise<SFTPWrapper> => {
       // 会话可能仍在握手（连接瞬间就打开了文件树）—— 等到 connected 再挂载，
       // 否则会在未连接的占位客户端上直接失败
       await sessionManager.waitUntilReady(sessionId)
       const client = sessionManager.getClient(sessionId)
       if (!client) throw new Error('会话不存在或已断开，请先打开 SSH 连接')
 
-      const sftp = await new Promise<SFTPWrapper>((resolve, reject) => {
-        client.sftp((err, wrapper) => {
-          if (err) reject(new Error(`无法启动 SFTP 子系统：${err.message}`))
-          else resolve(wrapper)
-        })
+      /*
+       * 挂载必须带超时。
+       *
+       * client.sftp 的 promise 只由回调兑现，而 ssh2 在某些服务器/两种并发挂载
+       * 撞车时会**既不回调也不报错**（请求包发出去就没了）。没有超时的话这个
+       * promise 永远挂着，调用方 await 住 —— 界面上文件面板一直转圈，
+       * 连重试按钮都点不动（因为封面上写着 loading）。
+       */
+      /*
+       * 超时之后的迟到结果是**孤儿**：调用方已经放弃，没人会去 end 它。
+       * 不主动 end 的话这条 SFTP 通道连同底下的 shell 会一直挂在连接上，
+       * 每次点重试就多漏一条，直到用户关标签为止。
+       */
+      let timedOut = false
+      const sftp = await withTimeout(
+        new Promise<SFTPWrapper>((resolve, reject) => {
+          client.sftp((err, wrapper) => {
+            if (timedOut) {
+              try {
+                wrapper?.on('error', () => undefined)
+                wrapper?.end()
+              } catch {
+                /* ignore */
+              }
+              reject(new Error('启动 SFTP 子系统超时'))
+              return
+            }
+            if (err) reject(new Error(`无法启动 SFTP 子系统：${err.message}`))
+            else resolve(wrapper)
+          })
+        }),
+        SFTP_MOUNT_TIMEOUT_MS,
+        '启动 SFTP 子系统'
+      ).catch((e: unknown) => {
+        timedOut = true
+        throw e
       })
 
+      /*
+       * 迟到的挂载结果不能写进缓存。
+       *
+       * 握手期间用户关了标签（或会话断到重连上限），clearSession 已经把缓存清干净，
+       * 而这条 promise 稍后才 resolve。无条件 set 等于给一个已经死掉的会话塞回一条
+       * 还能用的通道：下次同名 sessionId 出现在别的连接上时，文件面板拿到的就是它。
+       */
+      if (
+        sessionManager.statusOf(sessionId) !== 'connected' ||
+        sessionManager.getClient(sessionId) !== client ||
+        this.pendingMounts.get(sessionId) !== mounting
+      ) {
+        try {
+          sftp.end()
+        } catch {
+          /* ignore */
+        }
+        throw new Error('会话已关闭，无法继续传输')
+      }
       this.wrappers.set(sessionId, sftp)
       sftp.on('close', () => {
         if (this.wrappers.get(sessionId) === sftp) this.wrappers.delete(sessionId)
@@ -1053,9 +1350,19 @@ export class SftpManager {
     const inflight = this.pendingMode.get(sessionId)
     if (inflight) return inflight
 
-    const resolving = (async (): Promise<SftpBackendMode> => {
+    // 同上：IIFE 内部要比对 resolving 自身
+    let resolving!: Promise<SftpBackendMode>
+    // eslint-disable-next-line prefer-const -- 唯一赋值必须晚于声明，IIFE 内要比对自身引用
+    resolving = (async (): Promise<SftpBackendMode> => {
       try {
         await this.getSftp(sessionId)
+        // 同上：挂载期间会话可能已换掉或断开，别把旧结论写给新会话
+        if (
+          this.pendingMode.get(sessionId) !== resolving ||
+          sessionManager.statusOf(sessionId) !== 'connected'
+        ) {
+          throw new Error('会话已关闭，无法继续传输')
+        }
         this.sessionModes.set(sessionId, 'sftp')
         return 'sftp'
       } catch (err) {
@@ -1070,6 +1377,18 @@ export class SftpManager {
           probe.exitCode === 0 &&
           probe.stdout.includes('__SWB_SH_OK__')
         if (!usable) throw err
+        /*
+         * 结论落缓存前复核：探针要跑几百毫秒，这期间会话可能已经断开并
+         * 重连到同一个 sessionId 上。把「旧连接只支持 shell」写进新会话的缓存，
+         * 新会话就会被永久降级 —— 直到用户手动关标签。
+         */
+        if (
+          this.pendingMode.get(sessionId) !== resolving ||
+          sessionManager.statusOf(sessionId) !== 'connected' ||
+          sessionManager.getClient(sessionId) !== client
+        ) {
+          throw err
+        }
         this.sessionModes.set(sessionId, 'shell')
         this.onMode?.({ sessionId, mode: 'shell' })
         return 'shell'
@@ -1118,19 +1437,32 @@ export class SftpManager {
     const deadline = Date.now() + RECOVER_DEADLINE_MS
     for (;;) {
       const status = sessionManager.statusOf(sessionId)
-      if (status === undefined) throw new Error('会话已关闭，无法继续传输')
       if (status === 'connected') break
-      if (!sessionManager.isReconnecting(sessionId) && status !== 'connecting') {
-        /*
-         * 既不在重连、也不是 connecting：说明自动重连已放弃或压根没开启。
-         * 这种情况再等下去就是干耗，直接把原因抛给用户。
-         */
-        throw new Error('连接已断开且未能自动重连，请检查网络后重试')
+      /*
+       * 顺序很关键：先判「还能等」，只有真的没人会恢复它时才抛。
+       *
+       * teardown 在调度重连前就把 record 从 sessions 删了，所以整个退避期间
+       * statusOf() 都是 undefined。原实现把 `status === undefined` 当成
+       * 「会话已关闭」挡在最前面，于是断线第一轮轮询就抛错退出 ——
+       * 后面这句 isReconnecting 判断成了永远走不到的死代码，
+       * 断点续传在一次网络闪断后就必然失败。
+       */
+      if (sessionManager.isReconnecting(sessionId) || status === 'connecting') {
+        if (Date.now() > deadline) {
+          throw new Error('等待重连超时，请检查网络后重试')
+        }
+        await sleep(RECOVER_POLL_MS)
+        continue
       }
-      if (Date.now() > deadline) {
-        throw new Error('等待重连超时，请检查网络后重试')
-      }
-      await sleep(RECOVER_POLL_MS)
+      /*
+       * 既不在重连、也不是 connecting：说明自动重连已放弃、用户关了标签，
+       * 或压根没开自动重连。再等下去就是干耗，把原因直接抛给用户。
+       */
+      throw new Error(
+        status === undefined
+          ? '会话已关闭，无法继续传输'
+          : '连接已断开且未能自动重连，请检查网络后重试'
+      )
     }
     return this.getSftp(sessionId)
   }
@@ -1147,11 +1479,8 @@ export class SftpManager {
       abs = await shellHome(await this.shellClient(sessionId))
     } else {
       const sftp = await this.getSftp(sessionId)
-      abs = await new Promise<string>((resolve, reject) => {
-        sftp.realpath('.', (err, path) => {
-          if (err) reject(new Error(`无法获取远端主目录：${err.message}`))
-          else resolve(path)
-        })
+      abs = await pRealpath(sftp, '.').catch((err: unknown) => {
+        throw new Error(`无法获取远端主目录：${err instanceof Error ? err.message : String(err)}`)
       })
     }
     this.homes.set(sessionId, abs)
@@ -1226,7 +1555,12 @@ export class SftpManager {
     const dirsOut: Record<string, RemoteFile[]> = {}
     const errors: Record<string, string> = {}
     const queue = [...new Set(dirs)]
-    let hadError = false
+    /*
+     * 只有「通道本身坏了」才作废重挂：ssh2 的 SFTP 状态错误带数字 code（2=不存在、
+     * 3=没权限），那是单个目录的问题。以前按「一个都没读成」来判断，展开一个全是
+     * 无权限目录的父目录时整条通道被拆掉重连，用户感知就是面板卡几百毫秒。
+     */
+    let channelBroken = false
 
     const worker = async (): Promise<void> => {
       for (;;) {
@@ -1235,7 +1569,7 @@ export class SftpManager {
         try {
           dirsOut[dir] = toRemoteFiles(dir, await pReaddir(sftp, dir))
         } catch (err) {
-          hadError = true
+          if (typeof (err as { code?: unknown }).code !== 'number') channelBroken = true
           errors[dir] = err instanceof Error ? err.message : String(err)
         }
       }
@@ -1244,10 +1578,7 @@ export class SftpManager {
     await Promise.all(
       Array.from({ length: Math.min(LIST_MANY_CONCURRENCY, queue.length) }, () => worker())
     )
-    // 只有「整个通道挂了」才使缓存失效；单个目录没权限不该把 SFTP 拆掉重连
-    if (hadError && Object.keys(dirsOut).length === 0) {
-      this.invalidate(sessionId)
-    }
+    if (channelBroken) this.invalidate(sessionId)
     return { dirs: dirsOut, errors }
   }
 
@@ -1285,16 +1616,15 @@ export class SftpManager {
       return
     }
     const sftp = await this.getSftp(sessionId)
-    await new Promise<void>((resolve, reject) => {
-      sftp.mkdir(path, (err) => {
-        if (err) reject(new Error(`创建目录失败：${err.message}`))
-        else resolve()
-      })
+    await pMkdir(sftp, path).catch((err: unknown) => {
+      throw new Error(`创建目录失败：${err instanceof Error ? err.message : String(err)}`)
     })
   }
 
   /** 递归删除（文件或目录） */
   async remove(sessionId: string, path: string): Promise<void> {
+    // 两个通道都从这里进：根目录一律拒，和 shell 侧的 assertSafeRemovePath 对齐
+    if (isRemoteRoot(path)) throw new Error('不能删除远端根目录')
     const mode = await this.resolveBackend(sessionId)
     if (mode === 'shell') {
       // shellRemove 内部先过 assertSafeRemovePath：rm -rf 的路径必须自己校验
@@ -1353,11 +1683,8 @@ export class SftpManager {
       return
     }
     const sftp = await this.getSftp(sessionId)
-    await new Promise<void>((resolve, reject) => {
-      sftp.chmod(path, mode, (err) => {
-        if (err) reject(new Error(`修改权限失败：${err.message}`))
-        else resolve()
-      })
+    await pChmod(sftp, path, mode).catch((err: unknown) => {
+      throw new Error(`修改权限失败：${err instanceof Error ? err.message : String(err)}`)
     })
   }
 
@@ -1399,10 +1726,8 @@ export class SftpManager {
         `文件过大（${(st.size / 1048576).toFixed(1)} MB），请下载到本地后再编辑（上限 2 MB）`
       )
     }
-    const buf = await new Promise<Buffer>((resolve, reject) => {
-      sftp.readFile(path, (err, data) =>
-        err ? reject(new Error(`读取失败：${err.message}`)) : resolve(data)
-      )
+    const buf = await pReadFile(sftp, path).catch((err: unknown) => {
+      throw new Error(`读取失败：${err instanceof Error ? err.message : String(err)}`)
     })
     if (buf.includes(0) && !(buf[0] === 0xff && buf[1] === 0xfe) && !(buf[0] === 0xfe && buf[1] === 0xff)) {
       throw new Error('该文件看起来是二进制文件，无法以文本方式编辑')
@@ -1458,10 +1783,8 @@ export class SftpManager {
      */
     let original: Buffer | null = null
     if (existed) {
-      original = await new Promise<Buffer>((resolve, reject) => {
-        sftp.readFile(path, (err, data) =>
-          err ? reject(new Error(`读取原文件失败：${err.message}`)) : resolve(data)
-        )
+      original = await pReadFile(sftp, path).catch((err: unknown) => {
+        throw new Error(`读取原文件失败：${err instanceof Error ? err.message : String(err)}`)
       })
       try {
         await pUnlink(sftp, bak, false)
@@ -1469,15 +1792,7 @@ export class SftpManager {
         /* 旧备份不存在，正常 */
       }
       try {
-        await withTimeout(
-          new Promise<void>((resolve, reject) => {
-            sftp.writeFile(bak, original as Buffer, (err) =>
-              err ? reject(new Error(err.message)) : resolve()
-            )
-          }),
-          EDIT_WRITE_TIMEOUT_MS,
-          '备份原文件'
-        )
+        await pWriteFile(sftp, bak, original)
         backedUp = true
       } catch (err) {
         // 备份失败就直接中止：没有备份的覆盖写入是不可挽回的
@@ -1489,20 +1804,12 @@ export class SftpManager {
 
     const buf = encodeText(content, encoding)
     try {
-      await withTimeout(
-        new Promise<void>((resolve, reject) => {
-          sftp.writeFile(path, buf, (err) => (err ? reject(new Error(`写入失败：${err.message}`)) : resolve()))
-        }),
-        EDIT_WRITE_TIMEOUT_MS,
-        '写入远程文件'
-      )
+      await pWriteFile(sftp, path, buf)
     } catch (err) {
       // 写入失败：从备份恢复原内容，别让 path 位置留下半截文件
       if (backedUp && original) {
         const restore = original
-        await new Promise<void>((resolve) => {
-          sftp.writeFile(path, restore, () => resolve())
-        }).catch(() => undefined)
+        await pWriteFile(sftp, path, restore).catch(() => undefined)
       }
       throw err
     }
@@ -1629,12 +1936,11 @@ export class SftpManager {
   download(sessionId: string, remotePaths: string[], localDir: string): string[] {
     const taskIds: string[] = []
     /*
-     * 本批次已分配的目标路径。
-     * 必须在循环外建：同一批里两个同名远端文件（/a/config.bak、/b/config.bak）
-     * 此时都还没落盘，单靠 existsSync 会算出同一个候选路径，
-     * 两个任务并发写同一路径就会互相截断。
+     * 目标路径占位用实例级的集合，而不是每批一个新的 Set：
+     * 跨批次的重名（先后两次下载同名文件，前者还在传）同样要挡住，
+     * 见 activeDownloadTargets 的注释。占位在 enqueue 的 finally 里释放。
      */
-    const allocated = new Set<string>()
+    const allocated = this.activeDownloadTargets
     for (const remotePath of remotePaths) {
       const taskId = randomUUID()
       taskIds.push(taskId)
@@ -1644,7 +1950,14 @@ export class SftpManager {
        * 目录下载（isDir）保留用户指定的目录名，重名时同样加序号，
        * 避免把两个同名目录的内容合并到一处。
        */
-      const localPath = uniqueLocalPath(localDir, basename(remotePath), allocated)
+      /*
+       * 远端文件名是攻击者可控输入，必须净化后再落到本地。
+       * assertRemotePath 只按 / 分段查 ..，放行 "/tmp/..\.."、"access.log:1"
+       * （NTFS 数据流）、"CON"、"foo." —— Windows 上 basename("/tmp/..\..")
+       * 就是 ".."，join 之后直接逃出 localDir。与目录下载共用同一套净化。
+       */
+      const safeName = safeRelativeSegments(basename(remotePath)).pop() || 'download'
+      const localPath = uniqueLocalPath(localDir, safeName, allocated)
       this.enqueue(
         async (ctl, hooks) => {
           // 下载侧同理：shell 后端先探一次远端类型，再决定单文件还是整个目录
@@ -1742,8 +2055,15 @@ export class SftpManager {
         this.emit(event)
         return
       }
-      this.emit(event)
-      void recordFromEvent(event, identity)
+      /*
+       * 收尾事件本身不带 note（它是目录遍历结束时才有的话），
+       * 必须从控制块补上。UI 与落盘用同一份：旧实现只给 recordFromEvent 补，
+       * 渲染层拿到的 done 事件没有 note —— 用户看不到「跳过 N 个链接」，
+       * 刷新历史记录后又突然出现，像是两条不同结果。
+       */
+      const finalEvent = event.note ? event : { ...event, note: ctl.note }
+      this.emit(finalEvent)
+      void recordFromEvent(finalEvent, identity)
     }
     this.emit({ ...this.baseEvent(ctl, taskId), status: 'pending' })
     void recordFromEvent(
@@ -1752,9 +2072,11 @@ export class SftpManager {
     )
 
     const run = async (): Promise<void> => {
-      // 排队期间就被取消：不占并发位，直接落终态
+      // 排队期间就被取消：不占并发位，直接落终态并释放下载占位
       if (ctl.cancelled) {
         this.controls.delete(taskId)
+        ctl.abortStream = undefined
+        if (ctl.direction === 'download') this.activeDownloadTargets.delete(ctl.localPath)
         finish({ ...this.baseEvent(ctl, taskId), status: 'canceled' })
         return
       }
@@ -1771,6 +2093,11 @@ export class SftpManager {
         notify: (note) => this.emit(eventOf(ctl, taskId, 'running', { note }))
       }
       try {
+        /*
+         * 拿到并发位之后再走一次暂停点：排队期间可能已经被取消或暂停，
+         * 旧实现直接开干，于是「已取消」的目录任务照样把远端目录建完再报 done。
+         */
+        await checkpoint(ctl)
         await build(ctl, hooks)
         finish({ ...this.baseEvent(ctl, taskId), status: 'done' })
       } catch (err) {
@@ -1799,8 +2126,11 @@ export class SftpManager {
         }
       } finally {
         this.controls.delete(taskId)
+        ctl.abortStream = undefined
         // 走 ctl.release：暂停期间已经让出过位，这里不能再减一次
         ctl.release?.()
+        // 仅释放下载占位，避免上传任务误删同名在途下载的占位
+        if (ctl.direction === 'download') this.activeDownloadTargets.delete(ctl.localPath)
       }
     }
     void run()
@@ -1936,7 +2266,15 @@ async function uploadFileChunked(
          * 「断线后重试等于从头再来」的根因。
          */
         handle = await withTimeout(
-          pOpen(conn, partPath, pos > 0 ? 'r+' : 'w'),
+          pOpen(conn, partPath, pos > 0 ? 'r+' : 'w').catch((err: unknown) => {
+            /*
+             * pos > 0 但 .part 已经不在了（设备重启清了 /tmp、被人清理过）：
+             * 'r+' 会直接 ENOENT，一路抛成「打开远端文件失败」。从 0 重来即可。
+             */
+            if (pos === 0 || !isMissingEntry(err)) throw err
+            pos = 0
+            return pOpen(conn, partPath, 'w')
+          }),
           META_TIMEOUT_MS,
           '打开远端文件'
         )
@@ -2068,7 +2406,17 @@ async function uploadFileChunked(
         hooks.notify(
           `连接中断，正在重连后续传（第 ${attempts} 次，已完成 ${formatBytes(pos)} / ${formatBytes(total)}）`
         )
-        conn = await hooks.recover().catch(() => conn)
+        try {
+          conn = await hooks.recover()
+        } catch (recoverErr) {
+          /*
+           * 恢复钩子的三条快速失败（会话已关闭 / 未自动重连 / 等待超时）是终态：
+           * 以前 .catch(() => conn) 把它们吞掉，拿着死通道一路空转到重试上限，
+           * 用户等满 8 轮才看到一句「通道未打开」。这里直接放弃并清掉半截文件。
+           */
+          await discardRemoteOnFresh(conn, hooks, partPath)
+          throw recoverErr
+        }
         /*
          * 重连成功后必须重新确认远端长度：恢复的那一次可能只写成了一半，
          * 而本地 pos 是「已提交给 socket」的字节，不等于「已落盘」的字节。
@@ -2158,31 +2506,39 @@ async function downloadFileChunked(
           pos = 0
         }
         // pos > 0 才是真续传；否则截断重建，避免旧内容留在尾部
-        local = await fs.open(partPath, pos > 0 ? 'r+' : 'w')
+        // .part 在 stat 与 open 之间被清掉的情况：'r+' 报 ENOENT，退回从头下载
+        local = await fs.open(partPath, pos > 0 ? 'r+' : 'w').catch((err: unknown) => {
+          if (pos === 0 || !isMissingEntry(err)) throw err
+          pos = 0
+          return fs.open(partPath, 'w')
+        })
         if (pos > 0) await local.truncate(pos).catch(() => undefined)
         onBytes(pos, total)
         while (total === 0 || pos < total) {
           await checkpoint(ctl)
-          const pending: Array<Promise<{ pos: number; bytes: number; buf: Buffer }>> = []
+          const pending: Array<
+            Promise<{ pos: number; expected: number; bytes: number; buf: Buffer }>
+          > = []
           for (let i = 0; i < CHUNK_INFLIGHT; i += 1) {
             const chunkPos = pos + i * CHUNK_SIZE
             if (total > 0 && chunkPos >= total) break
             const len = total > 0 ? Math.min(CHUNK_SIZE, total - chunkPos) : CHUNK_SIZE
-            const buf = Buffer.allocUnsafe(len)
             pending.push(
-              pRead(conn, handle, buf, 0, len, chunkPos).then((bytes) => ({
+              readRemoteRange(conn, handle, len, chunkPos).then((buf) => ({
                 pos: chunkPos,
-                bytes,
+                expected: len,
+                bytes: buf.length,
                 buf
               }))
             )
           }
           if (pending.length === 0) break
-          const chunks = await withTimeout(
-            Promise.all(pending),
-            CHUNK_TIMEOUT_MS,
-            '下载分块'
-          )
+          /*
+           * 不再在外面套一层 withTimeout：一批是 CHUNK_INFLIGHT 个块（≈1.5MB），
+           * 16KB 包的服务端要走近百次串行 RTT，50 KB/s 的慢链路本来就超过 30s。
+           * 单次 read 的超时由 readRemoteRange 内部逐个 pRead 兜着，够用且不会误杀。
+           */
+          const chunks = await Promise.all(pending)
           let eof = false
           for (const c of chunks) {
             if (c.bytes <= 0) {
@@ -2192,6 +2548,11 @@ async function downloadFileChunked(
             await local.write(c.buf, 0, c.bytes, c.pos)
             pos = c.pos + c.bytes
             onBytes(pos, total)
+            // 短读 = 已到 EOF：再往下读只会写出零洞，必须立刻收尾
+            if (c.bytes < c.expected) {
+              eof = true
+              break
+            }
           }
           if (eof) break
         }
@@ -2229,7 +2590,8 @@ async function downloadFileChunked(
         hooks.notify(
           `连接中断，正在重连后续传（第 ${attempts} 次，已完成 ${formatBytes(pos)} / ${formatBytes(total)}）`
         )
-        conn = await hooks.recover().catch(() => conn)
+        // 恢复失败就是终态（会话已关/不再重连/超时），原样抛出，别再拿死通道空转
+        conn = await hooks.recover()
         await sleep(RECOVER_POLL_MS)
       }
     }
@@ -2441,11 +2803,19 @@ async function ensureRemoteDir(sftp: SFTPWrapper, dirPath: string): Promise<void
     current = `${current}/${part}`
     try {
       await pStat(sftp, current)
-    } catch {
-      await new Promise<void>((resolve) => {
-        sftp.mkdir(current, () => resolve())
-      })
+      continue
+    } catch (err) {
+      /*
+       * 只有「确实不存在」才往下建目录。
+       * 旧实现把任何 pStat 失败都当不存在 —— 链路超时、权限不足也一样，
+       * 于是会对着一个存在但读不了的目录反复 mkdir，且超时判定的错被吞掉。
+       */
+      if (!isMissingEntry(err)) throw err
     }
+    await pMkdir(sftp, current).catch((err: unknown) => {
+      // 并发下别人刚建好（或目标其实存在）：按已存在处理，其余照抛
+      if (!isExistsEntry(err)) throw err
+    })
   }
 }
 
@@ -2493,12 +2863,16 @@ async function transferUploadDir(
    * 不能静默漏传 —— 用户以为整个目录都传上去了才是真事故。
    */
   const { files, dirs, links, truncated } = await walkLocalTree(localDir, UPLOAD_FILE_LIMIT)
+  // 大目录的遍历本身可能几十秒，中途取消必须能立刻停下，别等文件列表拿全
+  await checkpoint(ctl)
 
   // 目录里一个文件都没有时也要把目录本身建出来，否则「上传文件夹」看起来毫无反应
   if (ctl.keepRoot) await ensureRemoteDir(chan, remoteDir)
 
   // 先把目录全部建好（父在前），空目录才不会丢
   for (const d of dirs) {
+    // 几万个空目录的 mkdir 也是一串往返，取消要在这条循环里生效
+    await checkpoint(ctl)
     await ensureRemoteDir(chan, joinRemote(remoteDir, d))
   }
 
@@ -2574,9 +2948,14 @@ async function transferUploadDir(
     notes.push(`文件数超过 ${UPLOAD_FILE_LIMIT} 上限，已只上传前 ${UPLOAD_FILE_LIMIT} 个`)
   }
   if (failed.length > 0) throw new TransferPartialError(failed, notes.join('；'))
-  if (links.length > 0 || truncated || skipped > 0) {
-    // 只跳过链接/命中上限、文件全成功：不算失败，但也不能悄悄咽下去
-    emit(eventOf(ctl, taskId, 'running', { note: notes.join('；') }))
+  // 遍历已结束、马上要报 done：这里补一个暂停点，否则用户刚按下的暂停会被 done 吞掉
+  await checkpoint(ctl)
+  if (notes.length > 0) {
+    // 只跳过链接/命中上限、文件全成功：不算失败，但也不能悄悄咽下去。
+    // 判据用 notes 而不是各计数器的或：空目录也要提示「没有文件」，
+    // 原来那条 notes 拼好了却没机会发出去。
+    ctl.note = notes.join('；')
+    emit(eventOf(ctl, taskId, 'running', { note: ctl.note }))
   }
 }
 
@@ -2613,14 +2992,16 @@ async function transferDownloadDir(
 
   // 先把远端目录结构（含空目录）在本地建出来，否则下载完的空目录会凭空消失
   for (const d of dirs) {
-    await fs.mkdir(join(localDir, ...d.rel.split('/')), { recursive: true })
+    // 目录多的站点，mkdir 循环也能跑很久，取消要在这里生效
+    await checkpoint(ctl)
+    await fs.mkdir(join(localDir, ...safeRelativeSegments(d.rel)), { recursive: true })
   }
 
   let done = 0
   const failed: Array<{ path: string; message: string }> = []
   for (const f of files) {
     await checkpoint(ctl)
-    const target = join(localDir, ...f.rel.split('/'))
+    const target = join(localDir, ...safeRelativeSegments(f.rel))
     try {
       await downloadFileChunked(chan, ctl, f.full, target, () => undefined, dirHooks)
     } catch (err) {
@@ -2656,9 +3037,12 @@ async function transferDownloadDir(
     notes.push(`文件数超过 ${DOWNLOAD_FILE_LIMIT} 上限，已只下载前 ${DOWNLOAD_FILE_LIMIT} 个`)
   }
   if (failed.length > 0) throw new TransferPartialError(failed, notes.join('；'))
-  if (links.length > 0 || truncated) {
-    // 只跳过链接/命中上限、文件全成功：不算失败，但也不能悄悄咽下去
-    emit(eventOf(ctl, taskId, 'running', { note: notes.join('；') }))
+  // 遍历已结束、马上要报 done：这里补一个暂停点，否则用户刚按下的暂停会被 done 吞掉
+  await checkpoint(ctl)
+  if (notes.length > 0) {
+    // 判据用 notes：空目录的提示同样要发出，不能只在有链接/截断时才发
+    ctl.note = notes.join('；')
+    emit(eventOf(ctl, taskId, 'running', { note: ctl.note }))
   }
 }
 
@@ -2705,12 +3089,17 @@ function bridgeShellHooks(
     isPaused: () => ctl.paused,
     isCancelled: () => ctl.cancelled,
     waitIfPaused: async () => {
-      if (!ctl.paused) return
-      ctl.release?.()
-      while (ctl.paused && !ctl.cancelled) {
+      // 与 checkpoint 同一套语义：挂起等待期间先让出并发位，醒来再重新排队拿
+      for (;;) {
+        if (ctl.cancelled) return
+        if (!ctl.paused) {
+          if (ctl.holding || !ctl.acquire) return
+          await ctl.acquire()
+          continue
+        }
+        ctl.release?.()
         await new Promise<void>((resolve) => ctl.waiters.push(resolve))
       }
-      if (!ctl.cancelled && !ctl.holding && ctl.acquire) await ctl.acquire()
     },
     onProgress: (transferred, total) => {
       if (!reportBytes) return
@@ -2719,6 +3108,14 @@ function bridgeShellHooks(
       const force = !announced && ctl.total > 0
       if (force) announced = true
       reporter.report(force)
+    },
+    /*
+     * 把通道控制块挂到 ctl 上：cancelTransfer 只有这一条路能真正掐断 shell 后端的
+     * 传输。registerStream 由 shellFs 在通道建好时同步调用（onChannel），
+     * onStdin 那个 setImmediate 之后才到，来不及。
+     */
+    registerStream: (ctrl) => {
+      ctl.abortStream = ctrl.abort
     }
   }
 }
@@ -2788,6 +3185,8 @@ async function transferUploadShellDir(
 
   if (ctl.keepRoot) await shellMkdir(client, remoteDir, true)
   for (const d of dirs) {
+    // 兼容模式每个目录一次往返，更要能在中途取消
+    await checkpoint(ctl)
     await shellMkdir(client, joinRemote(remoteDir, d), true)
   }
 
@@ -2841,7 +3240,10 @@ async function transferUploadShellDir(
     notes.push(`文件数超过 ${UPLOAD_FILE_LIMIT} 上限，已只上传前 ${UPLOAD_FILE_LIMIT} 个`)
   }
   if (failed.length > 0) throw new TransferPartialError(failed, notes.join('；'))
-  emit(eventOf(ctl, taskId, 'running', { note: notes.join('；') }))
+  // 同 SFTP 侧：遍历结束后、报 done 之前仍要能被暂停/取消打断
+  await checkpoint(ctl)
+  ctl.note = notes.join('；')
+  emit(eventOf(ctl, taskId, 'running', { note: ctl.note }))
 }
 
 /** 下载目录（shell 后端）：进度按「已完成文件数 / 总文件数」 */
@@ -2867,14 +3269,16 @@ async function transferDownloadShellDir(
   // 远端空目录也要在本地建出来，否则下载完目录结构会凭空少几层
   await fs.mkdir(localDir, { recursive: true })
   for (const d of dirs) {
-    await fs.mkdir(join(localDir, ...d.relPath.split('/')), { recursive: true })
+    // 同上传侧：目录多的站点，mkdir 循环必须能被取消打断
+    await checkpoint(ctl)
+    await fs.mkdir(join(localDir, ...safeRelativeSegments(d.relPath)), { recursive: true })
   }
 
   let done = 0
   const failed: Array<{ path: string; message: string }> = []
   for (const f of files) {
     await checkpoint(ctl)
-    const target = join(localDir, ...f.relPath.split('/'))
+    const target = join(localDir, ...safeRelativeSegments(f.relPath))
     await fs.mkdir(dirname(target), { recursive: true })
     try {
       await shellDownloadFile(client, f.remotePath, target, bridgeShellHooks(ctl, taskId, emit, false))
@@ -2904,8 +3308,11 @@ async function transferDownloadShellDir(
     notes.push(`文件数超过 ${DOWNLOAD_FILE_LIMIT} 上限，已只下载前 ${DOWNLOAD_FILE_LIMIT} 个`)
   }
   if (failed.length > 0) throw new TransferPartialError(failed, notes.join('；'))
-  if (truncated) {
-    emit(eventOf(ctl, taskId, 'running', { note: notes.join('；') }))
+  // 遍历已结束、马上要报 done：这里补一个暂停点，否则用户刚按下的暂停会被 done 吞掉
+  await checkpoint(ctl)
+  if (notes.length > 0) {
+    ctl.note = notes.join('；')
+    emit(eventOf(ctl, taskId, 'running', { note: ctl.note }))
   }
 }
 

@@ -47,7 +47,12 @@ esbuild.buildSync({
   stdin: {
     contents: `
       export * from './src/main/store/localFs'
-      export { assertBrowsableDir, assertSafeLocalPath } from './src/main/store/pathGuard'
+      export {
+        assertBrowsableDir,
+        assertSafeLocalPath,
+        assertSafeWriteDir,
+        assertSafeReadPath
+      } from './src/main/store/pathGuard'
     `,
     resolveDir: ROOT,
     loader: 'ts'
@@ -285,6 +290,112 @@ async function main() {
     : '/no-such-guard-test'
   await expectThrow('localDelete 拒绝系统目录下非授权子路径', () => M.localDelete([sysPath]))
 
+  /* ---------- 写入目录守卫 assertSafeWriteDir & 只读守卫 assertSafeReadPath ---------- */
+  const homeDir = require('node:os').homedir()
+  try {
+    M.assertSafeWriteDir(homeDir, '下载目录')
+    check('assertSafeWriteDir 允许 homedir()（默认双栏下载落点）', true)
+  } catch (e) {
+    check('assertSafeWriteDir 允许 homedir()（默认双栏下载落点）', false, e.message)
+  }
+
+  if (process.platform === 'win32') {
+    const sysDrive = (process.env.SystemDrive || 'C:').toUpperCase()
+    const otherDrive = sysDrive === 'D:' ? 'E:\\' : 'D:\\'
+    try {
+      M.assertSafeWriteDir(otherDrive, '下载目录')
+      check(`assertSafeWriteDir 允许非系统盘根目录 ${otherDrive}`, true)
+    } catch (e) {
+      check(`assertSafeWriteDir 允许非系统盘根目录 ${otherDrive}`, false, e.message)
+    }
+    try {
+      M.assertSafeWriteDir(j('', '', 'nas', 'share', 'dl'), '下载目录')
+      check('assertSafeWriteDir 允许 UNC 共享下载目录', true)
+    } catch (e) {
+      check('assertSafeWriteDir 允许 UNC 共享下载目录', false, e.message)
+    }
+    await expectGuardReject(
+      `assertSafeWriteDir 拒绝系统盘根目录 ${sysDrive}\\`,
+      () => M.assertSafeWriteDir(`${sysDrive}\\`, '下载目录'),
+      '关键位置'
+    )
+    const sysRoot = process.env.SystemRoot || `${sysDrive}\\Windows`
+    await expectGuardReject(
+      'assertSafeWriteDir 拒绝 System32',
+      () => M.assertSafeWriteDir(path.join(sysRoot, 'System32'), '下载目录'),
+      '关键位置'
+    )
+    await expectGuardReject(
+      'assertSafeWriteDir 拒绝尾点绕过 C:\\Windows.\\System32',
+      () => M.assertSafeWriteDir(`${sysRoot}.\\System32`, '下载目录'),
+      '关键位置'
+    )
+  } else {
+    await expectGuardReject(
+      'assertSafeWriteDir 拒绝 POSIX 根目录 /',
+      () => M.assertSafeWriteDir('/', '下载目录'),
+      '关键位置'
+    )
+    await expectGuardReject(
+      'assertSafeWriteDir 拒绝 /etc',
+      () => M.assertSafeWriteDir('/etc', '下载目录'),
+      '关键位置'
+    )
+  }
+
+  // assertSafeReadPath：放行普通文件与 UNC，拒绝直接和软链指向的 secrets.json
+  const readableFile = path.join(work, 'ok-read.bin')
+  fs.writeFileSync(readableFile, 'ok')
+  try {
+    M.assertSafeReadPath(readableFile, '上传文件')
+    check('assertSafeReadPath 允许普通本地文件', true)
+  } catch (e) {
+    check('assertSafeReadPath 允许普通本地文件', false, e.message)
+  }
+  if (process.platform === 'win32') {
+    try {
+      M.assertSafeReadPath(j('', '', 'nas', 'share', 'fw.bin'), 'TFTP 固件')
+      check('assertSafeReadPath 允许 UNC 共享只读文件', true)
+    } catch (e) {
+      check('assertSafeReadPath 允许 UNC 共享只读文件', false, e.message)
+    }
+  }
+  const secretDataDir = path.join(userData, 'data')
+  fs.mkdirSync(secretDataDir, { recursive: true })
+  const secretsFile = path.join(secretDataDir, 'secrets.json')
+  fs.writeFileSync(secretsFile, '{}')
+  await expectGuardReject(
+    'assertSafeReadPath 拒绝直接读取 secrets.json',
+    () => M.assertSafeReadPath(secretsFile, '上传文件'),
+    '应用凭据文件'
+  )
+
+  // NTFS junction（Windows 无需管理员权限）/ POSIX 软链：
+  // 1) 指向 userData/data 的联接点不能绕过 secrets.json 守卫
+  // 2) 指向系统目录的联接点下 2+ 层不存在子目录不能绕过 assertSafeWriteDir
+  const linkType = process.platform === 'win32' ? 'junction' : 'dir'
+  const credLink = path.join(work, 'cred-junc')
+  const sysLink = path.join(work, 'sys-junc')
+  const realSysDir = process.platform === 'win32'
+    ? path.join(process.env.SystemRoot || 'C:\\Windows', 'System32')
+    : '/etc'
+  try {
+    fs.symlinkSync(secretDataDir, credLink, linkType)
+    await expectGuardReject(
+      'assertSafeReadPath 拒绝经联接点/软链读取 secrets.json',
+      () => M.assertSafeReadPath(path.join(credLink, 'secrets.json'), '上传文件'),
+      '应用凭据文件'
+    )
+    fs.symlinkSync(realSysDir, sysLink, linkType)
+    await expectGuardReject(
+      'assertSafeWriteDir 拒绝联接点/软链下 2+ 层不存在子目录穿透系统目录',
+      () => M.assertSafeWriteDir(path.join(sysLink, 'no-such-a', 'no-such-b', 'evil.dll'), '下载目录'),
+      '关键位置'
+    )
+  } finally {
+    try { fs.rmSync(credLink, { recursive: true, force: true }) } catch { /* ignore */ }
+    try { fs.rmSync(sysLink, { recursive: true, force: true }) } catch { /* ignore */ }
+  }
   /* ---------- 清理 ---------- */
   fs.rmSync(work, { recursive: true, force: true })
   fs.rmSync(outsideParent, { recursive: true, force: true })

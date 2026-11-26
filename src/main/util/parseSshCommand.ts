@@ -93,6 +93,14 @@ export function parseSshCommand(raw: string): ParsedSshCommand {
       // 其余无参 flag（-v -N -q -T ...）忽略
     } else {
       positional.push(t)
+      /*
+       * 第二个非选项参数开始就是远端命令，到此为止。
+       * 远端命令里的 -p / -l / -i 不是 SSH 自己的选项
+       * （ssh host grep -l -i foo 会把 foo 当私钥），继续解析就会污染结果。
+       * 但只认「第二个位置参数」而不是「第一个」：ssh host -p 2222 这种
+       * 把选项写在主机名后面的写法很常见，必须继续解析。
+       */
+      if (positional.length > 1) break
     }
   }
 

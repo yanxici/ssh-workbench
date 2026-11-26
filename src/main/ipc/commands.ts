@@ -1,8 +1,7 @@
-import { BrowserWindow, dialog } from 'electron'
 import { promises as fs } from 'node:fs'
 import { IPC } from '@shared/ipc'
 import type { CommandInput, HistoryFilter } from '@shared/types'
-import { dialogParent } from '../windowRef'
+import { showOpenDialog, showSaveDialog } from '../windowRef'
 import { dialogDefaultPath, rememberDialogPick } from '../util/dialogDirs'
 import { handle } from './handle'
 import {
@@ -31,7 +30,7 @@ export function registerCommandIpc(): void {
   handle(IPC.CMD_TOUCH, (id: string) => touchCommand(id))
 
   handle(IPC.CMD_IMPORT, async (mode: 'merge' | 'replace' = 'merge') => {
-    const res = await dialog.showOpenDialog(dialogParent() as BrowserWindow, {
+    const res = await showOpenDialog({
       title: '导入常用命令',
       defaultPath: dialogDefaultPath('file'),
       filters: [{ name: 'JSON 文件', extensions: ['json'] }],
@@ -51,7 +50,7 @@ export function registerCommandIpc(): void {
   handle(IPC.CMD_EXPORT, async () => {
     const cmds = await exportCommands()
     const stamp = new Date().toISOString().slice(0, 10)
-    const res = await dialog.showSaveDialog(dialogParent() as BrowserWindow, {
+    const res = await showSaveDialog({
       title: '导出常用命令',
       defaultPath: dialogDefaultPath('file', `ssh-workbench-commands-${stamp}.json`),
       filters: [{ name: 'JSON 文件', extensions: ['json'] }]

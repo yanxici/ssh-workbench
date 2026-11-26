@@ -18,6 +18,7 @@ import { cn, formatBytes, formatRelativeTime } from '@/lib/utils'
 import { useTransferStore, isFailedRecord, isLiveRecord } from '@/stores/transferStore'
 import { useSftpStore } from '@/stores/sftpStore'
 import { useSessionStore } from '@/stores/sessionStore'
+import { useSettingsStore } from '@/stores/settingsStore'
 import { useToastStore } from '@/stores/toastStore'
 import { amountText, basename, locateKind, parentOf, STATUS_CLASS, STATUS_LABEL } from '@/lib/transferFormat'
 import { getZmodemRecordProgress, watchZmodem, type ZmodemProgress } from '@/lib/zmodem'
@@ -145,18 +146,26 @@ export function TransferTab(): React.JSX.Element {
 function DownloadDirRow(): React.JSX.Element {
   const [dir, setDir] = useState('')
   const [busy, setBusy] = useState(false)
+  const downloadDir = useSettingsStore((s) => s.settings.downloadDir)
+  const update = useSettingsStore((s) => s.update)
 
+  /*
+   * 订阅 settings.downloadDir：设置页改成别的目录后，这里要跟着刷新。
+   * 原来用空依赖只拉一次，两侧各写各的，改了一边另一边永远是开面板时的旧值。
+   */
   useEffect(() => {
     void call(window.api.sftp.downloadsDir(), { silent: true }).then((d) => {
       if (d) setDir(d)
     })
-  }, [])
+  }, [downloadDir])
 
   const pick = async (): Promise<void> => {
     setBusy(true)
     const res = await call(window.api.sftp.pickDownloadDir(), { errorTitle: '选择下载目录失败' })
     setBusy(false)
     if (!res || res.canceled) return
+    // 必须落盘，只 setDir 的话重启就回去了，设置页也永远不显示「恢复默认」
+    await update({ downloadDir: res.dir })
     setDir(res.dir)
     useToastStore.getState().push({
       kind: 'success',

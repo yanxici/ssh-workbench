@@ -1,12 +1,13 @@
-import { BrowserWindow, dialog, shell } from 'electron'
+import { shell } from 'electron'
 import { promises as fs } from 'node:fs'
 import { generateHtml, generateMarkdown } from '../util/reportFormat'
-import { createZip, type ZipEntry } from '../util/zip'
+import { createZip, zipEntryName, type ZipEntry } from '../util/zip'
 import { listConnections, listHistory, listProfiles } from './repository'
 import { backupStore } from './backups'
 import { readReport } from './reports'
 import { listSessionLogs } from './sessionLogs'
 import { dialogDefaultPath, rememberDialogPick } from '../util/dialogDirs'
+import { showSaveDialog } from '../windowRef'
 
 /**
  * 诊断报告一键打包 —— 把「报告 + 会话日志 + 命令历史 + 配置备份 + 设备档案」
@@ -18,6 +19,40 @@ import type { BundleOptions, BundlePreview } from '@shared/types'
 export type { BundleOptions, BundlePreview }
 
 const MAX_BACKUP_FILES_PER_BACKUP = 200
+
+/** 录制文件名的时间戳前缀：YYYYMMDD-HHMMSS- */
+const STAMP_RE = /^\d{8}-\d{6}-/
+
+/**
+ * 这个日志文件是否属于给定连接。
+ *
+ * 原来是 `name.includes(connectionName)` —— 连接名是 prod / 1 / 2026 这种短词时，
+ * 会把别的客户同名字段的录屏一并打进支持包（私密终端内容泄漏给第三方），
+ * 而带 `:` 的连接名在文件名里被 sanitize 成 `_`，反而一个都匹配不上。
+ * 所以两侧都按录制器同一套规则清洗，再要求「时间戳之后的部分完全相等」。
+ */
+function logBelongsTo(name: string, connectionName: string): boolean {
+  const stem = name.replace(/\.[^.]+$/, '')
+  /*
+   * 同一秒开两个同名会话时，录制器会把后一个退到「名-2」「名-3」
+   * （见 ssh/recorder.ts 的 reserveBase）。只比完全相等的话，第二条录屏
+   * 就被判成「别的连接的」而漏进支持包 —— 用户恰恰最需要那一份。
+   * 判据改成「名」或「名-N」，N 限纯数字，避免把 prod-legacy 误认成 prod。
+   */
+  const rawBody = stem.replace(STAMP_RE, '')
+  const expected = sanitizeLogName(connectionName)
+  /*
+   * 同秒重名后缀现在是 '#{2}'（见 ssh/recorder.ts 的 reserveBase），只剥 #N。
+   * 旧实现剥 /-\d+$/：'web-1' 被剥成 'web' —— 既丢掉 web-1 自己的录屏，
+   * 又把它的终端内容错打进 web 的外发诊断包。
+   */
+  return rawBody === expected || rawBody.replace(/#\d+$/, '') === expected
+}
+
+/** 与 ssh/recorder.ts 的 sanitize 保持一致（那边是模块私有，这里只能复制规则） */
+function sanitizeLogName(name: string): string {
+  return name.replace(/[\\/:*?"<>|#]/g, '_').trim() || 'session'
+}
 
 async function resolveContext(reportId: string): Promise<{
   report: Awaited<ReturnType<typeof readReport>>
@@ -34,9 +69,9 @@ async function resolveContext(reportId: string): Promise<{
 export async function bundlePreview(reportId: string): Promise<BundlePreview> {
   const { report, connectionId } = await resolveContext(reportId)
 
-  // 会话日志：录制文件名形如 {时间戳}-{会话名}.cast，按连接名匹配
+  // 会话日志：录制文件名形如 {时间戳}-{会话名}.cast，按连接名精确匹配
   const logs = await listSessionLogs()
-  const matchedLogs = logs.filter((l) => l.name.includes(report.connectionName))
+  const matchedLogs = logs.filter((l) => logBelongsTo(l.name, report.connectionName))
 
   const history = connectionId ? await listHistory({ connectionId, limit: 5000 }) : []
 
@@ -122,12 +157,12 @@ export async function exportBundle(
   /* ---------- 会话日志 ---------- */
   if (options.includeLogs) {
     const logs = (await listSessionLogs())
-      .filter((l) => l.name.includes(report.connectionName))
+      .filter((l) => logBelongsTo(l.name, report.connectionName))
       .slice(0, 20)
     for (const log of logs) {
       try {
         const content = await fs.readFile(log.path)
-        entries.push({ name: `会话日志/${log.name}`, data: content })
+        entries.push({ name: zipEntryName(`会话日志/${log.name}`), data: content })
       } catch {
         /* 跳过读取失败 */
       }
@@ -161,9 +196,10 @@ export async function exportBundle(
         for (const file of detail.files) {
           if (count >= MAX_BACKUP_FILES_PER_BACKUP) break
           if (file.content === undefined) continue
-          const safePath = file.path.replace(/^\/+/, '').replace(/\.\./g, '_')
+          // 备份名与备份内路径都来自远端设备（可含 ../），必须走同一套清洗，
+          // 否则解压时条目会写到用户选定目录之外
           entries.push({
-            name: `配置备份/${detail.name}/${safePath}`,
+            name: zipEntryName(`配置备份/${detail.name}/${file.path}`),
             data: Buffer.from(file.content, 'utf-8')
           })
           count += 1
@@ -178,11 +214,11 @@ export async function exportBundle(
 
   const zip = createZip(entries)
 
-  const win = BrowserWindow.getFocusedWindow()
   const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')
-  const res = await dialog.showSaveDialog(win as BrowserWindow, {
+  const res = await showSaveDialog({
     title: '导出诊断打包（zip）',
-    defaultPath: dialogDefaultPath('backup', `${report.connectionName}-诊断打包-${stamp}.zip`),
+    // 连接名可由用户任意编辑（含 / \ : * ? " < > |），不净化会让默认文件名非法
+    defaultPath: dialogDefaultPath('backup', `${sanitizeLogName(report.connectionName)}-诊断打包-${stamp}.zip`),
     filters: [{ name: 'ZIP 压缩包', extensions: ['zip'] }]
   })
   if (res.canceled || !res.filePath) return { canceled: true }

@@ -370,7 +370,12 @@ export function resolveCdPath(cmdline: string, base: string, home: string): stri
       else return null
       continue
     }
-    const next = resolveArg(arg, base, home)
+    /*
+     * 相对路径要相对**上一条 cd 的结果**解析，不是相对解析起点。
+     * `cd /var && cd log` 的真实含义是 /var/log；
+     * 用 base 解析会得到 /root/log，之后所有补全和文件面板都指向错误目录。
+     */
+    const next = resolveArg(arg, result ?? base, home)
     if (!next) return null
     result = next
   }

@@ -1,5 +1,5 @@
 import type * as React from 'react'
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type { TunnelConfig, TunnelInput, TunnelType } from '@shared/types'
 import { isWildcardHost, needsLanGrant } from '@shared/bindHost'
 import { connectionTarget } from '@shared/serialDisplay'
@@ -91,7 +91,22 @@ export function TunnelEditor({
   onClose: () => void
 }): React.JSX.Element {
   const { t } = useI18n()
-  const connections = useConnectionStore((s) => s.connections)
+  /*
+   * 隧道只对 SSH 连接有意义：串口连接既没有 ssh2 通道，也没有可转发的远端端口。
+   * 后端本来就会拒绝，但下拉里仍然列出来，用户选完保存才被打回来 ——
+   * 顺手还能把「随连接自启」挂到串口上，结果那条永远不可能启动。
+   */
+  /*
+   * 选择器必须返回**原始引用**：Zustand 5 底层是 useSyncExternalStore，
+   * 在 selector 里 .filter() 每次都产生新数组，Object.is 恒为 false →
+   * React 立刻报 "The result of getSnapshot should be cached" 并无限重渲染。
+   * 过滤放在 useMemo 里，store 引用不变就不重算。
+   */
+  const allConnections = useConnectionStore((s) => s.connections)
+  const connections = useMemo(
+    () => allConnections.filter((c) => c.kind !== 'serial'),
+    [allConnections]
+  )
   const [form, setForm] = useState<FormState>(EMPTY)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)

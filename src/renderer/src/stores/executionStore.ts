@@ -29,8 +29,26 @@ interface ExecutionState {
   /** 等待变量填写 */
   pending: ExecutionRequest | null
   pendingValues: Record<string, string>
+  /**
+   * 弹窗弹出时锁定的目标会话。
+   *
+   * 没有它的话，填变量的几秒里切标签（点系统通知、Ctrl+Tab）就会把命令
+   * 打到新活动主机上 —— 与 danger.sessionId 同一个坑，只是这条路径更隐蔽：
+   * 变量框的「发送到终端」看起来永远发往「这台」机器。
+   */
+  pendingSessionId: string | null
   /** 等待危险确认 */
-  danger: { request: ExecutionRequest; finalText: string; values: Record<string, string> } | null
+  /**
+   * danger.sessionId 锁定「弹窗弹出时的那台主机」。
+   * 没有它的话，确认时用的是最新 activeId —— 弹窗期间按 Ctrl+Tab 或点系统通知
+   * 切了标签，rm -rf / reboot 就会直接打到另一台机器上。
+   */
+  danger: {
+    request: ExecutionRequest
+    finalText: string
+    values: Record<string, string>
+    sessionId: string
+  } | null
 
   requestRun: (request: ExecutionRequest) => void
   setPendingValue: (name: string, value: string) => void
@@ -56,12 +74,13 @@ export function isDangerous(finalText: string, confirmRequired: boolean): boolea
 export const useExecutionStore = create<ExecutionState>()((set, get) => {
   /** 真正发送到活动终端 */
   const send = async (
+    sessionId: string,
     request: ExecutionRequest,
     finalText: string,
     values: Record<string, string>
   ): Promise<void> => {
     const store = useSessionStore.getState()
-    const session = store.sessions.find((s) => s.id === store.activeId)
+    const session = store.sessions.find((s) => s.id === sessionId)
 
     if (!session) {
       useToastStore.getState().push({
@@ -109,20 +128,22 @@ export const useExecutionStore = create<ExecutionState>()((set, get) => {
 
   /** 变量已齐备（或无需变量）后的下一步：危险检查 → 发送 */
   const proceed = (
+    sessionId: string,
     request: ExecutionRequest,
     values: Record<string, string>
   ): void => {
     const finalText = renderTemplate(request.template, values)
     if (isDangerous(finalText, request.confirmRequired)) {
-      set({ danger: { request, finalText, values } })
+      set({ danger: { request, finalText, values, sessionId } })
       return
     }
-    void send(request, finalText, values)
+    void send(sessionId, request, finalText, values)
   }
 
   return {
     pending: null,
     pendingValues: {},
+    pendingSessionId: null,
     danger: null,
 
     requestRun: (request) => {
@@ -149,21 +170,22 @@ export const useExecutionStore = create<ExecutionState>()((set, get) => {
       )
 
       const effective: ExecutionRequest = { ...request, variables }
+      const sessionId = session.id
       if (variables.length === 0) {
-        proceed(effective, {})
+        proceed(sessionId, effective, {})
         return
       }
 
       const values: Record<string, string> = {}
       for (const v of variables) values[v.name] = v.defaultValue ?? ''
-      set({ pending: effective, pendingValues: values })
+      set({ pending: effective, pendingValues: values, pendingSessionId: sessionId })
     },
 
     setPendingValue: (name, value) =>
       set((s) => ({ pendingValues: { ...s.pendingValues, [name]: value } })),
 
     submitVariables: () => {
-      const { pending, pendingValues } = get()
+      const { pending, pendingValues, pendingSessionId } = get()
       if (!pending) return
       const missing = pending.variables.filter(
         (v) => v.required && !(pendingValues[v.name] ?? '').trim()
@@ -175,17 +197,49 @@ export const useExecutionStore = create<ExecutionState>()((set, get) => {
         })
         return
       }
-      set({ pending: null, pendingValues: {} })
-      proceed(pending, pendingValues)
+      if (!pendingSessionId) {
+        set({ pending: null, pendingValues: {}, pendingSessionId: null })
+        return
+      }
+      /*
+       * 目标会话已经关了（或掉线）就放弃，绝不退回 activeId：
+       * 那正是这条锁定要防的事 —— 把命令发给「此刻恰好在前台」的机器。
+       */
+      const target = useSessionStore.getState().sessions.find((s) => s.id === pendingSessionId)
+      if (!target || target.status !== 'connected') {
+        set({ pending: null, pendingValues: {}, pendingSessionId: null })
+        useToastStore.getState().push({
+          kind: 'warning',
+          title: '目标终端已关闭，命令未发送',
+          detail: '请重新选择终端后再执行'
+        })
+        return
+      }
+      set({ pending: null, pendingValues: {}, pendingSessionId: null })
+      proceed(pendingSessionId, pending, pendingValues)
     },
 
-    cancelVariables: () => set({ pending: null, pendingValues: {} }),
+    cancelVariables: () => set({ pending: null, pendingValues: {}, pendingSessionId: null }),
 
     confirmDanger: () => {
       const { danger } = get()
       if (!danger) return
       set({ danger: null })
-      void send(danger.request, danger.finalText, danger.values)
+      /*
+       * 发往触发弹窗时锁定的那台主机，而不是此刻的 activeId。
+       * 目标已经不在线时宁可放弃，也不能「就近」打到别的机器上。
+       */
+      const store = useSessionStore.getState()
+      const target = store.sessions.find((s) => s.id === danger.sessionId)
+      if (!target || target.status !== 'connected') {
+        useToastStore.getState().push({
+          kind: 'warning',
+          title: '目标设备已断开，危险操作已取消',
+          detail: '请重新在目标终端上执行'
+        })
+        return
+      }
+      void send(danger.sessionId, danger.request, danger.finalText, danger.values)
     },
 
     cancelDanger: () => set({ danger: null })

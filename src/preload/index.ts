@@ -486,18 +486,23 @@ export const api = {
     /** 选一次保存文件夹（多文件 sz 只问一次） */
     pickDir: (): Promise<IpcResult<{ canceled: boolean; token?: string; dir?: string }>> =>
       invoke(IPC.ZM_PICK_DIR),
-    /** 在已选目录建目标文件（重名自动编号） */
+    /** 在已选目录建目标文件（开启 skipExisting 时跳过同名同大小已下载文件，其余重名自动编号） */
     saveBegin: (
       token: string,
-      suggestedName: string
-    ): Promise<IpcResult<{ saveId: string; path: string }>> =>
-      invoke(IPC.ZM_SAVE_BEGIN, token, suggestedName),
+      suggestedName: string,
+      opts?: { skipExisting?: boolean; size?: number | null; mtime?: number | null }
+    ): Promise<
+      IpcResult<
+        | { skipped: true; path: string; size: number }
+        | { skipped?: false; saveId: string; path: string }
+      >
+    > => invoke(IPC.ZM_SAVE_BEGIN, token, suggestedName, opts),
     /** 追加一块数据，避免整份文件驻留渲染进程内存 */
     saveAppend: (saveId: string, base64: string): Promise<IpcResult<{ bytes: number }>> =>
       invoke(IPC.ZM_SAVE_APPEND, saveId, base64),
     saveFinish: (
       saveId: string,
-      opts?: { canceled?: boolean }
+      opts?: { canceled?: boolean; aborted?: boolean }
     ): Promise<IpcResult<{ path: string; size: number }>> =>
       invoke(IPC.ZM_SAVE_FINISH, saveId, opts),
     sendBytes: (

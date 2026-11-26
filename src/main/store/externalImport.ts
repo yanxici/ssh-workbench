@@ -121,6 +121,18 @@ function normalizePort(value: number): number {
 }
 
 /**
+ * ssh_config 的值可以加双引号（`HostName "my host"`、`IdentityFile "~/a b"`）。
+ *
+ * 不去引号的话，主机名会带着引号去解析 DNS，私钥路径也会带着引号 stat。
+ * 只处理成对的双引号：单个引号是用户的笔误，原样留着比猜更安全。
+ */
+function dequote(value: string): string {
+  const v = value.trim()
+  if (v.length >= 2 && v.startsWith('"') && v.endsWith('"')) return v.slice(1, -1)
+  return v
+}
+
+/**
  * 去重键 —— 必须与 store/connTransfer.ts 的 dupKey 完全一致。
  *
  * 两处导入用不同的键，会导致「从 swconn 导入过的连接，再从 Xshell 导入同一台机器时
@@ -136,6 +148,8 @@ function dupKey(c: { name: string; host: string; port: number; username: string 
 
 interface SshConfigBlock {
   aliases: string[]
+  /** 该块只有 `!host` 负向模式：合法但导入不出连接，也不算无效 */
+  negativeOnly?: boolean
   hostName?: string
   user?: string
   port?: number
@@ -152,12 +166,39 @@ function splitOption(line: string): { key: string; value: string } | null {
   return null
 }
 
-/** ProxyJump 可以是 a,b、user@a:22；只留主机名，用户/端口在导入侧丢掉 */
+/**
+ * 按空白拆分的同时尊重双引号。
+ *
+ * `Host "my server" web` 是两个别名，不是三个 —— 直接 split(/\s+/) 会得到
+ * '"my'、'server"' 这种碎块，导入后多出两条连不上的连接。
+ */
+function splitPatterns(value: string): string[] {
+  const out: string[] = []
+  let cur = ''
+  let quoted = false
+  for (const ch of value) {
+    if (ch === '"') {
+      quoted = !quoted
+      continue
+    }
+    if (!quoted && /\s/.test(ch)) {
+      if (cur.length > 0) out.push(cur)
+      cur = ''
+      continue
+    }
+    cur += ch
+  }
+  if (cur.length > 0) out.push(cur)
+  return out
+}
+
+/** ProxyJump 可以是 a,b、"user@a:22"；只留主机名，用户/端口在导入侧丢掉 */
 function parseJumpNames(value?: string): string[] {
   if (!value) return []
   return value
     .split(',')
-    .map((s) => s.trim())
+    // 每一跳都可能被引号包着（ProxyJump "bastion 1"），不逐个去引号会带着引号去查连接
+    .map((s) => dequote(s))
     .filter(Boolean)
     .map((s) => {
       const noUser = s.includes('@') ? s.slice(s.lastIndexOf('@') + 1) : s
@@ -184,14 +225,29 @@ export function parseSshConfig(content: string): ParsedExternalBatch {
     if (!opt) continue
     if (opt.key === 'host' || opt.key === 'match') {
       if (cur) blocks.push(cur)
-      cur = opt.key === 'host' ? { aliases: opt.value.split(/\s+/).filter((s) => s.length > 0) } : null
+      // '!host' 是 ssh_config 的负向模式（"除这台以外都匹配"），不是连接名
+      if (opt.key === 'host') {
+        const patterns = splitPatterns(opt.value)
+        const positive = patterns.filter((s) => !s.startsWith('!'))
+        cur = {
+          aliases: positive,
+          /*
+           * `Host !prod` 是「除 prod 外都匹配」的负向模式，本身不产生连接。
+           * 只写负向模式的块属于合法的 Defaults 写法，不能算无效块 ——
+           * 原来它被当成「Host 后面没写名字」，直接计进 invalid 吓人。
+           */
+          negativeOnly: positive.length === 0 && patterns.length > 0
+        }
+      } else {
+        cur = null
+      }
       continue
     }
     if (!cur) continue
-    if (opt.key === 'hostname') cur.hostName = opt.value
-    else if (opt.key === 'user') cur.user = opt.value
-    else if (opt.key === 'port') cur.port = Number.parseInt(opt.value, 10)
-    else if (opt.key === 'identityfile') cur.identityFile = opt.value
+    if (opt.key === 'hostname') cur.hostName = dequote(opt.value)
+    else if (opt.key === 'user') cur.user = dequote(opt.value)
+    else if (opt.key === 'port') cur.port = Number.parseInt(dequote(opt.value), 10)
+    else if (opt.key === 'identityfile') cur.identityFile = dequote(opt.value)
     else if (opt.key === 'proxyjump') cur.proxyJump = opt.value
   }
   if (cur) blocks.push(cur)
@@ -201,7 +257,7 @@ export function parseSshConfig(content: string): ParsedExternalBatch {
 
   for (const block of blocks) {
     if (block.aliases.length === 0) {
-      invalid++
+      if (!block.negativeOnly) invalid++
       continue
     }
     if (block.aliases.some(isWildcard)) continue
@@ -245,8 +301,21 @@ export async function fileExists(p: string): Promise<boolean> {
  *  MobaXterm (.mxtsessions)
  * ------------------------------------------------------------------ */
 
-/** MobaXterm 的会话行是 <名字>=#<协议号>#0%host%port%user%... */
-const MOBA_SSH_PROTOCOL = '109'
+/**
+ * MobaXterm 的会话行是 <名字>=#<图标号>#<会话类型>%host%port%user%...
+ *
+ * 注意第一个 # 段是**用户可自由更换的图标编号**（109 只是默认 SSH 图标），
+ * 第二个 # 段才是会话类型。旧实现按 #1 判协议，于是把图标改成 120 的 SSH
+ * 全跳过了，而图标留在 109 的 RDP/VNC 反而被当成 SSH 导入（R-H25）。
+ */
+const MOBA_SESSION_SSH = '0'
+/**
+ * 7 = SFTP。走同一套主机/端口/账号，导入成 SSH 连接一样能用；
+ * 不认它会把它们算进「跳过 N 条非 SSH」，用户看着像丢了东西。
+ */
+const MOBA_SESSION_SFTP = '7'
+/** 远古单 # 格式没有类型段，那时第一段直接就是 109 图标 */
+const MOBA_LEGACY_SSH_ICON = '109'
 
 /** 书签名恰好是协议名时（很常见）用主机名兜底，避免一堆叫 SSH 的连接 */
 const MOBA_PROTOCOL_TOKENS = new Set([
@@ -268,7 +337,8 @@ function mobaGroupPath(value: string): string {
 }
 
 interface MobaEntry {
-  protocol: string
+  /** 是否会话类型为 SSH 系（SSH / SFTP） */
+  ssh: boolean
   host: string
   port: number
   username: string
@@ -279,11 +349,20 @@ function parseMobaEntry(value: string): MobaEntry | null {
   if (parts.length < 3) return null
   const head = parts[0].trim()
   if (!head.startsWith('#')) return null
-  const protocol = head.split('#')[1] ?? ''
+  const hashParts = head.split('#')
+  /*
+   * hashParts[0] 是 '#' 前的空串，[1] 图标号，[2] 会话类型。
+   * 类型段为空（老文件）才回退看图标号 —— 那时两者恰好是同一件事。
+   */
+  const sessionType = (hashParts[2] ?? '').trim()
+  const ssh =
+    sessionType.length > 0
+      ? sessionType === MOBA_SESSION_SSH || sessionType === MOBA_SESSION_SFTP
+      : (hashParts[1] ?? '').trim() === MOBA_LEGACY_SSH_ICON
   const host = (parts[1] ?? '').trim()
   if (host.length === 0) return null
   return {
-    protocol,
+    ssh,
     host,
     port: normalizePort(Number.parseInt((parts[2] ?? '').trim(), 10)),
     username: (parts[3] ?? '').trim()
@@ -316,7 +395,7 @@ export function parseMobaXterm(content: string): ParsedExternalBatch {
     if (key === 'ImgNum' || key === 'SubRepColor') continue
     const entry = parseMobaEntry(value)
     if (!entry) continue
-    if (entry.protocol !== MOBA_SSH_PROTOCOL) {
+    if (!entry.ssh) {
       // RDP / VNC / Telnet 我们连不了，但要如实计数告诉用户「跳过了多少」
       skippedNonSsh++
       continue
@@ -622,11 +701,22 @@ async function collectBatch(
 ): Promise<CollectedBatch> {
   const files = await expandPaths(source, paths)
   const connections: ParsedExternalConnection[] = []
+  const seen = new Set<string>()
   let skippedNonSsh = 0
   let invalid = 0
   for (const file of files) {
     const batch = await parseFile(source, file)
-    connections.push(...batch.connections)
+    for (const c of batch.connections) {
+      /*
+       * 批内去重。同一个 Host 块里的多个别名、或者被扫到的两个文件里写了同一条，
+       * 都会在同一个批次里产生重复键 —— 预览里显示 N 条、入库也只该是 N 条，
+       * 否则「导入了 12 条」实际库里只有 8 条，用户只会以为工具坏了。
+       */
+      const key = dupKey(c)
+      if (seen.has(key)) continue
+      seen.add(key)
+      connections.push(c)
+    }
     skippedNonSsh += batch.skippedNonSsh
     invalid += batch.invalid
   }
@@ -708,10 +798,14 @@ export async function applyExternalImport(
    * ProxyJump 可以指向配置文件里排在后面的块（bastion 常常写在最后），
    * 边解析边绑定会漏掉这种前向引用；指向库里已有连接也要能连上。
    */
-  const resolveJumps = (parsed: ParsedExternalConnection): string[] | undefined => {
+  const resolveJumps = (
+    parsed: ParsedExternalConnection,
+    selfId: string
+  ): string[] | undefined => {
     const ids = parsed.jumpNames
       .map((n) => nameToId.get(n))
-      .filter((id): id is string => Boolean(id))
+      // 自引用（ProxyJump 写成了自己）会变成「自己跳自己」，连不出去且删不掉
+      .filter((id): id is string => Boolean(id) && id !== selfId)
     return ids.length > 0 ? ids : undefined
   }
 
@@ -731,7 +825,7 @@ export async function applyExternalImport(
       tags: [],
       createdAt: now,
       updatedAt: now,
-      proxyJump: resolveJumps(p)
+      proxyJump: resolveJumps(p, plan.id)
     }
     if (plan.hit) {
       /*
@@ -749,7 +843,7 @@ export async function applyExternalImport(
         remark: hit.remark,
         proxy: hit.proxy,
         legacyAlgorithms: hit.legacyAlgorithms,
-        proxyJump: resolveJumps(p)
+        proxyJump: resolveJumps(p, plan.id)
       })
       continue
     }

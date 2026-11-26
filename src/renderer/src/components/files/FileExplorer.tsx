@@ -193,7 +193,31 @@ export function FileExplorer({
     setHome('')
     setOpenDirs(new Set())
     setSelected(null)
-  }, [sessionId])
+    /*
+     * 换会话必须把这些一起清掉，否则两台机器上同名路径（/root、/tmp…）会串味：
+     *   - subDirs / pendingRef：上一台主机的子目录列表会被当成这一台的直接上屏
+     *   - lastSigRef：签名只含目录名时，「同目录、不同主机」判定成没换 → 不重拉
+     *   - pendingDelete / dialog：确认框留着上一台的文件路径，回车就删到新主机上
+     */
+    setSubDirs(new Map())
+    setDirErrors(new Map())
+    pendingRef.current.clear()
+    lastSigRef.current = ''
+    setPendingDelete(null)
+    setDialog(null)
+    setMenuTarget(null)
+    /*
+     * 目录列表本身也要清：setRoots(null) 让下面那条 effect 在新会话的
+     * currentDir 就绪前不渲染上一台主机的文件（否则两台机器同名目录会
+     * 闪一帧别人的文件）。右键菜单是纯 UI 状态，换会话后指向的是已经不
+     * 存在的行，不关就会对着空指针操作。
+     */
+    setRoots(null)
+    setRootError(null)
+    setShowAllRows(false)
+    closeMenu()
+    // closeMenu 由 useContextMenu 用 useCallback 定住身份，进依赖数组不会让本 effect 重跑
+  }, [sessionId, closeMenu])
 
   useEffect(() => {
     if (!sessionId || !connected) {
@@ -331,13 +355,15 @@ export function FileExplorer({
     if (!sessionId || !connected || !currentDir) return
     let cancelled = false
 
-    const sig = `${currentDir}\u0000${version}`
+    // 签名带 sessionId：两台主机停在同名目录时，不能被判定成「没换」
+    const dirKey = `${sessionId}\u0000${currentDir}\u0000`
+    const sig = `${dirKey}${version}`
     const prevSig = lastSigRef.current
     lastSigRef.current = sig
     /* 同目录但版本号变了 = 上传/删除/改名/点刷新 → 强制重拉（绕过 5s 新鲜期） */
-    const forced = prevSig.startsWith(`${currentDir}\u0000`) && prevSig !== sig
+    const forced = prevSig.startsWith(dirKey) && prevSig !== sig
     /* 换目录 / 换会话 → 上一层留下的展开数据全部作废 */
-    if (!prevSig.startsWith(`${currentDir}\u0000`)) {
+    if (!prevSig.startsWith(dirKey)) {
       pendingRef.current.clear()
       setSubDirs((prev) => (prev.size === 0 ? prev : new Map()))
       setDirErrors((prev) => (prev.size === 0 ? prev : new Map()))
@@ -642,7 +668,15 @@ export function FileExplorer({
 
   /** 当前右键的目标集合：行 → 该行；空白处 → 当前目录 */
   const menuItems = (target: RemoteFile | null): MenuEntry[] => {
-    const dir = target ? (target.type === 'directory' ? target.path : currentDir) : currentDir
+    /*
+     * 文件行的目标目录是它自己所在的目录，不是 currentDir：
+     * 树里能右键到展开深处的文件，用 currentDir 会把上传/新建落在外层目录。
+     */
+    const dir = target
+      ? target.type === 'directory'
+        ? target.path
+        : remoteDirname(target.path)
+      : currentDir
     return [
       ...(target && target.type !== 'directory'
         ? [
@@ -858,7 +892,6 @@ export function FileExplorer({
         </div>
       )}
 
-      {/* 工作区快捷入口 */}
       {tab === 'workspace' && (
         <div className="shrink-0 border-b border-edge px-1.5 py-1.5">
           <div className="mb-1 px-1 text-3xs font-semibold uppercase tracking-wider text-ink-3/80">
@@ -980,8 +1013,13 @@ export function FileExplorer({
                 }}
                 onDoubleClick={() => {
                   if (isDir) {
-                    setCurrentDir(file.path)
-                    toggleDir(file.path)
+                    /*
+                     * 双击 = 进入该目录，而进入目录会清空 openDirs（见 goto）。
+                     * 旧写法先 setCurrentDir 再 toggleDir：toggle 把路径塞进 openDirs
+                     * 之后立刻被 goto/重拉的清空逻辑覆盖不掉，结果回到父级时
+                     * 那个目录还固执地保持着展开态。这里只做导航，不碰展开集合。
+                     */
+                    goto(file.path)
                   } else {
                     void openEditor(sessionId, file.path)
                   }
@@ -1070,7 +1108,12 @@ export function FileExplorer({
           if (kind === 'rename' && menuTarget) {
             void renameTo(menuTarget, value)
           } else if (kind === 'mkdir') {
-            const parent = menuTarget?.type === 'directory' ? menuTarget.path : currentDir
+            // 同理：文件行要落到它自己的父目录，不能落到 currentDir
+            const parent = menuTarget
+              ? menuTarget.type === 'directory'
+                ? menuTarget.path
+                : remoteDirname(menuTarget.path)
+              : currentDir
             if (parent) void mkdirAt(parent, value)
           }
         }}

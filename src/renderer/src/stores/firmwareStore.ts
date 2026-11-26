@@ -7,7 +7,7 @@ import type {
 } from '@shared/types'
 import { call } from '@/lib/ipc'
 import { uid } from '@/lib/utils'
-import { useSessionStore } from './sessionStore'
+import { pickSshSession, useSessionStore } from './sessionStore'
 import { useToastStore } from './toastStore'
 import { notifyTask } from '@/lib/taskNotify'
 
@@ -28,6 +28,20 @@ interface WaitState {
 }
 
 let waitTimer: ReturnType<typeof setInterval> | null = null
+
+/** shell 单引号转义：路径里可能带空格，裸拼会被拆成多个参数 */
+export function shellQuotePath(p: string): string {
+  return "'" + p.replace(/'/g, "'\\''") + "'"
+}
+
+/**
+ * 把命令里的 {{file}} 占位符替换成（已转义的）远端固件路径。
+ * 没有占位符、或还没有上传路径时原样返回 —— 用户可能就写了完整命令。
+ */
+export function expandFilePlaceholder(command: string, uploadedPath: string | null): string {
+  if (!uploadedPath || !command.includes('{{file}}')) return command
+  return command.split('{{file}}').join(shellQuotePath(uploadedPath))
+}
 
 interface FirmwareState {
   panelOpen: boolean
@@ -111,10 +125,7 @@ export const useFirmwareStore = create<FirmwareState>()((set, get) => ({
     const next = !get().panelOpen
     set({ panelOpen: next })
     if (next && !get().sessionId) {
-      const { sessions, activeId } = useSessionStore.getState()
-      const target =
-        sessions.find((s) => s.id === activeId && s.status === 'connected') ??
-        sessions.find((s) => s.status === 'connected')
+      const target = pickSshSession()
       if (target) set({ sessionId: target.id })
     }
   },
@@ -154,7 +165,22 @@ export const useFirmwareStore = create<FirmwareState>()((set, get) => ({
       return
     }
 
-    set({ uploading: true })
+    /*
+     * 重新上传意味着旧的远端文件与校验结论全部作废。
+     *
+     * uploadTaskId 必须一起清掉：它在 sftpStore.transfers 里指向上一轮的
+     * done 记录，而那个记录的 remotePath 就是旧固件。只清 uploadedPath 的话，
+     * 下一帧「上传完成 → markUploaded」的判定会立刻把旧路径复活，
+     * 校验与刷机静默作用在上一次的固件上。
+     */
+    set({
+      uploading: true,
+      uploadTaskId: null,
+      uploadedPath: null,
+      verify: null,
+      upgradeResult: null,
+      upgradeLog: ''
+    })
     const res = await call(window.api.firmware.upload(sessionId, file.path, remoteDir.trim()), {
       errorTitle: '上传失败'
     })
@@ -164,7 +190,7 @@ export const useFirmwareStore = create<FirmwareState>()((set, get) => ({
       useToastStore.getState().push({
         kind: 'info',
         title: '已加入上传队列',
-        detail: `目标：${res.remotePath}`
+        detail: res.remotePath
       })
     }
   },
@@ -184,16 +210,21 @@ export const useFirmwareStore = create<FirmwareState>()((set, get) => ({
       useToastStore.getState().push(
         res.match
           ? { kind: 'success', title: '校验一致，固件完整' }
-          : { kind: 'error', title: '校验不一致！请勿升级', detail: '建议重新上传（可能传输中断或文件被篡改）' }
+          : { kind: 'error', title: '校验不一致，请勿升级', detail: '请重新上传' }
       )
     }
   },
 
-  setUpgradeCommand: (upgradeCommand) => set({ upgradeCommand }),
+  /*
+   * 升级命令里的 {{file}} 必须在这里换成真实路径。
+   * 输入框的占位提示教用户写 sysupgrade -n {{file}}，但全链路从没做过替换 ——
+   * 用户照着提示填，设备上执行的是一条把字面量 {{file}} 当文件名的命令。
+   */
+  setUpgradeCommand: (cmd) => set({ upgradeCommand: cmd }),
   setUpgradeTimeoutMs: (upgradeTimeoutMs) => set({ upgradeTimeoutMs }),
 
   startUpgrade: async () => {
-    const { sessionId, upgradeCommand, upgradeTimeoutMs, upgrading } = get()
+    const { sessionId, upgradeCommand, upgradeTimeoutMs, upgrading, uploadedPath } = get()
     if (upgrading) return
     if (!sessionId) return
     if (!upgradeCommand.trim()) {
@@ -202,10 +233,11 @@ export const useFirmwareStore = create<FirmwareState>()((set, get) => ({
     }
 
     const runId = uid()
+    const command = expandFilePlaceholder(upgradeCommand, uploadedPath)
     set({ upgrading: true, upgradeRunId: runId, upgradeLog: '', upgradeResult: null })
 
     const result = await call(
-      window.api.firmware.upgrade(runId, sessionId, upgradeCommand, upgradeTimeoutMs),
+      window.api.firmware.upgrade(runId, sessionId, command, upgradeTimeoutMs),
       { errorTitle: '升级执行失败' }
     )
     set({ upgrading: false, upgradeRunId: null })
@@ -237,9 +269,7 @@ export const useFirmwareStore = create<FirmwareState>()((set, get) => ({
           kind: 'firmware',
           title: '升级命令执行结束（请核对输出）',
           detail:
-            result.exitCode === null
-              ? '连接中断：升级脚本可能已重启设备，属正常现象'
-              : `退出码 ${result.exitCode}`,
+            result.exitCode === null ? '连接中断，升级脚本可能已重启设备' : `退出码 ${result.exitCode}`,
           connectionId: connId,
           sessionId
         })
@@ -255,6 +285,8 @@ export const useFirmwareStore = create<FirmwareState>()((set, get) => ({
 
   applyLog: (e) =>
     set((s) => {
+      // 上一轮的输出流会续到新一轮的日志里，看着像刷机脚本重跑了一遍
+      if (e.runId !== s.upgradeRunId) return s
       const next = s.upgradeLog + e.chunk
       return { upgradeLog: next.length > MAX_LOG_CHARS ? next.slice(next.length - MAX_LOG_CHARS) : next }
     }),
@@ -265,14 +297,27 @@ export const useFirmwareStore = create<FirmwareState>()((set, get) => ({
     const { sessionId, rebootCommand, rebooting } = get()
     if (rebooting || !sessionId) return
     set({ rebooting: true })
-    await call(window.api.firmware.reboot(sessionId, rebootCommand.trim() || 'reboot'), {
+    const res = await call(window.api.firmware.reboot(sessionId, rebootCommand.trim() || 'reboot'), {
       silent: true
     })
     set({ rebooting: false })
+    /*
+     * reboot 命令本身会让连接立刻断开，IPC 常常因此失败 —— 但失败也可能是
+     * 「会话已断」或「命令根本没有发出去」，两者对用户的意义完全不同。
+     * 旧实现无视返回值一律提示「重启命令已发送」，等于把失败伪装成成功。
+     */
+    if (res === null) {
+      useToastStore.getState().push({
+        kind: 'warning',
+        title: '重启命令发送失败',
+        detail: '连接可能已断开，请确认设备状态后重试'
+      })
+      return
+    }
     useToastStore.getState().push({
       kind: 'info',
-      title: '重启命令已发送',
-      detail: '设备将断开连接，属正常现象；可在下方等待它重新上线'
+      title: '重启命令已发送，设备将断开连接',
+      detail: '可在下方等待它重新上线'
     })
   },
 
@@ -316,7 +361,7 @@ export const useFirmwareStore = create<FirmwareState>()((set, get) => ({
         useToastStore.getState().push({
           kind: 'success',
           title: `${session.title} 已重新上线`,
-          detail: `端口 ${get().waitPort} 可达（${res.latencyMs}ms）`
+          detail: `端口 ${get().waitPort} 可达 ${res.latencyMs}ms`
         })
         return
       }
@@ -331,7 +376,7 @@ export const useFirmwareStore = create<FirmwareState>()((set, get) => ({
         useToastStore.getState().push({
           kind: 'warning',
           title: '等待设备上线超时（约 5 分钟）',
-          detail: '请确认设备是否正常启动，或手动检查网络'
+          detail: '请确认设备已正常启动'
         })
         return
       }
@@ -352,14 +397,19 @@ export const useFirmwareStore = create<FirmwareState>()((set, get) => ({
 
   fetchBootLog: async () => {
     const { sessions, activeId } = useSessionStore.getState()
-    const session =
-      sessions.find((s) => s.id === activeId && s.status === 'connected') ??
-      sessions.find((s) => s.status === 'connected')
+    /*
+     * 只挑 SSH 会话：启动日志靠的是 dmesg / /proc，串口那台根本不跑 shell。
+     * 不加这条，活动标签正好是串口时会把 dmesg 原文当控制字符打进串口，
+     * 既抓不到日志又把设备控制台搞乱。
+     */
+    const usable = (s: (typeof sessions)[number]): boolean =>
+      s.status === 'connected' && s.kind !== 'serial'
+    const session = sessions.find((s) => s.id === activeId && usable(s)) ?? sessions.find(usable)
     if (!session) {
       useToastStore.getState().push({
         kind: 'warning',
         title: '没有已连接的会话',
-        detail: '设备重启后请重新连接（双击左侧连接），再抓取启动日志'
+        detail: '请先重新连接设备，再抓取启动日志'
       })
       return
     }
@@ -367,7 +417,7 @@ export const useFirmwareStore = create<FirmwareState>()((set, get) => ({
     const res = await call(
       window.api.exec.run(
         session.id,
-        "dmesg 2>/dev/null | tail -n 150; echo '--- uptime(秒) ---'; cat /proc/uptime 2>/dev/null; echo '--- 内核警告 ---'; dmesg 2>/dev/null | grep -iE 'error|fail|warn|panic|oops' | tail -20",
+        "dmesg 2>/dev/null | tail -n 150; echo '--- uptime(sec) ---'; cat /proc/uptime 2>/dev/null; echo '--- kernel warnings ---'; dmesg 2>/dev/null | grep -iE 'error|fail|warn|panic|oops' | tail -20",
         25000
       ),
       { errorTitle: '抓取启动日志失败' }

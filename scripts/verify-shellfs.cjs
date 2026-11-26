@@ -232,7 +232,8 @@ class FakeShell {
     cb(null, ch)
 
     // ---- 列目录（--full-time 与回退两支在同一条命令里）----
-    if (/^LC_ALL=C ls -la/.test(cmd)) {
+    // 命令形态是 `o=$(LC_ALL=C ls -la ...); rc=$?; if [ $rc -ne 0 ]; then ... fi; printf %s "$o"`
+    if (/LC_ALL=C ls -la/.test(cmd)) {
       const raw = args[0] || '/'
       const dir = raw.replace(/\/+$/, '') || '/'
       if (self.lsErrors.has(dir)) {
@@ -756,7 +757,11 @@ async function groupListing(mod) {
   const s1 = new FakeShell()
   s1.lsFixtures.set('/etc', ['total 4', lsDir('etc'), lsFile('profile', 512), ''].join('\n'))
   const r1 = await mod.shellList(s1.client(), '/etc')
-  eq('shellList 命令形态（补斜杠 + --full-time 回退）', s1.cmdLog[0], "LC_ALL=C ls -la --full-time -- '/etc/' 2>/dev/null || LC_ALL=C ls -la -- '/etc/'")
+  eq(
+    'shellList 命令形态（补斜杠 + --full-time 回退）',
+    s1.cmdLog[0],
+    "o=$(LC_ALL=C ls -la --full-time -- '/etc/' 2>/dev/null); rc=$?; if [ $rc -ne 0 ]; then o=$(LC_ALL=C ls -la -- '/etc/' 2>&1); rc=$?; fi; printf %s \"$o\"; exit $rc"
+  )
   eq('shellList 解析结果', r1.map((f) => f.name), ['etc', 'profile'])
   eq('shellList 条目 path 带目录前缀', byName(r1, 'profile').path, '/etc/profile')
 

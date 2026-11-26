@@ -9,6 +9,7 @@ const fs = require('fs')
 const path = require('path')
 const esbuild = require('esbuild')
 const { Client, Server, utils } = require('ssh2')
+const { ed25519HostKey } = require('./lib/testkeys.cjs')
 
 const ROOT = path.join(__dirname, '..')
 const OUT_DIR = path.join(ROOT, '.tsc-verify')
@@ -56,7 +57,8 @@ function expectReject(name, buf, pattern) {
 
 /* ---------- 1. 格式判断 ---------- */
 const rsa = utils.generateKeyPairSync('rsa', { bits: 2048 })
-const ed = utils.generateKeyPairSync('ed25519')
+// 夹具同样要绕开 ssh2 的 keygen 偶发坏键（见 scripts/lib/testkeys.cjs）
+const ed = { private: ed25519HostKey() }
 const encRsa = utils.generateKeyPairSync('rsa', { bits: 2048, passphrase: 'secret', cipher: 'aes256-cbc' })
 
 expectOk('OpenSSH RSA 私钥', Buffer.from(rsa.private), false)
@@ -79,7 +81,7 @@ if (userKeyPath) {
 
 /* ---------- 2. 真实公钥认证 ---------- */
 async function tryAuth(name, privateKey, passphrase, allowedPub) {
-  const hostKey = utils.generateKeyPairSync('ed25519').private
+  const hostKey = ed25519HostKey()
   const allowed = utils.parseKey(allowedPub)
   const server = new Server({ hostKeys: [hostKey] }, (client) => {
     client.on('error', () => {})

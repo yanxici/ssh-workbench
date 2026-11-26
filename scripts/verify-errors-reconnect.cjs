@@ -12,14 +12,35 @@ function check(name, ok, detail) {
   else { fail++; console.log('  FAIL  ' + name + (detail !== undefined ? '  -> ' + detail : '')) }
 }
 
-/* ---------- 复刻 errorLog 的脱敏逻辑 ---------- */
-function redact(text) {
-  return text
-    .replace(/((?:password|passwd|pwd|secret|token|apikey|api_key)\s*[=:]\s*)([^\s,;'"`\]}]+)/gi, '$1***')
-    .replace(/("(?:password|passwd|secret|token)"\s*:\s*")([^"]*)(")/gi, '$1***$3')
-    .replace(/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g, '[PRIVATE KEY REDACTED]')
-    .replace(/-----BEGIN OPENSSH PRIVATE KEY-----[\s\S]*$/g, '[PRIVATE KEY REDACTED]')
-}
+/*
+ * 直接跑主进程真实的 redact，不再在这里抄一份。
+ * 抄写版早就和源码脱节了（缺 proxy_password / 多行引号 / URL 凭据），
+ * 测的是一份「看起来对」的副本，源码改坏了它也照绿。
+ */
+const esbuild = require('esbuild')
+const fsx = require('node:fs')
+const pathx = require('node:path')
+const osx = require('node:os')
+const OUTx = pathx.join(__dirname, '..', '.tsc-verify', 'errorlog-bundle')
+fsx.mkdirSync(OUTx, { recursive: true })
+const electronStubx = pathx.join(OUTx, 'electron-stub.cjs')
+fsx.writeFileSync(electronStubx, 'module.exports = { app: { getPath: () => require("node:os").tmpdir() } }\n')
+const bundleOut = pathx.join(OUTx, 'errorLog.cjs')
+esbuild.buildSync({
+  stdin: {
+    contents: 'export { __redactForTest } from "./src/main/store/errorLog"',
+    resolveDir: pathx.join(__dirname, '..'),
+    loader: 'ts'
+  },
+  bundle: true,
+  platform: 'node',
+  format: 'cjs',
+  outfile: bundleOut,
+  logLevel: 'error',
+  // buildSync 不支持 plugins，改用 alias 把 electron 换成最小 stub
+  alias: { '@shared': pathx.join(__dirname, '..', 'src', 'shared'), electron: electronStubx }
+})
+const redact = require(bundleOut).__redactForTest
 
 console.log('\n[1] 错误日志脱敏（关键安全项）')
 {
@@ -49,6 +70,33 @@ console.log('\n[1] 错误日志脱敏（关键安全项）')
   check('普通错误文本不被误伤', redact(plain) === plain)
   const normalCmd = '执行 ls -la /var/log 失败'
   check('含连字符的命令不被误伤', redact(normalCmd) === normalCmd)
+
+  /* R2-H4：Rule 1 旧写法的两个分支可以同时吃掉一个反斜杠，回溯是指数级 */
+  {
+    const evil = 'password="' + '\\'.repeat(45)
+    const t0 = Date.now()
+    redact(evil)
+    const cost = Date.now() - t0
+    // 旧实现 n=45 时要 30 秒以上；线性实现在 1 毫秒量级
+    check('45 个反斜杠不触发 ReDoS', cost < 500, cost + 'ms')
+  }
+
+  /* 多行引号密码：[sS] 让跨行的值整段吃掉，不能只脱第一行 */
+  {
+    const out = redact('password="line1\nline2-secret" tail')
+    check('多行引号密码整段脱敏', !out.includes('line2-secret') && out.includes('tail'), out)
+  }
+
+  /* proxy_password 是连接代理时最常见的键名，漏掉等于明文外发 */
+  check('proxy_password 被脱敏', !redact('proxy_password=hunter2').includes('hunter2'))
+  check('proxy_password JSON 形式被脱敏', !redact('{"proxy_password":"hunter2"}').includes('hunter2'))
+
+  /* URL 凭据只吃到 @ 之前；query 里的 @ 不能把后半截 URL 吃掉 */
+  {
+    const out = redact('https://user:pw@host:22/path?email=a@b.com')
+    check('URL 里的密码被脱敏', !out.includes('user:pw'), out)
+    check('query 里的 @ 不被当成凭据', out.includes('email=a@b.com'), out)
+  }
 }
 
 console.log('\n[2] 错误去重聚合')

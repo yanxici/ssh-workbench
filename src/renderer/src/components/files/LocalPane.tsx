@@ -113,7 +113,6 @@ export function LocalPane(): React.JSX.Element {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      {/* 工具栏 */}
       <div className="flex shrink-0 items-center gap-1 border-b border-edge-soft px-2 py-1.5">
         <span className="shrink-0 text-2xs font-semibold text-ink-2">本地</span>
         {drives.length > 1 && (

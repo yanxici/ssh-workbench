@@ -27,6 +27,7 @@ import {
 import type { DiagReport, DiagSection, DiagSectionResult, DiagSectionStatus } from '@shared/types'
 import { call } from '@/lib/ipc'
 import { cn, formatBytes, formatTime } from '@/lib/utils'
+import { useOverlayEscape } from '@/lib/overlayKeys'
 import { ConfirmDialog, EmptyState } from '@/components/ui'
 import { useDiagStore } from '@/stores/diagStore'
 import { useSessionStore, useSshSessions } from '@/stores/sessionStore'
@@ -54,13 +55,13 @@ export function DiagnosticsPanel(): React.JSX.Element | null {
     if (panelOpen) void useDiagStore.getState().loadSections()
   }, [panelOpen])
 
-  if (!panelOpen) return null
-
   const close = (): void => useDiagStore.setState({ panelOpen: false })
+  // 面板按钮上写着「关闭 (Esc)」，这里必须真的响应 Esc
+  useOverlayEscape(panelOpen, close)
+  if (!panelOpen) return null
 
   return (
     <div className="panel-shell fixed inset-x-0 z-30 flex flex-col bg-app">
-      {/* 标题栏 */}
       <div className="flex h-9 shrink-0 items-center gap-2 border-b border-edge bg-panel px-3">
         <Activity size={14} className="text-accent" />
         <span className="text-xs font-semibold">一键诊断巡检</span>
@@ -266,7 +267,6 @@ function RunView({ onEditSection }: { onEditSection: (s: DiagSection | null) => 
 
       {/* 右：执行与结果 */}
       <div className="flex min-w-0 flex-1 flex-col">
-        {/* 工具栏 */}
         <div className="flex shrink-0 items-center gap-2 border-b border-edge-soft px-3 py-1.5">
           <span className="text-2xs text-ink-3">
             目标会话：
@@ -335,7 +335,6 @@ function RunView({ onEditSection }: { onEditSection: (s: DiagSection | null) => 
           )}
         </div>
 
-        {/* 运行进度条 */}
         {running && progress && (
           <div className="h-0.5 shrink-0 bg-raised">
             <div
@@ -345,7 +344,6 @@ function RunView({ onEditSection }: { onEditSection: (s: DiagSection | null) => 
           </div>
         )}
 
-        {/* 结果区 */}
         <div className="scroll-thin min-h-0 flex-1 overflow-y-auto p-3">
           {runOrder.length === 0 ? (
             <EmptyState
@@ -446,9 +444,11 @@ function ResultCard({ result, defaultOpen = false }: { result: DiagSectionResult
   const [open, setOpen] = useState(defaultOpen || result.status === 'error' || result.status === 'timeout')
 
   const copyOutput = (): void => {
-    void call(window.api.clip.write(result.output || result.error || ''), { silent: true }).then(
-      () => useToastStore.getState().push({ kind: 'success', title: `已复制「${result.name}」输出` })
-    )
+    void call(window.api.clip.write(result.output || result.error || ''), { silent: true }).then((ok) => {
+      if (ok !== null) {
+        useToastStore.getState().push({ kind: 'success', title: `已复制「${result.name}」输出` })
+      }
+    })
   }
 
   return (

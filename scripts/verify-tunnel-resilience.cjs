@@ -508,7 +508,46 @@ function rebindable(port) {
 function makeFakeClient(opts) {
   const options = opts || {}
   const listeners = new Map()
+  /*
+   * -R 的验收面全在「服务端把连接推过来之后」：分派器按 destPort + 绑定地址选一条隧道，
+   * 命中就 accept() 并把通道交出去，全不命中才 reject() 一次。这些计数与通道里
+   * 收到的字节就是判据 —— 选错人事后完全看不出来，只有靠「哪个目标回声」能区分。
+   */
   const fake = {
+    forwardedIn: [],
+    accepts: 0,
+    rejects: 0,
+    channels: [],
+    /** 冒充服务端发起一次 'tcp connection'（details 形状同 ssh2） */
+    emitConnection(details) {
+      const set = listeners.get('tcp connection')
+      if (!set) return 0
+      let n = 0
+      for (const fn of set) {
+        fn(
+          details,
+          function accept() {
+            fake.accepts += 1
+            const got = []
+            const ch = new Duplex({
+              read() {},
+              write(chunk, _enc, cb) {
+                got.push(chunk.toString())
+                cb()
+              }
+            })
+            ch.received = got
+            fake.channels.push(ch)
+            return ch
+          },
+          function reject() {
+            fake.rejects += 1
+          }
+        )
+        n += 1
+      }
+      return n
+    },
     forwarded: 0,
     forwardOut(srcHost, srcPort, dstHost, dstPort, cb) {
       // 真机上目标在远端，端口不会和本机监听撞车；本机夹具里让上游固定指向 origin，
@@ -524,6 +563,7 @@ function makeFakeClient(opts) {
       })
     },
     forwardIn(host, port, cb) {
+      fake.forwardedIn.push({ host: host, port: port })
       cb(null, port || 0)
     },
     unforwardIn(host, port, cb) {
@@ -950,6 +990,178 @@ function groupUrl(ctx) {
   check('永远只拼 127.0.0.1，不接受外部主机',
     !/^(?!http:\/\/127\.0\.0\.1:)/.test(ctx.url('http', 65535)))
 }
+
+function saveRemote(ctx, opts) {
+  return ctx.repo.saveTunnel({
+    name: opts.name,
+    type: 'remote',
+    bindHost: opts.bindHost,
+    allowLan: true,
+    bindPort: opts.bindPort,
+    targetHost: '127.0.0.1',
+    targetPort: opts.targetPort,
+    connectionId: opts.connectionId
+  })
+}
+
+function waitFor(fn, ms) {
+  const limit = ms || 2000
+  return new Promise(function (resolve) {
+    const t0 = Date.now()
+    const tick = function () {
+      let v = false
+      try {
+        v = fn()
+      } catch {
+        v = false
+      }
+      if (v) return resolve(true)
+      if (Date.now() - t0 >= limit) return resolve(false)
+      setTimeout(tick, 10)
+    }
+    tick()
+  })
+}
+
+/* 把一批 -R 隧道挂到同一个 fake client 上，返回可按 destIP/destPort 发起连接的能力 */
+async function groupReverseDispatch(ctx) {
+  group('组 16：-R 同客户端多隧道的连接分派（R2-H7）')
+  ctx.sm.__ctl.reset()
+  const client = makeFakeClient({ forceUpstreamPort: ctx.originPort })
+  ctx.sm.__ctl.connect('S17', { connectionId: 'conn-17', client: client })
+
+  const originA = net.createServer(function (s) {
+    s.on('data', function (d) { s.write('A:' + d.toString()) })
+    s.on('error', function () { s.destroy() })
+  })
+  await new Promise(function (r) { originA.listen(0, '127.0.0.1', r) })
+  const originB = net.createServer(function (s) {
+    s.on('data', function (d) { s.write('B:' + d.toString()) })
+    s.on('error', function () { s.destroy() })
+  })
+  await new Promise(function (r) { originB.listen(0, '127.0.0.1', r) })
+
+  // 两条 -R 并发绑到同一客户端（8080 / 9090 语义：不同远端端口各连各的）
+  const tA = await saveRemote(ctx, { name: 'R-A', bindHost: '127.0.0.1', bindPort: 8080, targetPort: originA.address().port, connectionId: 'conn-17' })
+  const tB = await saveRemote(ctx, { name: 'R-B', bindHost: '127.0.0.1', bindPort: 9090, targetPort: originB.address().port, connectionId: 'conn-17' })
+  await ctx.tm.start(tA.id, 'S17')
+  await ctx.tm.start(tB.id, 'S17')
+  check('两条 -R 都进入 active', ctx.stateOf(tA.id)?.status === 'active' && ctx.stateOf(tB.id)?.status === 'active',
+    { a: ctx.stateOf(tA.id)?.status, b: ctx.stateOf(tB.id)?.status })
+  check('forwardIn 各报了一次绑定请求', client.forwardedIn.length === 2, client.forwardedIn)
+
+  // 端口 8080 → 只有 A 的处理器能接，且真的连到了 A 的上游
+  client.accepts = 0
+  client.rejects = 0
+  client.emitConnection({ destIP: '127.0.0.1', destPort: 8080, srcIP: '10.0.0.9', srcPort: 50000 })
+  const okA = await waitFor(function () { return client.channels.length === 1 })
+  check('发往 8080 的连接被 accept', okA && client.accepts === 1, { accepts: client.accepts })
+  check('发往 8080 的连接不 reject 其他隧道', client.rejects === 0, client.rejects)
+  if (okA) {
+    const ch = client.channels[0]
+    ch.push('ping')
+    const echoed = await waitFor(function () { return ch.received.join('').indexOf('A:ping') === 0 })
+    check('8080 的连接命中 A 的上游（不是被 9090 抢走）', echoed, ch.received.join(''))
+  }
+
+  // 端口 9090 → B
+  client.emitConnection({ destIP: '127.0.0.1', destPort: 9090, srcIP: '10.0.0.9', srcPort: 50001 })
+  const okB = await waitFor(function () { return client.channels.length === 2 })
+  check('发往 9090 的连接被 accept', okB, client.channels.length)
+  if (okB) {
+    const ch = client.channels[1]
+    ch.push('ping')
+    const echoed = await waitFor(function () { return ch.received.join('').indexOf('B:ping') === 0 })
+    check('9090 的连接命中 B 的上游', echoed, ch.received.join(''))
+  }
+
+  // 没人认领的端口：reject 只能一次（早退不 reject 会漏通道，双 listener 会双 reject）
+  client.rejects = 0
+  client.emitConnection({ destIP: '127.0.0.1', destPort: 1234, srcIP: '10.0.0.9', srcPort: 50002 })
+  await sleep(60)
+  check('未匹配端口的连接只 reject 一次', client.rejects === 1, client.rejects)
+
+  ctx.tm.dispose(tA.id)
+  ctx.tm.dispose(tB.id)
+  await ctx.repo.deleteTunnel(tA.id)
+  await ctx.repo.deleteTunnel(tB.id)
+
+  /* ---- 绑定地址归一：0.0.0.0 与 127.0.0.1 同端口共存 ---- */
+  client.accepts = 0
+  client.rejects = 0
+  client.channels.length = 0
+  const tPrecise = await saveRemote(ctx, { name: 'R-精确', bindHost: '127.0.0.1', bindPort: 7070, targetPort: originA.address().port, connectionId: 'conn-17' })
+  await ctx.tm.start(tPrecise.id, 'S17')
+  /*
+   * 0.0.0.0 需要 LAN 授权，由 saveRemote 的 allowLan: true 放行；
+   * 同一客户端上它与精确绑定共存，靠 destIP 区分。
+   */
+  const tWild = await saveRemote(ctx, { name: 'R-通配', bindHost: '0.0.0.0', bindPort: 7070, targetPort: originB.address().port, connectionId: 'conn-17' })
+  await ctx.tm.start(tWild.id, 'S17')
+  check('0.0.0.0 绑定按通配对待且两条都 active',
+    ctx.stateOf(tPrecise.id)?.status === 'active' && ctx.stateOf(tWild.id)?.status === 'active',
+    { precise: ctx.stateOf(tPrecise.id)?.status, wild: ctx.stateOf(tWild.id)?.status })
+
+  // 服务端上报 0.0.0.0 → 必须落到通配那条，不能被精确的 127.0.0.1 抢走
+  client.emitConnection({ destIP: '0.0.0.0', destPort: 7070, srcIP: '10.0.0.9', srcPort: 51000 })
+  const gotWild = await waitFor(function () { return client.channels.length === 1 })
+  if (gotWild) {
+    const ch = client.channels[0]
+    ch.push('x')
+    check('destIP 0.0.0.0 命中通配隧道（不被精确绑定抢走）',
+      await waitFor(function () { return ch.received.join('').indexOf('B:x') === 0 }), ch.received.join(''))
+  } else {
+    check('destIP 0.0.0.0 命中通配隧道（不被精确绑定抢走）', false, '没有接受通道')
+  }
+
+  // 服务端上报 127.0.0.1 → 精确那条
+  client.emitConnection({ destIP: '127.0.0.1', destPort: 7070, srcIP: '10.0.0.9', srcPort: 51001 })
+  const gotPrecise = await waitFor(function () { return client.channels.length === 2 })
+  if (gotPrecise) {
+    const ch = client.channels[1]
+    ch.push('y')
+    check('destIP 127.0.0.1 命中精确绑定',
+      await waitFor(function () { return ch.received.join('').indexOf('A:y') === 0 }), ch.received.join(''))
+  } else {
+    check('destIP 127.0.0.1 命中精确绑定', false, '没有接受通道')
+  }
+
+  /*
+   * 服务端没上报 destIP（老设备/非标准实现）：不能因此把精确绑定判死，
+   * 否则这类设备的 -R 全部连不通。
+   */
+  client.channels.length = 0
+  client.emitConnection({ destPort: 7070, srcIP: '10.0.0.9', srcPort: 51002 })
+  check('未上报 destIP 时仍能匹配到隧道（不退化成 reject）',
+    await waitFor(function () { return client.channels.length === 1 }), client.channels.length)
+
+  ctx.tm.dispose(tPrecise.id)
+  ctx.tm.dispose(tWild.id)
+  await ctx.repo.deleteTunnel(tPrecise.id)
+  await ctx.repo.deleteTunnel(tWild.id)
+
+  /* ---- 回环名归一：localhost / ::1 / [::1] / ::ffff: 都折成 127.0.0.1 ---- */
+  client.channels.length = 0
+  const tLocal = await saveRemote(ctx, { name: 'R-localhost', bindHost: 'localhost', bindPort: 6060, targetPort: originA.address().port, connectionId: 'conn-17' })
+  await ctx.tm.start(tLocal.id, 'S17')
+  const pairs = [
+    ['::1', '服务端报 ::1'],
+    ['[::1]', '服务端报 [::1]（带方括号）'],
+    ['::ffff:127.0.0.1', '服务端报 IPv4-mapped 回环']
+  ]
+  for (const pair of pairs) {
+    client.channels.length = 0
+    client.emitConnection({ destIP: pair[0], destPort: 6060, srcIP: '10.0.0.9', srcPort: 52000 })
+    check(pair[1] + '能命中 localhost 绑定的 -R',
+      await waitFor(function () { return client.channels.length === 1 }), client.channels.length)
+  }
+  ctx.tm.dispose(tLocal.id)
+  await ctx.repo.deleteTunnel(tLocal.id)
+
+  await new Promise(function (r) { originA.close(r) })
+  await new Promise(function (r) { originB.close(r) })
+}
+
 async function main() {
   const mod = await build()
   groupCommand(mod)
@@ -980,6 +1192,7 @@ async function main() {
   await groupQuickForward(ctx)
   await groupPromote(ctx)
   await groupGaveUp(ctx)
+  await groupReverseDispatch(ctx)
   groupUrl(ctx)
 
   for (const info of ctx.tm.states()) ctx.tm.dispose(info.tunnelId)

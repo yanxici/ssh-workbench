@@ -1,6 +1,7 @@
 import type * as React from 'react'
 import {
   Fragment,
+  useCallback,
   useEffect,
   useRef,
   useState,
@@ -20,6 +21,7 @@ import { createPortal } from 'react-dom'
 import { cn } from '@/lib/utils'
 import { useToastStore } from '@/stores/toastStore'
 import { isImeComposing } from '@/lib/ime'
+import { useOverlayEscape } from '@/lib/overlayKeys'
 
 /* ------------------------------------------------------------------ *
  *  Modal
@@ -40,14 +42,7 @@ export function Modal({
   footer?: ReactNode
   width?: string
 }): React.JSX.Element | null {
-  useEffect(() => {
-    if (!open) return
-    const onKey = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') onClose()
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [open, onClose])
+  useOverlayEscape(open, onClose)
 
   if (!open) return null
 
@@ -299,8 +294,10 @@ export function Toggle({
         disabled && 'pointer-events-none opacity-45'
       )}
     >
-      {/* 用 left 定位而非纯 translate：轨道 32px = 2 边框 + 28 内容，
-          14px 旋钮的合法区间是 left 0~14px，取 1px / 14px 保证两端都不越界。 */}
+      {/*
+       * 用 left 定位而非纯 translate：轨道 32px = 2 边框 + 28 内容，
+       * 14px 旋钮的合法区间是 left 0~14px，取 1px / 14px 保证两端都不越界。
+       */}
       <span
         className={cn(
           'absolute top-px h-[14px] w-[14px] rounded-full bg-white shadow-sm transition-[left] duration-150',
@@ -332,14 +329,7 @@ export function ConfirmDialog({
   onConfirm: () => void
   onCancel: () => void
 }): React.JSX.Element | null {
-  useEffect(() => {
-    if (!open) return
-    const onKey = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') onCancel()
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [open, onCancel])
+  useOverlayEscape(open, onCancel)
 
   if (!open) return null
 
@@ -401,14 +391,7 @@ export function PromptDialog({
     if (open) setValue(defaultValue)
   }, [open, defaultValue])
 
-  useEffect(() => {
-    if (!open) return
-    const onKey = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') onCancel()
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [open, onCancel])
+  useOverlayEscape(open, onCancel)
 
   if (!open) return null
 
@@ -531,18 +514,15 @@ export function ContextMenu({
 
   useEffect(() => {
     const close = (): void => onClose()
-    const onKey = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') onClose()
-    }
     window.addEventListener('mousedown', close)
     window.addEventListener('blur', close)
-    window.addEventListener('keydown', onKey)
     return () => {
       window.removeEventListener('mousedown', close)
       window.removeEventListener('blur', close)
-      window.removeEventListener('keydown', onKey)
     }
   }, [onClose])
+  // Esc 走统一弹层栈：菜单开着时只关菜单，不会顺手把下层弹窗也关掉
+  useOverlayEscape(true, onClose)
 
   /*
    * 必须 portal 到 body，直接原地渲染是"菜单能弹出但点了没反应"的根因。
@@ -596,15 +576,17 @@ export function useContextMenu<T>(): {
   closeMenu: () => void
 } {
   const [menu, setMenu] = useState<{ x: number; y: number; target: T } | null>(null)
-  return {
-    menu,
-    openMenu: (e, target) => {
-      e.preventDefault()
-      e.stopPropagation()
-      setMenu({ x: e.clientX, y: e.clientY, target })
-    },
-    closeMenu: () => setMenu(null)
-  }
+  /*
+   * 回调必须定住身份：菜单状态每天都挂在 effect 的依赖里（换会话要 closeMenu），
+   * 每次都新建函数会让那个 effect 每渲染一次就重跑一遍，等于把状态反复重置。
+   */
+  const openMenu = useCallback((e: MouseEvent, target: T) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setMenu({ x: e.clientX, y: e.clientY, target })
+  }, [])
+  const closeMenu = useCallback(() => setMenu(null), [])
+  return { menu, openMenu, closeMenu }
 }
 
 /* ------------------------------------------------------------------ *

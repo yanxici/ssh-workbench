@@ -34,6 +34,13 @@ export function TransferSection(): React.JSX.Element {
     const res = await call(window.api.sftp.pickDownloadDir(), { errorTitle: '选择下载目录失败' })
     setBusy(false)
     if (!res || res.canceled) return
+    /*
+     * 选完要落盘。
+     * 原来只 setEffective，settings.downloadDir 一直为空 ——
+     * 提示写「已更改」、当前会话也确实生效，但重启就回去，
+     * 而「恢复默认」按钮（按 settings.downloadDir 是否为空渲染）永远不出现。
+     */
+    await update({ downloadDir: res.dir })
     setEffective(res.dir)
     useToastStore.getState().push({
       kind: 'success',

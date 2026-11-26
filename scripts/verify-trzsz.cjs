@@ -51,13 +51,15 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
 /* ---------- 造一个可观测的 hooks ---------- */
 function makeHooks(overrides = {}) {
-  const log = { sent: [], text: [], states: [] }
+  const log = { sent: [], text: [], states: [], records: [] }
   const hooks = {
     sendToServer: (d) => log.sent.push(d),
     emitText: (t) => log.text.push(t),
     emitState: (s) => log.states.push(s),
     pickSaveDirectory: async () => undefined,
     pickSendFiles: async () => undefined,
+    // 真实 hooks 一定有它：少了它 beginRecord 会在状态翻转时抛错
+    recordTransfer: (rec) => log.records.push(rec),
     ...overrides
   }
   return { hooks, log }
@@ -291,6 +293,91 @@ ok(
   eq(s.processServerOutput('after dispose'), 'after dispose', 'E5 dispose 后输出仍原样返回')
   s.processInput('x')
   eq(log.sent, ['x'], 'E5b dispose 后输入仍直通远端')
+}
+
+/* ================= F. 跨帧握手重组 / 传输后握手不重放（R2-C2） ================= */
+{
+  /*
+   * 13 位 ID（算上前导冒号正好 14 位）以 "00" 结尾：库里 uniqueIdExists() 对非
+   * Windows shell 的这类 id 恒返回 false —— 同一串握手喂几次就算几次全新握手，
+   * 于是「旧握手残留在尾巴里」的 bug 表现成每按一个键弹一次原生文件框。
+   */
+  // 上传侧必须真给一个文件：用户取消时库里会立刻拆掉 transfer，量不到 active 翻转
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'trzsz-frame-'))
+  const file = path.join(dir, 'a.txt')
+  fs.writeFileSync(file, 'hello')
+  const { hooks } = makeHooks({ pickSendFiles: async () => [file] })
+  const s = new B.TrzszSession(hooks, 100, () => {})
+  let tail = ''
+  const shown = []
+  // 复刻 sessionManager.flush() 的接线（trzszFor 滚动尾巴 + 重组 + 去重显示）
+  const feed = (text) => {
+    if (s.active && text) {
+      tail = ''
+      const o = s.processServerBytes(Buffer.from(text))
+      if (o) shown.push(o)
+      return
+    }
+    const re = B.reassembleTrzszHandshake(tail, text)
+    tail = B.keepTrzszTail(tail, text)
+    if (re.rest !== undefined) tail = B.keepTrzszTail('', re.rest)
+    const out = s.processServerOutput(re.feed)
+    shown.push(re.shownSkip > 0 ? out.slice(re.shownSkip) : out)
+  }
+  // 握手被 TCP 自适应 flush 切成两帧是常态
+  feed('::TRZSZ:TRAN')
+  feed('SFER:R:1.1.6:1234567890100\r\n')
+  eq(
+    shown.join(''),
+    '::TRZSZ:TRAN' + 'SFER:R:1.1.6:1234567890100\r\n',
+    'F1 跨帧握手重组后逐字符只显示一次（前缀不能双倍回显）'
+  )
+  ok(!s.active, 'F2 握手帧内还不算传输态（库里要等 10ms 定时器才翻转）')
+  let turned = false
+  for (let i = 0; i < 60 && !turned; i++) {
+    await sleep(5)
+    turned = s.active
+  }
+  ok(turned, 'F2b 定时器跑起来后 active 必须转真（否则第 2 帧二进制块会走文本路）', { turned, picked: 'file' })
+  s.dispose()
+  fs.rmSync(dir, { recursive: true, force: true })
+}
+
+{
+  // 完整握手已留在上一帧尾巴里：本帧不能再把它拼回去重喂过滤器
+  const stale = '::TRZSZ:TRANSFER:R:1.1.6:1234567890100\r\n'
+  const re = B.reassembleTrzszHandshake(stale, 'l')
+  eq(re.feed, 'l', 'F3 已解释过的旧握手不能被重新喂给过滤器（否则按键=重放握手）')
+  eq(re.shownSkip, 0, 'F3b 没补回前缀就不该剔掉本帧字符')
+  eq(re.rest, 'l', 'F3c 命中后尾巴要截到握手之后（握手整行含换行已被吃掉）')
+}
+
+{
+  let dialogs = 0
+  const { hooks } = makeHooks({
+    pickSendFiles: async () => {
+      dialogs++
+      return undefined
+    },
+    pickSaveDirectory: async () => {
+      dialogs++
+      return undefined
+    }
+  })
+  const s = new B.TrzszSession(hooks, 100, () => {})
+  let tail = '::TRZSZ:TRANSFER:R:1.1.6:1234567890100\r\n'
+  const emitted = []
+  for (const key of ['l', 's', 'l']) {
+    const re = B.reassembleTrzszHandshake(tail, key)
+    tail = B.keepTrzszTail(tail, key)
+    if (re.rest !== undefined) tail = B.keepTrzszTail('', re.rest)
+    const out = s.processServerOutput(re.feed)
+    emitted.push(re.shownSkip > 0 ? out.slice(re.shownSkip) : out)
+    await sleep(30)
+  }
+  eq(dialogs, 0, 'F4 传输结束后敲 l/s 不能再弹传输对话框')
+  eq(emitted, ['l', 's', 'l'], 'F4b 每次按键只显示自己，不回放旧握手')
+  s.dispose()
 }
 
 console.log(

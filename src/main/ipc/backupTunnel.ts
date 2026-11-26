@@ -1,9 +1,9 @@
-import { BrowserWindow, dialog, shell } from 'electron'
+import { shell } from 'electron'
 import { promises as fs } from 'node:fs'
 import { basename } from 'node:path'
 import { IPC } from '@shared/ipc'
 import type { TunnelInput } from '@shared/types'
-import { dialogParent } from '../windowRef'
+import { showSaveDialog } from '../windowRef'
 import { dialogDefaultPath, rememberDialogPick } from '../util/dialogDirs'
 import { handle } from './handle'
 import { backupStore } from '../store/backups'
@@ -12,7 +12,12 @@ import { deleteTunnel, listTunnels, saveTunnel } from '../store/repository'
 import { buildSafeLocalTunnelUrl, tunnelManager } from '../ssh/portForward'
 import { discoverRemotePorts } from '../ssh/remotePorts'
 import { recorder } from '../ssh/recorder'
-import { listSessionLogs, readSessionLog, removeSessionLog } from '../store/sessionLogs'
+import {
+  listSessionLogs,
+  readSessionLog,
+  removeSessionLog,
+  resolveSessionLogPath
+} from '../store/sessionLogs'
 
 /** 配置备份对比 + 端口转发/隧道 + 会话日志（录制/回放） */
 export function registerBackupTunnelIpc(): void {
@@ -79,10 +84,20 @@ export function registerBackupTunnelIpc(): void {
   handle(IPC.LOG_READ, (path: string) => readSessionLog(path))
   handle(IPC.LOG_DELETE, (path: string) => removeSessionLog(path))
   handle(IPC.LOG_OPEN_DIR, async () => {
-    await shell.openPath(recorder.logDir())
+    const dir = recorder.logDir()
+    /*
+     * 一次都没录过时这个目录还不存在，openPath 只返回一个错误码字符串、
+     * 什么都不打开 —— 用户点了「打开日志目录」以为按钮坏了。
+     * 先建出来再开，并且把 openPath 的返回值当错误处理。
+     */
+    await fs.mkdir(dir, { recursive: true })
+    const err = await shell.openPath(dir)
+    if (err) throw new Error('打开日志目录失败：' + err)
   })
   handle(IPC.LOG_EXPORT, async (path: string) => {
-    const res = await dialog.showSaveDialog(dialogParent() as BrowserWindow, {
+    // 入参必须落在日志目录内：这里紧跟着就是 fs.copyFile，不校验等于任意文件外泄
+    const source = resolveSessionLogPath(path)
+    const res = await showSaveDialog({
       title: '导出会话日志',
       defaultPath: dialogDefaultPath('report', basename(path)),
       filters: [
@@ -96,7 +111,7 @@ export function registerBackupTunnelIpc(): void {
     })
     if (res.canceled || !res.filePath) return { canceled: true }
     rememberDialogPick('report', res.filePath, false)
-    await fs.copyFile(path, res.filePath)
+    await fs.copyFile(source, res.filePath)
     return { canceled: false, path: res.filePath }
   })
 }

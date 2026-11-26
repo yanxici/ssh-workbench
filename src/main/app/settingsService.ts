@@ -21,14 +21,27 @@ export async function updateSettings(patch: Partial<AppSettings>): Promise<AppSe
   const next = await setSettings(patch)
   if (patch.update) {
     try {
-      applyUpdatePrefs({
-        autoCheck: patch.update.autoCheck,
-        autoDownload: patch.update.autoDownload,
-        proxyUrl: patch.update.proxyUrl,
-        mirror: patch.update.mirror
-      })
-    } catch {
-      /* 运行期施加失败已由 updater 内部记录，不影响设置落盘结果 */
+      /*
+       * autoCheck / autoDownload 必须取**合并后的完整设置**，而不是看 patch 里有没有。
+       * 渲染层只在用户改开关时带这两个键，改字体、改代理时带的是一个不含它们的
+       * update 子对象 —— 只看 'in' 的话这一路 applyUpdatePrefs 拿到的是 undefined，
+       * 用户刚关掉的自动检查在下一轮局部 patch 里就复活了（undefined !== false，
+       * 照样排一次 2 秒后的检查）。
+       */
+      const prefs: Parameters<typeof applyUpdatePrefs>[0] = {
+        autoCheck: next.update?.autoCheck,
+        autoDownload: next.update?.autoDownload
+      }
+      /*
+       * proxyUrl / mirror 反过来必须看 'in'：它们没给默认值，用合并值会把
+       * 「用户这次没动代理」当成「重新设置成当前代理」，白白重置一次 net session。
+       */
+      if ('proxyUrl' in patch.update) prefs.proxyUrl = patch.update.proxyUrl
+      if ('mirror' in patch.update) prefs.mirror = patch.update.mirror
+      applyUpdatePrefs(prefs)
+    } catch (err) {
+      // 不阻塞落盘，但至少要留痕：静默 catch 会让「开关没反应」永远查不出原因
+      console.error('[settings] applyUpdatePrefs failed:', err)
     }
   }
   return next

@@ -17,6 +17,41 @@ export interface ZipEntry {
   data: Buffer
 }
 
+/**
+ * 把任意字符串清洗成安全的归档内路径（防 ZIP Slip）。
+ *
+ * 解压工具会按条目名往磁盘写文件，名称里出现 `..` 就会写到目标目录之外
+ * （著名的 Zip Slip）。条目名来自连接名、备份目录名、备份内文件名，
+ * 三者都可能被用户或远端设备构造，所以必须在入库前统一清洗。
+ *
+ * 只做最小变换：斜杠当分隔符保留，`..` 段变成 `_`，去掉盘符与开头的斜杠。
+ */
+export function zipEntryName(raw: string): string {
+  const out = String(raw ?? '')
+    .replace(/\\/g, '/')
+    .split('/')
+    // 先丢掉空段再逐段净化：反过来的话空串会被 map 成 '_'，备份路径里的
+    // `//` 就变成 `/_/`（`配置备份/b1/_/etc/...`），而 out || 'file' 也成了死代码
+    .filter((seg) => seg !== '')
+    .map((seg) => {
+      /*
+       * 逐段净化，不能只换 `..`：
+       *   - ".. " / ".. ." → Windows 解压时剥掉尾随空格与点，还原成 ".."（ZIP Slip）
+       *   - "b1/C:\win.ini" → 中间段的盘符冒号会变成 NTFS 数据流或非法名
+       *   - 控制字符会把解压工具的路径拼错
+       * 顺序很关键：先剥控制字符与非法字符，再剥尾随点/空格，最后才判 ../. 。
+       */
+      // eslint-disable-next-line no-control-regex
+      const cleaned = seg.replace(/[<>:"|?*\x00-\x1f\x7f]/g, '_').replace(/[. ]+$/, '')
+      if (cleaned === '' || cleaned === '.' || cleaned === '..') return '_'
+      if (/^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$/i.test(cleaned)) return '_' + cleaned
+      return cleaned
+    })
+    .join('/')
+  // 空结果（原来 zipEntryName('/') 返回 ''，写进归档就是一个根条目）
+  return out || 'file'
+}
+
 const LOCAL_SIG = 0x04034b50
 const CENTRAL_SIG = 0x02014b50
 const EOCD_SIG = 0x06054b50
@@ -65,7 +100,8 @@ export function createZip(entries: ZipEntry[], now = new Date()): Buffer {
   let offset = 0
 
   for (const entry of entries) {
-    const nameBuf = Buffer.from(entry.name.replace(/\\/g, '/'), 'utf8')
+    // 兜底再洗一遍：调用方直接传 entry.name 时也必须安全（空名写进归档就是根条目）
+    const nameBuf = Buffer.from(zipEntryName(entry.name), 'utf8')
     const raw = entry.data
     const compressed = deflateRawSync(raw)
     const crc = crc32(raw)

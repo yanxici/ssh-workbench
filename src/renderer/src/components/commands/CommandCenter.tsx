@@ -38,6 +38,7 @@ import { cn, formatRelativeTime } from '@/lib/utils'
 import { ConfirmDialog, ContextMenu, useContextMenu, type MenuEntry } from '@/components/ui'
 import { Highlight } from './Highlight'
 import { isImeComposing } from '@/lib/ime'
+import { useOverlayEscape } from '@/lib/overlayKeys'
 
 /**
  * 按钮墙的列数。
@@ -178,6 +179,14 @@ export function CommandCenter({
     el?.scrollIntoView({ block: 'nearest' })
   }, [cursor, displayList])
 
+  /*
+   * 命令中心之前只在容器上接 React onKeyDown：焦点一旦落到容器外（列表滚到底、
+   * 用户点了空白处）Esc 就没人管，栈顶反而是底下的面板，一按 Esc 关错东西。
+   * 入栈后统一由 stack 处理；容器自己的 onKeyDown 仍更早执行并 preventDefault，
+   * 于是「正在输入时按 Esc」照旧只走容器那条路径，不会重复关。
+   */
+  useOverlayEscape(open, close)
+
   if (!open) return null
 
   const active = displayList[cursor]?.command ?? null
@@ -199,11 +208,12 @@ export function CommandCenter({
     if (isImeComposing(e)) return
     const mod = e.ctrlKey || e.metaKey
 
-    if (e.key === 'Escape') {
-      e.preventDefault()
-      close()
-      return
-    }
+    /*
+     * Esc 不在这里处理：容器上的 onKeyDown 比上层的 ContextMenu / ConfirmDialog
+     * 更早执行，一旦在这里 preventDefault 就会把子层的 Esc 一起吃掉 ——
+     * 变量框开着时按 Esc，关掉的是整个命令中心，子层还挂在那里。
+     * 交给 overlayKeys 的栈：谁在最上层谁关，逐个退。
+     */
     if (e.key === 'ArrowDown') {
       e.preventDefault()
       // 按钮墙是 3 列网格，↓ 走一格 = 视觉上跨一行。
@@ -311,7 +321,12 @@ export function CommandCenter({
   return (
     <>
       <div
-        className="fixed inset-0 z-[60] flex animate-fade-in items-start justify-center bg-ink/45 p-4 pt-[9vh]"
+        /*
+         * z-[35]：必须低于自家菜单(z-50)、确认框(z-[55])、输入弹窗(z-[57]) 和
+         * 命令编辑 Modal(z-40)，否则遮罩会把它们全压在底下 —— 右键菜单弹得出来
+         * 却看不见，删除确认点不到。同时仍高于右侧面板层(z-30)。
+         */
+        className="fixed inset-0 z-[35] flex animate-fade-in items-start justify-center bg-ink/45 p-4 pt-[9vh]"
         onMouseDown={(e) => {
           if (e.target === e.currentTarget) close()
         }}
@@ -320,7 +335,6 @@ export function CommandCenter({
           className="flex max-h-[74vh] w-full max-w-[760px] animate-pop-in flex-col overflow-hidden rounded-xl border border-edge bg-panel shadow-pop"
           onKeyDown={onKeyDown}
         >
-          {/* ---------- 搜索行 ---------- */}
           <div className="flex shrink-0 items-center gap-2 border-b border-edge px-3 py-2">
             <Search size={14} className="shrink-0 text-ink-3" />
             <input
@@ -653,7 +667,6 @@ export function CommandCenter({
             </div>
           </div>
 
-          {/* ---------- 底部提示 ---------- */}
           <div className="flex shrink-0 items-center gap-3 border-t border-edge-soft bg-app/40 px-3 py-1.5 text-2xs text-ink-3">
             <Hint keys={wallMode ? '↑ ↓ ← →' : '↑ ↓'} label="选择" />
             <Hint keys="↵" label="执行" />
@@ -693,8 +706,10 @@ export function CommandCenter({
           const target = confirmDelete
           setConfirmDelete(null)
           if (!target) return
-          void remove(target.id).then(() => {
-            useToastStore.getState().push({ kind: 'success', title: `已删除「${target.name}」` })
+          void remove(target.id).then((ok) => {
+            if (ok) {
+              useToastStore.getState().push({ kind: 'success', title: `已删除「${target.name}」` })
+            }
           })
         }}
       />

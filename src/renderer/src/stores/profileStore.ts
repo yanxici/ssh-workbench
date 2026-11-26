@@ -23,6 +23,9 @@ interface ProfileState {
   select: (id: string | null) => void
 }
 
+/** load() 的请求序号（见 load 里的守卫） */
+let loadSeq = 0
+
 export const useProfileStore = create<ProfileState>()((set, get) => ({
   panelOpen: false,
   profiles: [],
@@ -37,7 +40,13 @@ export const useProfileStore = create<ProfileState>()((set, get) => ({
   },
 
   load: async () => {
+    /*
+     * 序号守卫：togglePanel 与 save/remove 都会触发 load，慢请求后到会盖掉新结果。
+     * 典型症状是保存后列表回到保存前（新档案「消失」），过几秒又自己回来。
+     */
+    const seq = ++loadSeq
     const list = await call(window.api.profiles.list(), { errorTitle: '加载档案失败' })
+    if (seq !== loadSeq) return
     set((s) => {
       const profiles = list ?? []
       const selectedId =
@@ -62,6 +71,12 @@ export const useProfileStore = create<ProfileState>()((set, get) => ({
   remove: async (id) => {
     const ok = await call(window.api.profiles.remove(id), { errorTitle: '删除档案失败' })
     if (ok !== null) {
+      /*
+       * 删除后列表是本地摘的，不重新 load。
+       * 但如果此刻有一个更早发出的 load() 还在路上，它回来的旧列表里仍有这条档案 ——
+       * 序号推进一位就让那次结果作废，否则被删的档案几秒后又「复活」。
+       */
+      loadSeq++
       set((s) => ({
         profiles: s.profiles.filter((p) => p.id !== id),
         selectedId: s.selectedId === id ? null : s.selectedId

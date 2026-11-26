@@ -44,10 +44,24 @@ export function resolveSerialPath(cfg: SerialConfig, ports: SerialPortInfo[]): S
   // 这个环境是否能提供身份信息（一个都没有，说明驱动/平台不给）
   const envHasIdentity = ports.some((p) => p.serialNumber?.trim() || p.pnpId?.trim())
 
+  /*
+   * 同一颗芯片暴露多个串口时（FT2232 的 A/B 通道、CP2105 的增强/标准口、
+   * 双串口 CH342 等），剥出来的 serialNumber 是**芯片级**的，两个通道完全一样。
+   * 只看序列号必然 ambiguous —— 用户每次都只能手动选口，拔插一次选一次。
+   * 此时再拿 pnpId 收窄：它带着通道/接口标识（Linux 上是 ttyUSB0 与 ttyUSB1
+   * 的路径差异，Windows 上是 MI_00 / MI_02 这类接口号），能唯一确定通道。
+   */
+  const narrow = (hits: SerialPortInfo[]): SerialPortInfo[] =>
+    wantPnp ? hits.filter((p) => p.pnpId?.trim() === wantPnp) : hits
+
   if (wantSn) {
     const hits = ports.filter((p) => p.serialNumber?.trim() === wantSn)
     if (hits.length === 1) return { ok: true, path: hits[0].path, via: 'serial' }
-    if (hits.length > 1) return { ok: false, reason: 'ambiguous', candidates: hits }
+    if (hits.length > 1) {
+      const only = narrow(hits)
+      if (only.length === 1) return { ok: true, path: only[0].path, via: 'serial' }
+      return { ok: false, reason: 'ambiguous', candidates: only.length > 0 ? only : hits }
+    }
   }
 
   if (wantPnp) {

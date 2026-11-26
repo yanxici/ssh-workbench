@@ -60,15 +60,119 @@ interface TunnelRuntime {
   server?: net.Server
   /** remote：forwardIn 的绑定信息（停止时 unforwardIn） */
   remoteBind?: { host: string; port: number }
-  /** remote：'tcp connection' 监听器（停止时移除；同一客户端可能挂多个隧道，按端口过滤） */
-  tcpListener?: (
-    details: TcpConnectionDetails,
-    accept: () => ClientChannel,
-    reject: () => void
-  ) => void
+  /** remote：注册到该客户端分派器上的处理器（停止时撤销） */
+  reverseHandler?: ReverseHandler
   client?: Client
   sockets: Set<net.Socket>
   channels: Set<Duplex>
+  /**
+   * 已作废：stop()/dispose()/会话断开在 start/restore 的 await 期间发生时置位。
+   * 启动是异步的（先等会话就绪、等 forwardIn 回调），这期间用户完全可能点了停止。
+   * 不检查的话，await 返回后照样 bind 本地端口 —— 变成一个谁都关不掉的幽灵监听
+   * （-D 就是一个无认证的 SOCKS5 端口，最危险）。
+   */
+  stale?: boolean
+}
+
+/** 去掉 IPv6 方括号与 IPv4-mapped 前缀，统一小写 */
+function stripHostNoise(host: string | undefined): string {
+  let h = (host ?? '').trim().toLowerCase()
+  if (h.startsWith('[') && h.endsWith(']')) h = h.slice(1, -1)
+  if (h.startsWith('::ffff:')) h = h.slice(7)
+  return h
+}
+
+/**
+ * 绑定地址归一：空 / * / 0.0.0.0 / :: 都表示「所有地址」，返回空串。
+ *
+ * 回环名一律折成 127.0.0.1：服务端可能把同一个监听报成 localhost、::1 或
+ * 127.0.0.1，不折成同一个值，配置里写 localhost 的 -R 会永远匹配不上。
+ */
+function normalizeBindHost(host: string | undefined): string {
+  const h = stripHostNoise(host)
+  if (!h || h === '*' || h === '0.0.0.0' || h === '::') return ''
+  if (h === 'localhost' || h === '::1') return '127.0.0.1'
+  return h
+}
+
+/** -R 连接处理器：由分派器统一匹配，命中后自己开本地连接 */
+interface ReverseHandler {
+  /** 归一化后的绑定地址；空串表示所有地址 */
+  bindHost: string
+  port: number
+  open: (accept: () => ClientChannel, rejectConn: () => void) => void
+}
+
+interface TcpDispatcher {
+  handlers: Set<ReverseHandler>
+  listener: (details: TcpConnectionDetails, accept: () => ClientChannel, reject: () => void) => void
+}
+
+/**
+ * 每个 SSH 客户端只注册一个 'tcp connection' 分派器。
+ *
+ * 之前每条 -R 隧道各挂一个监听器、各自判断「不是我就 reject」：GatewayPorts 下
+ * 两条 -R 完全可以绑同端口的不同地址（0.0.0.0 与 127.0.0.1），先注册的那个会把
+ * 发往另一条隧道的连接先 reject 掉，正常流量当场被掐断；即便都命中还会重复
+ * accept/reject，服务端收到矛盾响应。改成单监听器两轮匹配（先精确地址、后通配
+ * 地址），全部不命中才 reject 一次。
+ */
+const dispatchers = new WeakMap<Client, TcpDispatcher>()
+
+function addReverseHandler(client: Client, handler: ReverseHandler): void {
+  let dispatcher = dispatchers.get(client)
+  if (!dispatcher) {
+    const handlers = new Set<ReverseHandler>()
+    const listener = (
+      details: TcpConnectionDetails,
+      accept: () => ClientChannel,
+      reject: () => void
+    ): void => {
+      /*
+       * 「上报了 0.0.0.0」与「压根没上报」必须分开：两种情况归一后都是空串，
+       * 混在一起时一个精确绑定 127.0.0.1 的 handler 会把发往 0.0.0.0 的
+       * 连接先抢走（也就是抢走了另一个隧道的全部流量）。
+       */
+      const destReported = stripHostNoise(details.destIP) !== ''
+      const got = normalizeBindHost(details.destIP)
+      let wildcard: ReverseHandler | undefined
+      for (const h of handlers) {
+        if (h.port !== details.destPort) continue
+        // 精确地址优先；服务端没上报 destIP 时无处可比，退化成放行（同原逻辑）
+        if (h.bindHost !== '' && (!destReported || got === h.bindHost)) {
+          h.open(accept, reject)
+          return
+        }
+        if (h.bindHost === '' && !wildcard) wildcard = h
+      }
+      if (wildcard) {
+        wildcard.open(accept, reject)
+        return
+      }
+      try {
+        reject()
+      } catch {
+        /* 已被处理 */
+      }
+    }
+    dispatcher = { handlers, listener }
+    dispatchers.set(client, dispatcher)
+    client.on('tcp connection', listener)
+  }
+  dispatcher.handlers.add(handler)
+}
+
+function removeReverseHandler(client: Client, handler: ReverseHandler): void {
+  const dispatcher = dispatchers.get(client)
+  if (!dispatcher) return
+  dispatcher.handlers.delete(handler)
+  if (dispatcher.handlers.size > 0) return
+  try {
+    client.removeListener('tcp connection', dispatcher.listener)
+  } catch {
+    /* ignore */
+  }
+  dispatchers.delete(client)
 }
 
 class TunnelManager {
@@ -110,9 +214,6 @@ class TunnelManager {
      */
     this.manuallyStopped.get(sessionId)?.delete(tunnelId)
 
-    const config = await getTunnel(tunnelId)
-    if (!config) throw new Error('隧道配置不存在，可能已被删除')
-
     const runtime: TunnelRuntime = {
       tunnelId,
       sessionId,
@@ -122,11 +223,38 @@ class TunnelManager {
       sockets: new Set(),
       channels: new Set()
     }
+    /*
+     * 先占位再 await。
+     *
+     * 并发双调是常态（autoStart 在会话就绪后自动拉起 + 用户同时手点「启动」）。
+     * 不占位的话两次调用都读不到 existing，各自 await getTunnel 回来后再各写一次
+     * runtimes：后写的那份把先写的顶掉，而先写的那份已经 bind 了 net.Server，
+     * 于是端口被一个 Map 里再也找不到的 runtime 占死（没有入口能关），
+     * 后来的那次启动还会收到假的 EADDRINUSE。占位后第二次调用在开头的
+     * existing 分支就看见 'starting' 直接返回同一份快照。
+     */
     this.runtimes.set(tunnelId, runtime)
     this.emit(runtime)
 
+    let config: TunnelConfig | undefined
+    try {
+      config = await getTunnel(tunnelId)
+    } catch {
+      config = undefined
+    }
+    if (!config) {
+      // 配置读不出来（被删 / 磁盘错误）：别在列表里留一条点不动的错误行
+      if (this.runtimes.get(tunnelId) === runtime) this.runtimes.delete(tunnelId)
+      runtime.status = 'error'
+      runtime.error = '隧道配置不存在，可能已被删除'
+      this.emit(runtime)
+      throw new Error('隧道配置不存在，可能已被删除')
+    }
+
     try {
       await sessionManager.waitUntilReady(sessionId)
+      // 等会话就绪期间用户可能已经点了停止：认准「本 runtime 还是当前那条」
+      if (this.runtimes.get(tunnelId) !== runtime || runtime.stale) return this.snapshot(runtime)
       const client = sessionManager.getClient(sessionId)
       if (!client) throw new Error('会话不存在或已断开，请先打开 SSH 连接')
       runtime.client = client
@@ -137,11 +265,22 @@ class TunnelManager {
         await this.startDynamic(runtime, config, client)
       else await this.startRemote(runtime, config, client)
 
+      if (this.runtimes.get(tunnelId) !== runtime || runtime.stale) {
+        // 监听已经建好了但没人要了：当场释放，别留下关不掉的端口
+        this.releaseResources(runtime)
+        return this.snapshot(runtime)
+      }
       runtime.status = 'active'
       runtime.startedAt = Date.now()
       runtime.error = undefined
       runtime.resumeOnReconnect = false
     } catch (err) {
+      /*
+       * 失败可能只是「我们自己被取消了」：用户等会话就绪期间点了停止，
+       * 或者这条 runtime 已被后一次 start 顶掉。此时把状态改成 error 再 emit，
+       * 会把用户刚点的「已停止」翻回错误态，已 dispose 的隧道也会被推回前端。
+       */
+      if (runtime.stale || this.runtimes.get(tunnelId) !== runtime) return this.snapshot(runtime)
       runtime.status = 'error'
       runtime.error = err instanceof Error ? err.message : String(err)
       this.releaseResources(runtime)
@@ -284,8 +423,14 @@ class TunnelManager {
       if (!config.connectionId || config.connectionId !== connectionId) continue
       if (stopped?.has(config.id)) continue
       const current = this.runtimes.get(config.id)
+      /*
+       * 正在跑（或正在起）就跳过，不管挂在哪个会话上。
+       * 旧实现多加了一条「sessionId 不同就跳过」，而关标签后 runtime 会以
+       * 旧 sessionId、status='stopped' 一直留在表里 —— 于是同一连接第二次
+       * 打开标签时，这条 autoStart 隧道被永久跳过，只有手动点启动才回来。
+       * 未运行的 runtime 直接交给 start() 重建（它会先 releaseResources）。
+       */
       if (current && (current.status === 'active' || current.status === 'starting')) continue
-      if (current && current.sessionId !== sessionId) continue
       try {
         await this.start(config.id, sessionId)
       } catch {
@@ -394,6 +539,10 @@ class TunnelManager {
     try {
       runtime.client = client
       await this.listenEphemeral(runtime, config, client, input.targetPort)
+      if (runtime.stale || this.runtimes.get(tunnelId) !== runtime) {
+        this.releaseResources(runtime)
+        return this.snapshot(runtime)
+      }
       runtime.status = 'active'
       runtime.startedAt = Date.now()
       runtime.error = undefined
@@ -485,6 +634,21 @@ class TunnelManager {
           targetPort,
           (err, channel) => {
             if (err) {
+              socket.destroy()
+              return
+            }
+            /*
+             * forwardOut 是一次往返，回来时本地这段连接很可能已经没了
+             * （客户端连上又立刻断开、curl 超时、隧道刚被停）。
+             * 此时再把 channel 接上去就是一条无人读的 SSH 通道：数据堆在
+             * ssh2 的缓冲里，远端还占着一条 connection，直到超时。
+             */
+            if (runtime.stale || socket.destroyed || !socket.writable) {
+              try {
+                channel.end()
+              } catch {
+                /* ignore */
+              }
               socket.destroy()
               return
             }
@@ -597,55 +761,77 @@ class TunnelManager {
         runtime.remoteBind = { host: config.bindHost, port }
         runtime.actualPort = port
 
-        // 同一客户端上可能挂多个 -R 隧道，按绑定端口过滤到自己
-        const listener = (
-          details: TcpConnectionDetails,
-          accept: () => ClientChannel,
-          rejectConn: () => void
-        ): void => {
-          if (details.destPort !== port) return
-
-          const local = net.connect({ host: targetHost, port: targetPort })
-          runtime.sockets.add(local)
-          local.on('error', () => {
-            runtime.sockets.delete(local)
-            try {
-              rejectConn()
-            } catch {
-              /* ignore */
-            }
-          })
-          local.on('close', () => runtime.sockets.delete(local))
-
-          local.on('connect', () => {
-            let channel: ClientChannel
-            try {
-              channel = accept()
-            } catch {
-              local.destroy()
-              return
-            }
-            runtime.connectionCount += 1
-            runtime.channels.add(channel)
-            channel.on('close', () => {
-              runtime.channels.delete(channel)
-              local.destroy()
-            })
-            channel.on('error', () => local.destroy())
-            local.pipe(channel)
-            channel.pipe(local)
-            local.on('close', () => {
+        /*
+         * 同一客户端上可能挂多个 -R 隧道，交给分派器按 destPort + 绑定地址选人。
+         * 分派器只在全部隧道都不匹配时 reject 一次（早退不 reject 会漏通道），
+         * 命中后这里只管开本地连接。
+         */
+        const handler: ReverseHandler = {
+          bindHost: normalizeBindHost(config.bindHost),
+          port,
+          open: (accept, rejectConn) => {
+            /*
+             * accepted 之后不能再 reject：accept() 已经把通道交给 ssh2，
+             * 迟到的 error（本地目标连上后又断）再 reject 一次，服务端会收到
+             * 一个已经作废的响应，那条连接在两边的状态从此对不上。
+             */
+            let accepted = false
+            const local = net.connect({ host: targetHost, port: targetPort })
+            runtime.sockets.add(local)
+            local.on('error', () => {
+              runtime.sockets.delete(local)
+              // connect 回调里先查 runtime.stale / 已销毁：隧道停止后建出来的连接没人收
+              if (accepted || runtime.stale) return
               try {
-                channel.end()
+                rejectConn()
               } catch {
                 /* ignore */
               }
             })
-          })
+            local.on('close', () => runtime.sockets.delete(local))
+
+            local.on('connect', () => {
+              if (runtime.stale || local.destroyed) {
+                local.destroy()
+                if (!accepted) {
+                  try {
+                    rejectConn()
+                  } catch {
+                    /* ignore */
+                  }
+                }
+                return
+              }
+              let channel: ClientChannel
+              try {
+                channel = accept()
+              } catch {
+                local.destroy()
+                return
+              }
+              accepted = true
+              runtime.connectionCount += 1
+              runtime.channels.add(channel)
+              channel.on('close', () => {
+                runtime.channels.delete(channel)
+                local.destroy()
+              })
+              channel.on('error', () => local.destroy())
+              local.pipe(channel)
+              channel.pipe(local)
+              local.on('close', () => {
+                try {
+                  channel.end()
+                } catch {
+                  /* ignore */
+                }
+              })
+            })
+          }
         }
 
-        client.on('tcp connection', listener)
-        runtime.tcpListener = listener
+        addReverseHandler(client, handler)
+        runtime.reverseHandler = handler
         resolve()
       })
     })
@@ -723,6 +909,13 @@ class TunnelManager {
   /** 重连成功后把一条挂起的隧道重新拉起来（临时转发与持久隧道同一条路径） */
   private async restore(runtime: TunnelRuntime): Promise<void> {
     const config = await this.configOf(runtime)
+    /*
+     * configOf 是 await 的（持久隧道要回读 tunnels.json）。这期间用户完全可能
+     * 已经 stop()/dispose() 掉这条隧道，或者它已被一条新的 runtime 顶掉。
+     * 不在这里拦一道，下面的 `runtime.stale = false` 会把刚打上的作废标记擦掉，
+     * 然后照原样把端口重新监听起来 —— 变成一个界面上已经不存在的幽灵监听。
+     */
+    if (this.runtimes.get(runtime.tunnelId) !== runtime || !runtime.resumeOnReconnect) return
     if (!config) {
       runtime.resumeOnReconnect = false
       runtime.status = 'error'
@@ -730,10 +923,18 @@ class TunnelManager {
       this.emit(runtime)
       return
     }
+    /*
+     * 重新武装：上一条生命周期（断线挂起 / 用户停止）在 releaseResources 里
+     * 打过 stale 标记，不擦掉的话这次恢复会在 waitUntilReady 之后当作废处理
+     * 直接返回，隧道永远停在 starting。
+     */
+    runtime.stale = false
     runtime.status = 'starting'
     this.emit(runtime)
     try {
       await sessionManager.waitUntilReady(runtime.sessionId)
+      // 恢复也是异步的：等就绪期间用户可能 stop/dispose 了这条隧道
+      if (runtime.stale || this.runtimes.get(runtime.tunnelId) !== runtime) return
       const client = sessionManager.getClient(runtime.sessionId)
       if (!client) throw new Error('会话不存在或已断开，请先打开 SSH 连接')
       runtime.client = client
@@ -748,11 +949,23 @@ class TunnelManager {
       } else {
         await this.startRemote(runtime, config, client)
       }
+      /*
+       * 监听建好之后再确认一次归属。startLocal/startRemote 都是异步的
+       * （listen 回调、forwardIn 往返），这期间用户点了停止就是停掉了；
+       * 少了这一道，stop() 会看到「还没 bind」而直接返回，我们随后才把端口
+       * 监听起来并标成 active —— 一个谁都关不掉的幽灵端口（-D 尤其危险）。
+       */
+      if (runtime.stale || this.runtimes.get(runtime.tunnelId) !== runtime) {
+        this.releaseResources(runtime)
+        return
+      }
       runtime.status = 'active'
       runtime.startedAt = Date.now()
       runtime.error = undefined
       runtime.resumeOnReconnect = false
     } catch (err) {
+      // 同上：取消导致的失败不该覆写成 error
+      if (runtime.stale || this.runtimes.get(runtime.tunnelId) !== runtime) return
       runtime.status = 'error'
       runtime.error = err instanceof Error ? err.message : String(err)
       runtime.resumeOnReconnect = false
@@ -786,6 +999,8 @@ class TunnelManager {
   }
 
   private releaseResources(runtime: TunnelRuntime): void {
+    // 作废标记：让还在 await 里的 start/restore 返回后不要再 bind
+    runtime.stale = true
     if (runtime.server) {
       try {
         runtime.server.close()
@@ -794,13 +1009,9 @@ class TunnelManager {
       }
       runtime.server = undefined
     }
-    if (runtime.client && runtime.tcpListener) {
-      try {
-        runtime.client.removeListener('tcp connection', runtime.tcpListener)
-      } catch {
-        /* ignore */
-      }
-      runtime.tcpListener = undefined
+    if (runtime.client && runtime.reverseHandler) {
+      removeReverseHandler(runtime.client, runtime.reverseHandler)
+      runtime.reverseHandler = undefined
     }
     if (runtime.client && runtime.remoteBind) {
       const { host, port } = runtime.remoteBind

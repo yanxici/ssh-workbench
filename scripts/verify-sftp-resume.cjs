@@ -49,7 +49,7 @@ fs.writeFileSync(
     '  list: () => [],',
     "  statusOf: () => 'connected',",
     '  isReconnecting: () => false,',
-    '  getClient: () => ({ sftp: (cb) => { n += 1; cb(null, globalThis.__NEXT_SFTP__(n)) } })',
+    '  getClient: () => globalThis.__CLIENT__ || (globalThis.__CLIENT__ = { sftp: (cb) => { n += 1; cb(null, globalThis.__NEXT_SFTP__(n)) } }),',
     '}'
   ].join('\n')
 )

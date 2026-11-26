@@ -63,7 +63,8 @@ interface ConnectionState {
   /** 新建一个空分组（还不含连接），返回是否成功 */
   createGroup: (name: string) => Promise<boolean>
   /** 重命名分组：整组连接一次迁移 */
-  renameGroup: (oldName: string, newName: string) => Promise<void>
+  /** @returns 是否真的改了名（false = 空名/重名/IPC 失败） */
+  renameGroup: (oldName: string, newName: string) => Promise<boolean>
   /** 删除分组及其下全部连接，返回删除的连接数；null 表示失败 */
   deleteGroup: (group: string) => Promise<number | null>
   /** 批量把连接移到另一个分组（用于「移到分组」菜单） */
@@ -149,7 +150,12 @@ export const useConnectionStore = create<ConnectionState>()((set, get) => ({
   },
 
   setKeyword: (keyword) => set({ keyword }),
-  setOnlyGroup: (onlyGroup) => set({ onlyGroup }),
+  setOnlyGroup: (onlyGroup) =>
+    set((s) => ({
+      onlyGroup,
+      // 进入「只看这组」时若该组此前被折叠，自动展开，避免点进去却只见一条收起的分组头
+      collapsed: onlyGroup ? { ...s.collapsed, [onlyGroup]: false } : s.collapsed
+    })),
 
   setGroupColor: async (group, color) => {
     const cur = { ...(useSettingsStore.getState().settings.connectionGroupColors ?? {}) }
@@ -182,21 +188,21 @@ export const useConnectionStore = create<ConnectionState>()((set, get) => ({
 
   renameGroup: async (oldName, newName) => {
     const g = newName.trim()
-    if (!g || g === oldName) return
+    if (!g || g === oldName) return false
     // 目标名已被占用：拒绝并提示，避免两组合并成一组这种意外
     const clash =
       get().connections.some((c) => (c.group || '默认') === g) ||
       savedGroups().includes(g)
     if (clash) {
       useToastStore.getState().push({ kind: 'warning', title: `分组「${g}」已存在` })
-      return
+      return false
     }
 
     // 主进程一次读改写完成，避免逐条保存
     const moved = await call(window.api.conn.renameGroup(oldName, g), {
       errorTitle: '重命名分组失败'
     })
-    if (moved === null) return
+    if (moved === null) return false
 
     const groups = savedGroups().filter((x) => x !== oldName)
     if (!groups.includes(g)) groups.push(g)
@@ -208,6 +214,18 @@ export const useConnectionStore = create<ConnectionState>()((set, get) => ({
       await writeOrder([...new Set(order.map((x) => (x === oldName ? g : x)))])
     }
 
+    /*
+     * 分组配色也要跟着改名走。
+     * 旧实现只搬了顺序和折叠状态，颜色留在旧键上：改完名分组颜色一路变回默认，
+     * 而旧键永远赖在设置里（再建一个同名分组会突然继承上一个人的颜色）。
+     */
+    const colors = { ...(useSettingsStore.getState().settings.connectionGroupColors ?? {}) }
+    if (oldName in colors) {
+      colors[g] = colors[oldName]
+      delete colors[oldName]
+      await useSettingsStore.getState().update({ connectionGroupColors: colors })
+    }
+
     // 折叠状态跟随名称迁移
     set((s) => {
       const collapsed = { ...s.collapsed }
@@ -215,9 +233,16 @@ export const useConnectionStore = create<ConnectionState>()((set, get) => ({
         collapsed[g] = collapsed[oldName]
         delete collapsed[oldName]
       }
-      return { collapsed }
+      /*
+       * 「只看这组」也要跟着改。
+       * 过滤条件还停在旧组名上时，侧栏会一条都匹配不到 ——
+       * 用户重命名完发现整个连接列表空了，还以为名字写坏了。
+       */
+      const onlyGroup = s.onlyGroup === oldName ? g : s.onlyGroup
+      return { collapsed, onlyGroup }
     })
     await get().load()
+    return true
   },
 
   deleteGroup: async (group) => {
@@ -233,6 +258,14 @@ export const useConnectionStore = create<ConnectionState>()((set, get) => ({
     if (savedOrder().includes(group)) {
       await writeOrder(savedOrder().filter((x) => x !== group))
     }
+    // 分组没了，它的配色键也必须删掉，否则以后新建同名分组会白捡旧颜色
+    const colors = { ...(useSettingsStore.getState().settings.connectionGroupColors ?? {}) }
+    if (group in colors) {
+      delete colors[group]
+      await useSettingsStore.getState().update({ connectionGroupColors: colors })
+    }
+    // 删除正在「只看这组」的分组后必须退出过滤，否则侧栏空白且没有退出口
+    if (get().onlyGroup === group) set({ onlyGroup: null })
     await get().load()
     return removed
   },
@@ -258,7 +291,15 @@ export const useConnectionStore = create<ConnectionState>()((set, get) => ({
           color: c.color,
           remark: c.remark,
           proxyJump: c.proxyJump,
-          proxy: c.proxy
+          proxy: c.proxy,
+          /*
+           * 这三个也必须原样带过去：主进程 saveConnection 是「用入参整体重算
+           * 一条记录」，缺省 kind 会按 'ssh' 处理并把 serial / legacyAlgorithms
+           * 覆写成 undefined —— 一次拖动分组就能把串口配置永久抹掉。
+           */
+          kind: c.kind,
+          serial: c.serial,
+          legacyAlgorithms: c.legacyAlgorithms
         }),
         { errorTitle: '移动分组失败' }
       )
@@ -286,40 +327,78 @@ export interface ConnectionGroup {
 /**
  * 单条连接的相关度打分。
  *
- * 旧实现是五个字段轮流 `toLowerCase().includes()`，只认连续子串：
- * 输 `r223` 搜不到「机器人-R223」，输 `xxkd` 搜不到「信阳快大」，
- * 而这正是现场设备名的常见形态。这里换成 fuzzy 子序列匹配 + 字段权重。
+ * 匹配策略（精准度优先，避免 NAT 同 IP 误命中上千条）：
+ * - 对结构化字段（host / port / host:port / username / serial.path）只做**连续子串匹配**
+ *   （hit.direct === true）：否则在数千台共用同一 NAT IP（如 10.42.42.200）的设备里
+ *   搜索 `1022` 会被子序列匹配到 `10.42.42.200`，一下子吐出全部设备。
+ * - 当查询本身是纯数字/IP/端口/编号样式（如 `1022`、`3001`、`10.42.42.200:41506`）时，
+ *   对名称/标签/分组同样只做连续子串匹配，避免 `1022` 跨字符误命中 `v1-0-2-2`。
+ * - 其余字母/中文查询（如 `r223` → 「机器人-R223」、`盘空` → 「查看磁盘空间」）
+ *   在名称/标签/分组上继续保留 fuzzy 子序列匹配。
  *
- * 权重理由：名字是用户自己起的，最能代表意图；主机/用户名次之；
- * 标签再次；分组名最后（按分组找连接时用户会直接点分组）。
- * 命中权重越高，同分时排越前。
+ * 权重理由：名字最能代表意图；主机/端口/串口次之；用户名、标签、分组递减。
  */
-const FIELD_WEIGHT = { name: 1000, host: 500, username: 400, tag: 200, group: 100 } as const
+const FIELD_WEIGHT = { name: 1000, host: 500, port: 450, username: 400, tag: 200, group: 100 } as const
+
+/** 纯数字/IP/端口/路径分隔符组成的查询视为结构化编号查询，禁止跳字子序列匹配 */
+const STRUCTURED_QUERY_RE = /^[\d.:/\\-]+$/
+
+function directMatch(text: string | undefined, kw: string): number {
+  if (!text) return 0
+  const hit = fuzzyMatch(text, kw)
+  return hit && hit.direct ? hit.score : 0
+}
 
 export interface ConnectionMatch {
   connection: Connection
   score: number
 }
 
-function scoreConnection(c: Connection, kw: string): number {
-  let best = 0
+export function scoreConnection(c: Connection, kw: string): number {
+  const q = kw.trim()
+  if (!q) return 0
 
-  const nameHit = fuzzyMatch(c.name, kw)
-  if (nameHit) best = Math.max(best, nameHit.score + FIELD_WEIGHT.name)
-
-  const hostHit = fuzzyMatch(c.host, kw)
-  if (hostHit) best = Math.max(best, hostHit.score + FIELD_WEIGHT.host)
-
-  const userHit = fuzzyMatch(c.username, kw)
-  if (userHit) best = Math.max(best, userHit.score + FIELD_WEIGHT.username)
-
-  for (const t of c.tags) {
-    const tagHit = fuzzyMatch(t, kw)
-    if (tagHit) best = Math.max(best, tagHit.score + FIELD_WEIGHT.tag)
+  const structured = STRUCTURED_QUERY_RE.test(q)
+  const matchFree = (text: string): number => {
+    const hit = fuzzyMatch(text, q)
+    if (!hit) return 0
+    if (structured && !hit.direct) return 0
+    return hit.score
   }
 
-  const groupHit = fuzzyMatch(c.group || '默认', kw)
-  if (groupHit) best = Math.max(best, groupHit.score + FIELD_WEIGHT.group)
+  let best = 0
+
+  const nameScore = matchFree(c.name)
+  if (nameScore > 0) best = Math.max(best, nameScore + FIELD_WEIGHT.name)
+
+  const hostScore = directMatch(c.host, q)
+  if (hostScore > 0) best = Math.max(best, hostScore + FIELD_WEIGHT.host)
+
+  if (c.port > 0) {
+    const portScore = directMatch(String(c.port), q)
+    if (portScore > 0) best = Math.max(best, portScore + FIELD_WEIGHT.port)
+
+    if (c.host) {
+      const hostPortScore = directMatch(`${c.host}:${c.port}`, q)
+      if (hostPortScore > 0) best = Math.max(best, hostPortScore + FIELD_WEIGHT.host)
+    }
+  }
+
+  if (c.serial?.path) {
+    const serialScore = directMatch(c.serial.path, q)
+    if (serialScore > 0) best = Math.max(best, serialScore + FIELD_WEIGHT.host)
+  }
+
+  const userScore = directMatch(c.username, q)
+  if (userScore > 0) best = Math.max(best, userScore + FIELD_WEIGHT.username)
+
+  for (const t of c.tags) {
+    const tagScore = matchFree(t)
+    if (tagScore > 0) best = Math.max(best, tagScore + FIELD_WEIGHT.tag)
+  }
+
+  const groupScore = matchFree(c.group || '默认')
+  if (groupScore > 0) best = Math.max(best, groupScore + FIELD_WEIGHT.group)
 
   return best
 }

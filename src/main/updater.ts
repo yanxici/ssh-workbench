@@ -24,7 +24,9 @@
  */
 
 import { app, shell, session } from 'electron'
-import { autoUpdater, type UpdateInfo } from 'electron-updater'
+import { readdirSync } from 'node:fs'
+import { dirname } from 'node:path'
+import { autoUpdater, CancellationToken, type UpdateInfo } from 'electron-updater'
 import type { UpdatePhase, UpdateStatus } from '@shared/types'
 import { recordError } from './store/errorLog'
 import {
@@ -69,6 +71,24 @@ let broadcast: (status: UpdateStatus) => void = () => {}
  */
 const DEV_ENABLED = process.env['SSHWB_UPDATE_DEV'] === '1'
 
+/**
+ * 当前是不是便携版/免安装版。
+ *
+ * electron-builder 的 portable 目标会注入 PORTABLE_EXECUTABLE_DIR/FILE；
+ * .zip 解压版没有安装器，同目录下不存在 NSIS 卸载程序 Uninstall*.exe。
+ * 这两类都不该走 NSIS 自动下载/安装流程，改为打开发布页手动覆盖。
+ */
+function isPortable(): boolean {
+  if (process.env['PORTABLE_EXECUTABLE_DIR'] || process.env['PORTABLE_EXECUTABLE_FILE']) return true
+  if (!app.isPackaged || process.platform !== 'win32') return false
+  try {
+    const dir = dirname(process.execPath)
+    return !readdirSync(dir).some((name) => /^Uninstall.*\.exe$/i.test(name))
+  } catch {
+    return false
+  }
+}
+
 const state: UpdateStatus = {
   phase: 'idle',
   currentVersion: app.getVersion(),
@@ -85,10 +105,29 @@ let dismissedVersion: string | undefined
 let currentMirror = ''
 let currentProxyUrl = ''
 let autoDownloadPref = false
+/** 「启动及运行期自动检查更新」的当前偏好（局部 patch 省略 autoCheck 时沿用它） */
+let autoCheckPref = true
 /** 环境变量强制指定了 feed 时，设置面板里的镜像不再生效（灰度/内网联调用） */
 let envOverrideUrl = ''
 /** 等待最近一次 setProxy 完成，避免刚改完代理立刻检查撞上旧代理 */
 let proxyReady: Promise<void> = Promise.resolve()
+/** 上一次失败的 message 与时刻，用于 3 秒内去重 */
+let lastFailMessage = ''
+let lastFailAt = 0
+/** 下载代数与取消令牌：换源/重下/teardown 时取消旧流并丢弃滞后事件 */
+let downloadGen = 0
+let downloadToken: CancellationToken | undefined
+
+function cancelDownload(): void {
+  if (!downloadToken) return
+  try {
+    downloadToken.cancel()
+  } catch {
+    /* 已经结束的 token cancel 会抛，忽略 */
+  }
+  downloadToken = undefined
+  downloadGen++
+}
 
 /** 多通道探测/回退期间抑制 autoUpdater 提前发出的 error 事件，避免 UI 闪红 */
 let suppressAutoError = false
@@ -133,6 +172,13 @@ function setPhase(phase: UpdatePhase, patch: Partial<UpdateStatus> = {}): void {
 
 function fail(err: unknown): void {
   const message = err instanceof Error ? err.message : String(err)
+  const now = Date.now()
+  if (message === lastFailMessage && now - lastFailAt < 3000) {
+    setPhase('error', { error: message })
+    return
+  }
+  lastFailMessage = message
+  lastFailAt = now
   // 更新失败是「预期内的常态」（离线/内网环境），
   // 记 warn 而不是 error，避免污染主错误日志。
   log('[updater] failed:', message)
@@ -147,6 +193,23 @@ function fail(err: unknown): void {
 
 function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err)
+}
+
+/** 打日志/报错用的脱敏 URL：去掉 userinfo 避免代理密码明文落盘 */
+function redactUrl(raw: string): string {
+  const head = raw.replace(/(^|\/\/|[=;\s])[^\s/=;]*@/g, '$1***@')
+  if (!/^(https?|socks[45]?):\/\//i.test(head)) return head
+  try {
+    const u = new URL(head)
+    if (u.username || u.password) {
+      u.username = ''
+      u.password = ''
+      return u.toString()
+    }
+    return head
+  } catch {
+    return head
+  }
 }
 
 /** 把代理配置应用到 updater 专用的 net session 上 */
@@ -164,12 +227,14 @@ function applyProxy(proxyUrl?: string): void {
       log('[updater] proxy: system')
       return
     }
+    const safeUrl = redactUrl(trimmed)
+    log('[updater] proxy:', safeUrl)
     proxyReady = ses
       .setProxy({ mode: 'fixed_servers', proxyRules: trimmed, proxyBypassRules: '<local>' })
       .catch((err) => {
         log('[updater] setProxy failed:', errorMessage(err))
+        setPhase('error', { error: `更新代理地址无效：${safeUrl}` })
       })
-    log('[updater] proxy:', trimmed)
   } catch (err) {
     log('[updater] setProxy failed:', errorMessage(err))
   }
@@ -178,13 +243,14 @@ function applyProxy(proxyUrl?: string): void {
 /**
  * 切换更新源偏好。
  *
- * 换源必须重置状态：旧源查出来的「有新版本」在新源上可能不同或路径失效，
+ * 换源必须取消在途下载并重置状态：旧源查出来的「有新版本」在新源上可能不同或路径失效，
  * 重置成 idle 后下一次检查会重新走新源。
  */
 function applyMirror(mirror?: string): void {
   if (envOverrideUrl) return
   const next = (mirror ?? '').trim()
   if (next === currentMirror) return
+  if (state.phase === 'downloading') cancelDownload()
   currentMirror = next
   activeAttempt = null
   log('[updater] mirror pref:', next || 'auto')
@@ -193,7 +259,11 @@ function applyMirror(mirror?: string): void {
       latestVersion: undefined,
       error: undefined,
       releaseNotes: undefined,
-      sourceLabel: undefined
+      sourceLabel: undefined,
+      percent: undefined,
+      transferred: undefined,
+      total: undefined,
+      bytesPerSecond: undefined
     })
   }
 }
@@ -350,6 +420,12 @@ export async function checkForUpdates(force = false): Promise<UpdateStatus> {
     return getUpdateStatus()
   }
 
+  await proxyReady
+  const recheck = getUpdateStatus()
+  if (!initialized || recheck.phase === 'checking' || recheck.phase === 'downloading' || recheck.phase === 'downloaded') {
+    return recheck
+  }
+
   setPhase('checking', {
     error: undefined,
     percent: undefined,
@@ -387,7 +463,7 @@ export async function checkForUpdates(force = false): Promise<UpdateStatus> {
             version: latest,
             trustedSha512: spec.isFirstParty ? sha512 : undefined
           }
-          if (autoDownloadPref) {
+          if (autoDownloadPref && !isPortable()) {
             void downloadUpdate()
           }
         } else if (latest === snap.latestVersion && snap.phase === 'checking') {
@@ -425,7 +501,27 @@ export async function downloadUpdate(): Promise<UpdateStatus> {
   if (state.phase === 'downloading' || state.phase === 'downloaded') {
     return getUpdateStatus()
   }
+  if (state.phase !== 'available' || !state.latestVersion) {
+    log('[updater] no available update to download, skip')
+    return getUpdateStatus()
+  }
+  if (isPortable()) {
+    log('[updater] portable build, skip download and open release page')
+    await openReleasePage()
+    return getUpdateStatus()
+  }
+
+  cancelDownload()
+  const gen = downloadGen
+  downloadToken = new CancellationToken()
+  const token = downloadToken
   setPhase('downloading', { percent: 0, transferred: 0, total: undefined, error: undefined })
+
+  await proxyReady
+  if (!initialized || gen !== downloadGen || token.cancelled) {
+    if (downloadToken === token) downloadToken = undefined
+    return getUpdateStatus()
+  }
 
   const attempt = activeAttempt
   const fallbackOrder = attempt
@@ -439,9 +535,12 @@ export async function downloadUpdate(): Promise<UpdateStatus> {
   try {
     // 第 1 轮：直接使用检查阶段已经就绪的 updateInfoAndProvider，不重复查 latest.yml
     try {
-      await autoUpdater.downloadUpdate()
+      await autoUpdater.downloadUpdate(token)
       return getUpdateStatus()
     } catch (err) {
+      if (!initialized || gen !== downloadGen || token.cancelled) {
+        return getUpdateStatus()
+      }
       const activeLabel = attempt?.candidates[attempt.activeIndex]?.label ?? state.sourceLabel ?? '当前源'
       const reason = errorMessage(err)
       failures.push(`${activeLabel}: ${reason}`)
@@ -451,9 +550,15 @@ export async function downloadUpdate(): Promise<UpdateStatus> {
     // 后续轮：切到剩余候选通道，重新绑定 updateInfoAndProvider 后重试下载
     if (attempt && fallbackOrder.length > 0) {
       for (const { spec, idx } of fallbackOrder) {
+        if (!initialized || gen !== downloadGen || token.cancelled) {
+          return getUpdateStatus()
+        }
         try {
           log(`[updater] switching download channel → ${spec.label}`)
           const resolved = await resolveChannel(spec)
+          if (!initialized || gen !== downloadGen || token.cancelled) {
+            return getUpdateStatus()
+          }
           if (resolved.meta.version !== attempt.version) {
             throw new Error(`版本不一致（期望 ${attempt.version}，该通道为 ${resolved.meta.version}）`)
           }
@@ -469,6 +574,9 @@ export async function downloadUpdate(): Promise<UpdateStatus> {
             resyncInfo = checkRes?.updateInfo
           } finally {
             silentResync = false
+          }
+          if (!initialized || gen !== downloadGen || token.cancelled) {
+            return getUpdateStatus()
           }
           if (!resyncInfo || resyncInfo.version !== attempt.version) {
             throw new Error(`切换通道后版本不匹配（${resyncInfo?.version ?? 'none'}）`)
@@ -487,10 +595,13 @@ export async function downloadUpdate(): Promise<UpdateStatus> {
             error: undefined
           })
 
-          await autoUpdater.downloadUpdate()
+          await autoUpdater.downloadUpdate(token)
           attempt.activeIndex = idx
           return getUpdateStatus()
         } catch (err) {
+          if (!initialized || gen !== downloadGen || token.cancelled) {
+            return getUpdateStatus()
+          }
           const reason = errorMessage(err)
           failures.push(`${spec.label}: ${reason}`)
           log(`[updater] fallback download failed (${spec.label}):`, reason)
@@ -498,9 +609,12 @@ export async function downloadUpdate(): Promise<UpdateStatus> {
       }
     }
 
-    fail(new Error(failures.length === 1 ? failures[0] : `下载失败（${failures.join('；')}）`))
+    if (gen === downloadGen && !token.cancelled) {
+      fail(new Error(failures.length === 1 ? failures[0] : `下载失败（${failures.join('；')}）`))
+    }
     return getUpdateStatus()
   } finally {
+    if (downloadToken === token) downloadToken = undefined
     silentResync = false
     suppressAutoError = false
   }
@@ -515,6 +629,11 @@ export async function downloadUpdate(): Promise<UpdateStatus> {
  */
 export function quitAndInstall(): void {
   if (!initialized) return
+  if (isPortable()) {
+    log('[updater] portable build, open release page instead of installer')
+    void openReleasePage()
+    return
+  }
   // 有正在跑的 SSH 会话时也照常退出：用户点的就是这个按钮，
   // 预期明确。会话日志已落盘，重连由应用重新打开时处理。
   try {
@@ -577,29 +696,21 @@ export function initUpdater(options: InitUpdaterOptions): () => void {
 
   if (initialized) return () => undefined
   initialized = true
+  type UpdateEvent = Parameters<typeof autoUpdater.on>[0]
+  const bound: Array<[UpdateEvent, (...args: never[]) => void]> = []
 
   if (DEV_ENABLED && !app.isPackaged) {
     autoUpdater.forceDevUpdateConfig = true
   }
 
-  applyProxy(options.proxyUrl)
-
   // 始终由本模块自己触发 downloadUpdate()，确保走多通道回退逻辑
   autoDownloadPref = options.autoDownload === true
+  autoCheckPref = options.autoCheck !== false
   autoUpdater.autoDownload = false
-  autoUpdater.autoInstallOnAppQuit = true
+  autoUpdater.autoInstallOnAppQuit = !isPortable()
   autoUpdater.allowPrerelease = false
   autoUpdater.allowDowngrade = false
   autoUpdater.disableWebInstaller = true
-
-  // 允许命令行/环境变量覆盖发布源，便于在内网镜像上做灰度验证
-  envOverrideUrl = (process.env['SSHWB_UPDATE_URL'] ?? '').trim()
-  if (envOverrideUrl) {
-    log('[updater] feed overridden:', envOverrideUrl)
-  } else {
-    currentMirror = (options.mirror ?? '').trim()
-    log('[updater] mirror pref:', currentMirror || 'auto')
-  }
 
   // logger 默认往文件写，这里接到主进程日志里，排障时一个日志面板能看到全部
   autoUpdater.logger = {
@@ -609,12 +720,17 @@ export function initUpdater(options: InitUpdaterOptions): () => void {
     debug: () => undefined
   }
 
-  autoUpdater.on('checking-for-update', () => {
+  const bind = <A extends unknown[]>(event: UpdateEvent, fn: (...args: A) => void): void => {
+    autoUpdater.on(event, fn)
+    bound.push([event, fn as never])
+  }
+
+  bind('checking-for-update', () => {
     if (silentResync) return
     setPhase('checking', { error: undefined })
   })
 
-  autoUpdater.on('update-available', (info: UpdateInfo) => {
+  bind('update-available', (info: UpdateInfo) => {
     if (silentResync) return
     const ctx = probingContext
     log('[updater] available:', info.version, ctx ? `(${ctx.label})` : '')
@@ -629,7 +745,7 @@ export function initUpdater(options: InitUpdaterOptions): () => void {
     })
   })
 
-  autoUpdater.on('update-not-available', (info: UpdateInfo) => {
+  bind('update-not-available', (info: UpdateInfo) => {
     if (silentResync) return
     const ctx = probingContext
     log('[updater] up to date:', info.version, ctx ? `(${ctx.label})` : '')
@@ -643,17 +759,21 @@ export function initUpdater(options: InitUpdaterOptions): () => void {
     })
   })
 
-  autoUpdater.on('download-progress', (p) => {
-    if (silentResync) return
-    setPhase('downloading', {
-      percent: Math.max(0, Math.min(100, p.percent)),
-      transferred: p.transferred,
-      total: p.total,
-      bytesPerSecond: p.bytesPerSecond
-    })
-  })
+  bind(
+    'download-progress',
+    (p: { percent: number; transferred: number; total: number; bytesPerSecond: number }) => {
+      if (silentResync || !downloadToken) return
+      setPhase('downloading', {
+        percent: Math.max(0, Math.min(100, p.percent)),
+        transferred: p.transferred,
+        total: p.total,
+        bytesPerSecond: p.bytesPerSecond
+      })
+    }
+  )
 
-  autoUpdater.on('update-downloaded', (info: UpdateInfo) => {
+  bind('update-downloaded', (info: UpdateInfo) => {
+    if (silentResync || !downloadToken) return
     log('[updater] downloaded:', info.version)
     setPhase('downloaded', {
       latestVersion: info.version,
@@ -663,14 +783,25 @@ export function initUpdater(options: InitUpdaterOptions): () => void {
     })
   })
 
-  autoUpdater.on('error', (err: Error) => {
+  bind('error', (err: Error) => {
     if (suppressAutoError || silentResync) return
     fail(err)
   })
 
+  // 允许命令行/环境变量覆盖发布源，便于在内网镜像上做灰度验证
+  envOverrideUrl = (process.env['SSHWB_UPDATE_URL'] ?? '').trim()
+  if (envOverrideUrl) {
+    log('[updater] feed overridden:', envOverrideUrl)
+  } else {
+    currentMirror = (options.mirror ?? '').trim()
+    log('[updater] mirror pref:', currentMirror || 'auto')
+  }
+
+  applyProxy(options.proxyUrl)
+
   // 首次检查延后：启动瞬间窗口还在建、渲染层还没订阅事件，
   // 立刻检查的话状态推送会全部丢掉，用户看不到「有新版」。
-  if (options.autoCheck !== false) {
+  if (autoCheckPref) {
     const delay = options.initialDelayMs ?? 8000
     checkTimer = setTimeout(() => {
       checkTimer = null
@@ -685,6 +816,17 @@ export function initUpdater(options: InitUpdaterOptions): () => void {
       clearTimeout(checkTimer)
       checkTimer = null
     }
+    for (const [event, fn] of bound) autoUpdater.removeListener(event, fn)
+    bound.length = 0
+    currentMirror = ''
+    currentProxyUrl = ''
+    envOverrideUrl = ''
+    autoCheckPref = true
+    autoDownloadPref = false
+    proxyReady = Promise.resolve()
+    activeAttempt = null
+    cancelDownload()
+    downloadToken = undefined
     initialized = false
   }
 }
@@ -717,12 +859,15 @@ export function applyUpdatePrefs(prefs: {
   if (prefs.autoDownload !== undefined) {
     autoDownloadPref = prefs.autoDownload === true
   }
+  if (prefs.autoCheck !== undefined) {
+    autoCheckPref = prefs.autoCheck !== false
+  }
 
   if (checkTimer) {
     clearTimeout(checkTimer)
     checkTimer = null
   }
-  if (prefs.autoCheck === false) {
+  if (!autoCheckPref) {
     log('[updater] auto check disabled')
     return
   }

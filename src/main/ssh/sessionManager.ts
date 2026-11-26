@@ -18,8 +18,14 @@ import { listSerialPorts } from '../transport/serialPorts'
 // 显示名格式只留 shared 那一份：标签栏要立刻显示（主进程还没回话），
 // 主进程 list() 也要给同一个名字，两处各写必然漂移。
 import { describeSerialTarget } from '@shared/serialDisplay'
-import { getConnection, getSettings, touchConnection } from '../store/repository'
+import {
+  getConnection,
+  getSettings,
+  markSerialPathPending,
+  touchConnection
+} from '../store/repository'
 import { recorder } from './recorder'
+import { recordError } from '../store/errorLog'
 import {
   createAdaptiveFlushState,
   onAdaptiveFeed,
@@ -27,7 +33,9 @@ import {
   type AdaptiveFlushState
 } from '../util/adaptiveFlush'
 import {
-  looksLikeTrzsz,
+  keepTrzszTail,
+  reassembleTrzszHandshake,
+  looksLikeTrzszFrame,
   looksLikeTrzszMissing,
   stripTrzszHandshake,
   trzszManager,
@@ -91,8 +99,12 @@ interface SessionRecord {
   /**
    * 统一的数据通道。收发、窗口、关闭全部走它，本类不再直接碰 ssh2 的 channel。
    * 解码也下沉到传输层内部：SSH 固定 UTF-8，串口按连接配置的 charset。
+   *
+   * open 期间可能为 undefined：SSH 要等连接建好才知道 client，串口要等端口
+   * 解析完才知道真实 COM 号。这段时间渲染层已经在发 resize / write 了，
+   * 所以类型必须诚实地允许空值，而不是塞一个占位实现假装能用。
    */
-  transport: Transport
+  transport?: Transport
   /**
    * 底层 SSH 连接，仅 kind='ssh' 时有值。
    * SFTP 挂载、延迟探测、端口转发这些 SSH 专有能力仍需要它 ——
@@ -112,6 +124,14 @@ interface SessionRecord {
   pendingRaw: Buffer[]
   flushState: AdaptiveFlushState
   flushTimer?: NodeJS.Timeout
+  /**
+   * 最近一段输出尾巴（截断保留），专供跨帧握手识别。
+   * 握手串可能被 TCP 分片切成两帧，只看单帧永远匹配不到；
+   * 又不能为它把整个会话输出都缓存下来，所以只留握手串长度 - 1 的前缀余量。
+   */
+  tail: string
+  /** 上一帧的尾巴快照（跨帧握手重组用），由 trzszFor 写入、flush 读取 */
+  handshakeTail: string
   /** 最近一次探测的时刻 / 是否正在进行，供全局轮转探针调度 */
   probedAt?: number
   probing?: boolean
@@ -137,7 +157,33 @@ const PROBE_MIN_GAP_MS = 5000
 /** 等待会话就绪的默认上限（连接握手未完成的挂起请求） */
 const READY_TIMEOUT_MS = 30_000
 
+/** 跳板机指纹冲突消息的前缀：describeError 靠它避免再套一层目标机的措辞 */
+const HOSTKEY_MESSAGE_PREFIX = '跳板机主机指纹已变化'
 
+/**
+ * 指纹冲突的统一措辞。
+ *
+ * isJump 决定主语是「跳板机」还是「目标机」：两者都走同一段文案，
+ * 但用户要核对的机器完全不同 —— 旧实现一律说成目标机，
+ * 于是跳板机的指纹冲突被归咎到了目标主机上。
+ */
+function hostKeyMismatchMessage(
+  conn: { host: string; port: number },
+  mismatch: { actual: string; known: string | null },
+  isJump: boolean
+): string {
+  const who = isJump ? HOSTKEY_MESSAGE_PREFIX : '主机指纹已变化'
+  const where = isJump ? '跳板机' : '设备'
+  const tip = isJump
+    ? '请到 设置 → 已知主机指纹 找到这台跳板机，确认新指纹后再连接。'
+    : '若设备确实重装系统或升级过固件，请到 设置 → 已知主机指纹 点该记录上的指纹按钮确认更新。'
+  return (
+    `${who}（${conn.host}:${conn.port}）\n` +
+    `记录中：${mismatch.known ?? '（无）'}\n` +
+    `${where}当前：${mismatch.actual}\n` +
+    tip
+  )
+}
 
 /** 就绪等待者：会话进入 connected 时 resolve，失败/断开/超时时 reject */
 interface ReadyWaiter {
@@ -182,6 +228,37 @@ class SessionManager {
     }
   >()
   /**
+   * 重连作废计数：每次 cancelReconnect 递增一次。
+   *
+   * scheduleReconnect / scheduleReconnectFromState 都要先 await getSettings()，
+   * 这期间用户完全可能已经关掉标签。旧实现 await 回来后照旧写 reconnectState
+   * 并排定时器 —— 用户看到的是「我刚关掉的标签自己又弹回来了」。
+   * 进入时记下计数、await 回来后比对，变了就说明这次重连已经被作废。
+   * 每条会话只留一个数字，随进程退出一起消失。
+   */
+  private reconnectEpoch = new Map<string, number>()
+  /**
+   * 「即将重连」的即时标记（R-C2 坑 C）。
+   *
+   * scheduleReconnect 里要先 await getSettings() 才往 reconnectState 写记录，
+   * 这中间存在一个窗口：teardown 已经把 record 删了，statusOf() 返回 undefined，
+   * 而 isReconnecting() 还是 false。下游（SFTP 断点续传的 recoverChannel）正是
+   * 在这个窗口里判定「会话已关闭且不会再重连」，于是断线第一轮轮询就放弃任务。
+   * 所以在 teardown 判定 willReconnect 的那一刻就同步打标记，等 reconnectState
+   * 接棒后再摘掉。两者任一存在即视为「正在重连」。
+   */
+  private pendingReconnect = new Set<string>()
+  /** resumeSerialSessions 的重入锁：热插拔事件常成对到来 */
+  private resumingSerial = false
+  /**
+   * 重入期间又来了插拔通知（R-H16）。
+   *
+   * 旧实现第二次直接 return，把那一次通知连同它带来新插回的设备一起丢了 ——
+   * 用户看到的是「设备插回去了但标签还是断的，得再拔插一次」。
+   * 现在只打一个标记，等当前这轮结束后合并重跑一遍。
+   */
+  private resumeSerialQueued = false
+  /**
    * 串口会话「等设备插回」的挂起表。
    *
    * 与 reconnectState 分开而不是复用：SSH 的重连是定时器驱动的退避重试，
@@ -190,7 +267,21 @@ class SessionManager {
    */
   private serialWaiting = new Map<
     string,
-    { connectionId: string; title: string; cols: number; rows: number }
+    {
+      connectionId: string
+      title: string
+      cols: number
+      rows: number
+      /**
+       * 断开那一刻的串口参数快照。
+       *
+       * 必须在挂起时抄一份：用户在串口工具条上在线改过波特率后，新速率只写进了
+       * 这条会话记录的 serialConfig，连接配置里还是旧值。恢复走 open() 会重新
+       * 从连接库读配置 —— 不带上快照就会用旧速率重开，表现为「改完波特率拔插
+       * 一次又跳回原来那个」。
+       */
+      serialConfig?: SerialConfig
+    }
   >()
   private handlers: SessionEvents | null = null
   /**
@@ -404,7 +495,16 @@ class SessionManager {
    *  打开会话
    * ------------------------------------------------------------------ */
 
-  async open(sessionId: string, connectionId: string, cols: number, rows: number): Promise<void> {
+  /**
+   * @param serialOverride 串口参数快照（热插拔恢复时带上，见 serialWaiting.serialConfig）
+   */
+  async open(
+    sessionId: string,
+    connectionId: string,
+    cols: number,
+    rows: number,
+    serialOverride?: SerialConfig
+  ): Promise<void> {
     if (this.sessions.has(sessionId) || this.opening.has(sessionId)) return
 
     // 读连接/凭据期间会话还没登记，这时到达的 close 记到 cancelled 里，登记前检查
@@ -427,7 +527,7 @@ class SessionManager {
     // 串口与 SSH 的连接建立过程毫无共同点（一边是 TCP+握手+认证+跳板，
     // 一边是打开本地设备文件），只共享外层的「登记 → 广播 → 失败处理」。
     if (conn.kind === 'serial') {
-      await this.openSerial(sessionId, connectionId, conn, settings, cols, rows)
+      await this.openSerial(sessionId, connectionId, conn, settings, cols, rows, serialOverride)
       return
     }
 
@@ -486,8 +586,9 @@ class SessionManager {
       void this.prewarmSftp(record.id)
 
       // ---- 打开交互式 shell ----
-      record.transport = new SshTransport({ getClient: () => Promise.resolve(client) }, this.transportEvents(record))
-      await record.transport.open({ cols: record.cols, rows: record.rows })
+      const transport = new SshTransport({ getClient: () => Promise.resolve(client) }, this.transportEvents(record))
+      record.transport = transport
+      await transport.open({ cols: record.cols, rows: record.rows })
       // shell 打开完才算真正可用；这一步的 status 仍应是 connecting（有 phase=shell）
       this.emitStatus(record, 'connected')
       /*
@@ -497,6 +598,12 @@ class SessionManager {
       this.onConnected?.(record.id, connectionId, this.reconnectState.has(record.id))
 
       await touchConnection(connectionId)
+      /*
+       * touchConnection 会写库/走 IPC，同样是 await 窗口（R-H24）。
+       * 这期间关标签的话 teardown 已经跑完，再往下就会给一条已关闭的会话
+       * 拉起录制器，落一个永远没人 stop 的 cast 文件。
+       */
+      if (record.closed) return
       // 延迟探测：起全局节拍器即可，单会话不再各自挂定时器
       if (settings.latencyProbe) this.ensureProbeTicker()
 
@@ -511,8 +618,21 @@ class SessionManager {
       }
     } catch (err) {
       const message = this.describeError(err, conn)
-      // 已被关闭 / 拆除（如连接中途关掉标签）：状态已广播过，不再覆盖成 error
-      if (record.closed) throw new Error(message)
+      /*
+       * 已被关闭 / 拆除（如连接中途关掉标签）：状态已广播过，不再覆盖成 error。
+       *
+       * 但资源必须在这里兜底释放。cleanup 早就跑完了（它只在 record.closed
+       * 那一刻执行一次），那时 record.client 还没赋值；若这里直接 throw，
+       * 已经建好的主连接和整条跳板链就没人再管它们了 —— 它们带着 keepalive
+       * 定时器活到进程退出。teardown 的 cleanup 是「先到先得」的，所以
+       * throw 之前必须把这一批补上。
+       */
+      if (record.closed) {
+        this.endQuietly(record.client, record.jumpClients)
+        record.client = undefined
+        record.jumpClients = []
+        throw new Error(message)
+      }
       this.failRecord(record, message)
       throw new Error(message)
     }
@@ -525,9 +645,17 @@ class SessionManager {
     conn: Connection,
     settings: AppSettings,
     cols: number,
-    rows: number
+    rows: number,
+    override?: SerialConfig
   ): Promise<void> {
-    const cfg = conn.serial
+    /*
+     * 快照优先：热插拔恢复时要沿用断开前在线改过的波特率，而不是连接库里的旧值。
+     *
+     * 必须浅拷贝：下面解析端口时会把 resolved.path 写回 cfg.path（真实 COM 号
+     * 可能与保存值不同）。直接写 override / conn.serial 会就地改掉 store 里的
+     * 连接对象 —— 本次会话没保存却被"记住"了新端口，下次连别的设备也可能撞上。
+     */
+    const cfg = override ? { ...override } : conn.serial ? { ...conn.serial } : undefined
     const record = this.newRecord({
       id: sessionId,
       connectionId,
@@ -563,23 +691,46 @@ class SessionManager {
       const resolved = resolveSerialPath(cfg, ports)
       if (!resolved.ok) {
         cfg.pathPending = true
+        /*
+         * 必须落盘：这个标记的唯一用途就是下次启动时提示「端口没了，重选一个」。
+         * cfg 是浅拷贝（见上面注释），只改它等于什么都没告诉用户。
+         * 失败也不能挡住真正要报的那条错 —— 用户至少还能看到「端口不存在」。
+         */
+        await markSerialPathPending(connectionId).catch(() => {})
         throw new Error(
           resolved.reason === 'ambiguous'
             ? `有 ${resolved.candidates.length} 个串口匹配同一台设备（${resolved.candidates.map((c) => c.path).join(' / ')}），请重新选择端口`
             : `串口 ${cfg.path} 当前不存在，设备可能已拔出或端口号已变化，请重新选择端口`
         )
       }
-      // 端口号变了就更新到记录上：界面显示与后续写入都要用真实端口
-      if (resolved.path !== cfg.path) cfg.path = resolved.path
+      // 端口号变了就更新到自己这份快照与记录上：界面显示与后续写入都要用真实端口。
+      // record.serialConfig 是更早的副本，不同步的话重连恢复仍会去开旧端口。
+      if (resolved.path !== cfg.path) {
+        cfg.path = resolved.path
+        if (record.serialConfig) record.serialConfig.path = resolved.path
+      }
+
+      /*
+       * 解析端口期间用户可能已经关了标签：此时 cleanup 早就跑过了，
+       * 下面新建的传输层没人会去 close —— 句柄一旦打开就永久占着 COM 口。
+       */
+      if (record.closed) return
 
       record.target = describeSerialTarget(cfg)
       // 传输层用的是构造时的 config 快照，端口解析后需要重建
-      record.transport = this.makeSerialTransport(cfg, this.transportEvents(record))
-      await record.transport.open({ cols, rows })
+      const transport = this.makeSerialTransport(cfg, this.transportEvents(record))
+      record.transport = transport
+      await transport.open({ cols, rows })
 
       if (record.closed) return
 
       await touchConnection(connectionId)
+      /*
+       * 同 open()：touchConnection 是 await 窗口，这期间关标签的话
+       * teardown 已跑完并广播过 disconnected，再往下就会补发一条
+       * connected 把已关闭的会话又"点亮"（R-H24）。
+       */
+      if (record.closed) return
       if (settings.autoLog) {
         void recorder
           .start(sessionId, conn.name, record.cols, record.rows, {
@@ -626,13 +777,14 @@ class SessionManager {
       cols: init.cols,
       rows: init.rows,
       latencyMs: init.latencyMs,
-      // 占位：open 过程中会被真正的实现替换；这里保证字段非空
-      transport: null as unknown as Transport,
+      // 真正的传输层要等建连/端口解析完成后才构造（见 open 与 openSerial）
       jumpClients: [],
       serialConfig: init.serialConfig,
       pendingText: [],
       pendingRaw: [],
       flushState: createAdaptiveFlushState(),
+      tail: '',
+    handshakeTail: '',
       closedByUser: false,
       shared: { refs: 1 },
       closed: false,
@@ -705,8 +857,9 @@ class SessionManager {
     try {
       this.wireClientEvents(record)
       const client = host.client
-      record.transport = new SshTransport({ getClient: () => Promise.resolve(client) }, this.transportEvents(record))
-      await record.transport.open({ cols: record.cols, rows: record.rows })
+      const transport = new SshTransport({ getClient: () => Promise.resolve(client) }, this.transportEvents(record))
+      record.transport = transport
+      await transport.open({ cols: record.cols, rows: record.rows })
       this.emitStatus(record, 'connected')
       void this.prewarmSftp(record.id)
 
@@ -737,9 +890,21 @@ class SessionManager {
     if (this.sessions.get(record.id) === record) this.sessions.delete(record.id)
   }
 
-  private endQuietly(client: Client, jumps: Client[]): void {
-    for (const c of [client, ...jumps]) {
+  /**
+   * 关掉主连接与整条跳板链。
+   * client 允许为空：跳到一半失败时 record.client 还是 undefined，
+   * 但 jumpClients 里已经有连上的跳板机，必须照样关掉。
+   */
+  private endQuietly(client: Client | null | undefined, jumps: Client[]): void {
+    for (const c of [...(client ? [client] : []), ...jumps]) {
       try {
+        /*
+         * end() 之后 ssh2 仍可能派发迟到的 'error'（关闭期 RST、keepalive 超时），
+         * 监听器为 0 时 EventEmitter 会把它变成 uncaughtException 直接崩主进程。
+         * 建连路径都经过 connectClient（已常驻兜底），这里再兜一次是为
+         * 跳板链半途失败与 testConnection 这类没走 onReady 的 Client 留底。
+         */
+        if (c.listenerCount('error') === 0) c.on('error', () => {})
         c.end()
       } catch {
         /* ignore */
@@ -758,23 +923,89 @@ class SessionManager {
     let prev: Client | null = null
 
     for (const jumpId of target.proxyJump ?? []) {
+      /*
+       * 每一跳开始前先看标签还在不在（R-H16）。
+       * 建一跳要过查配置 → 取凭据 → 建链 → 转发四个 await，用户完全可能在
+       * 第 1 跳慢的时候就把标签关了；旧实现照样把剩下的跳全部建完，
+       * 只在最后一刻的 open() 里检查——中途那些 Client 会连同它们的
+       * keepalive 定时器一起活到进程退出。
+       */
+      if (record.closed) throw new Error('会话已关闭')
       const jumpConn = await getConnection(jumpId)
       if (!jumpConn) throw new Error(`跳板机连接不存在（id: ${jumpId}）`)
       const jumpSecret = await getSecret(jumpId)
       const jumpCfg = await buildConnectConfig(jumpConn, jumpSecret, settings)
 
       let client: Client
-      if (!prev) {
-        // 第一跳：目标连接配置的代理作用于它（后续跳走 SSH 隧道）
-        client = await connectWithOptionalProxy(jumpCfg, {
-          host: jumpConn.host,
-          port: jumpConn.port,
-          proxy: target.proxy,
-          proxyPassword: targetProxyPassword
+      try {
+        if (!prev) {
+          // 第一跳：目标连接配置的代理作用于它（后续跳走 SSH 隧道）
+          client = await connectWithOptionalProxy(jumpCfg, {
+            host: jumpConn.host,
+            port: jumpConn.port,
+            proxy: target.proxy,
+            proxyPassword: targetProxyPassword
+          })
+        } else {
+          const tunnel = await forwardThrough(prev, jumpConn.host, jumpConn.port)
+          client = await connectClient(jumpCfg, tunnel)
+        }
+      } catch (err) {
+        /*
+         * 指纹冲突发生在跳板机上，不是目标主机上。
+         * 上层 describeError 只拿得到目标机 conn，按它查冲突表必然查不到，
+         * 于是同一条错误被说成「目标机指纹校验未通过」—— 用户跑去核对目标机，
+         * 而真正需要确认的是中间那台跳板机。这里就地判定并用明确措辞抛出。
+         */
+        /*
+         * 冲突表是按 host:port 记的，60 秒内的旧记录会一直躺着。
+         * 跳板机这次其实是密码错 / 超时 / 拒连时，如果照旧查表，
+         * 用户会看到「跳板机指纹变了」，跑去核对指纹，而真因在别处。
+         * 所以先看错误文本像不像主机密钥校验失败，再查表（对齐 describeError）。
+         */
+        const raw = err instanceof Error ? err.message : String(err)
+        if (/host key|verif|Host denied/i.test(raw)) {
+          const hint = takeHostKeyMismatch(jumpConn.host, jumpConn.port)
+          if (hint) {
+            throw new Error(hostKeyMismatchMessage(jumpConn, hint, true))
+          }
+        }
+        throw err
+      }
+      /*
+       * 跳板机 Client 必须绑 'error'：它从建链到销毁都不经过 wireClientEvents，
+       * 一旦网络抖动/RST/keepalive 超时，ssh2 的 emit('error') 没有监听就是
+       * 主进程级未捕获异常（R-C4）。这里只记日志，真正的清理交给 'close'。
+       */
+      client.on('error', (err: Error) => {
+        void recordError({
+          level: 'warn',
+          source: 'session',
+          title: `跳板机 ${jumpConn.host}:${jumpConn.port} 连接异常`,
+          detail: err.message
         })
-      } else {
-        const tunnel = await forwardThrough(prev, jumpConn.host, jumpConn.port)
-        client = await connectClient(jumpCfg, tunnel)
+      })
+      client.on('close', () => {
+        /*
+         * 只报「意外掉线」。
+         *
+         * 用户关标签时 teardown 会 endQuietly 主动断开跳板机，这一下也走
+         * 'close' —— 旧实现在这里无条件记一条红色 error，于是每关一次
+         * ProxyJump 标签，错误面板就多一条假故障，把真问题淹了。
+         * 判据：用户主动关（closedByUser）或会话已 teardown（closed）都是正常收尾；
+         * 剩下的才是连接自己掉了，而且只降级成 warn。
+         */
+        if (record.closedByUser || record.closed) return
+        void recordError({
+          level: 'warn',
+          source: 'session',
+          title: `跳板机 ${jumpConn.host}:${jumpConn.port} 连接已关闭`
+        })
+      })
+      // 这一跳的建链本身也是 await：回来后会话可能已经被关掉了
+      if (record.closed) {
+        this.endQuietly(client, [])
+        throw new Error('会话已关闭')
       }
       record.jumpClients.push(client)
       prev = client
@@ -812,15 +1043,12 @@ class SessionManager {
 
   private describeError(err: unknown, conn: Connection): string {
     const raw = err instanceof Error ? err.message : String(err)
+    // 跳板机指纹冲突已在 connectThroughJumps 里成文，别再套一层目标机的措辞
+    if (raw.startsWith(HOSTKEY_MESSAGE_PREFIX)) return raw
     if (/host key|verif|Host denied/i.test(raw)) {
       const mismatch = takeHostKeyMismatch(conn.host, conn.port)
       if (mismatch) {
-        return (
-          `主机指纹已变化（${conn.host}:${conn.port}）\n` +
-          `记录中：${mismatch.known ?? '（无）'}\n` +
-          `设备当前：${mismatch.actual}\n` +
-          '若设备确实重装系统或升级过固件，请到 设置 → 已知主机指纹 点该记录上的指纹按钮确认更新。'
-        )
+        return hostKeyMismatchMessage(conn, mismatch, false)
       }
       return `主机指纹校验未通过（${conn.host}:${conn.port}）。若设备已重装或固件升级导致密钥变化，请在 设置 → 已知主机 中更新该记录后重试。`
     }
@@ -844,7 +1072,7 @@ class SessionManager {
     if (trzsz) trzsz.processInput(data)
     // 换行转换、字符编码全部在传输层内部完成：串口按连接的 charset/newline，
     // SSH 原样透传（远端 locale 由服务端决定）
-    else rec.transport.write(data)
+    else rec.transport?.write(data)
     recorder.appendInput(sessionId, data)
   }
 
@@ -860,7 +1088,7 @@ class SessionManager {
     // 传输中不接受二进制：ZMODEM 与 trzsz 不会同时进行，
     // 把 ZMODEM 的帧写进 trzsz 的 base64 流里只会两边都坏掉。
     if (trzszManager.get(sessionId)?.active) return { ok: false, reason: 'trzsz 传输进行中' }
-    rec.transport.writeBytes(data)
+    rec.transport?.writeBytes(data)
     return { ok: true }
   }
 
@@ -938,8 +1166,13 @@ class SessionManager {
     rec.rows = rows
     // 进度条按列宽排版（trzsz 内部按中文双宽算），窗口变了要同步过去
     trzszManager.get(sessionId)?.setColumns(cols)
-    // 串口实现里是空操作（设备没有终端尺寸），SSH 实现才真正下发 setWindow
-    rec.transport.resize(cols, rows)
+    /*
+     * 传输层可能还没建好：TerminalView 一挂载就发 SESSION_RESIZE，
+     * 此时 SSH 还在握手、串口还在解析端口号。旧实现在这里直接调用，
+     * 每次连接受阻都会在主进程抛一个 TypeError 写进错误日志。
+     * 尺寸已经记在 record.cols/rows 上，open 时会用最新值打开 shell，不丢。
+     */
+    rec.transport?.resize(cols, rows)
   }
 
   /** 广播输入：多个会话同时写入 */
@@ -956,6 +1189,16 @@ class SessionManager {
     // 但它还挂在 serialWaiting 上等热插拔事件 —— 用户关标签必须把这条挂起也撤掉，
     // 否则设备插回时会把已经关掉的会话又拉起来。
     this.serialWaiting.delete(sessionId)
+    /*
+     * 已关闭的标签不该再被任何在途的重连拉起。
+     *
+     * 走 cancelReconnect 而不是只加 epoch：它除了作废在途重连，还会给挂起的
+     * 隧道/暂停中的传输一个终态。旧实现在这里手写 epoch+1，若此时
+     * reconnectState 里正躺着一个等重启的定时器，它既不会被清掉也不会
+     * 通知下游 —— 渲染层那边 cancelReconnect 走一次、这里再走一次也无害
+     * （第二次没有状态，只是 epoch 再 +1）。
+     */
+    this.cancelReconnect(sessionId)
     const rec = this.sessions.get(sessionId)
     if (!rec) {
       if (this.opening.has(sessionId)) this.cancelled.add(sessionId)
@@ -963,6 +1206,32 @@ class SessionManager {
     }
     rec.closedByUser = true
     this.teardown(rec, 'disconnected', undefined, silent)
+  }
+
+  /**
+   * 关闭所有会话，连同「已经不在 sessions 里、但仍活着」的几种挂起态。
+   *
+   * 退出时必须走这里而不是遍历 list()：list() 只覆盖 sessions，而等设备插回的
+   * 串口（serialWaiting）、等着重试的标签（reconnectState / pendingReconnect）
+   * 以及还卡在读配置的 open()（opening / cancelled）都各自握着定时器、句柄和
+   * 远端连接。它们随进程一起消失，但退出路径上仍会有人回写状态、发 IPC。
+   */
+  closeAll(silent = true): void {
+    const ids = new Set<string>([
+      ...this.sessions.keys(),
+      ...this.serialWaiting.keys(),
+      ...this.reconnectState.keys(),
+      ...this.pendingReconnect,
+      ...this.opening
+    ])
+    for (const id of ids) {
+      try {
+        this.close(id, silent)
+      } catch (e) {
+        console.error(`[session] close ${id} on quit failed:`, e)
+      }
+    }
+    // 保留 close() 为在途 open() 写下的 cancelled 标记，由 open() 自身在恢复与 finally 时清理 opening/cancelled
   }
 
   private teardown(
@@ -994,6 +1263,7 @@ class SessionManager {
       record.kind !== 'serial' &&
       (status === 'disconnected' || status === 'error') &&
       this.autoReconnectEnabled
+    if (willReconnect) this.pendingReconnect.add(record.id)
     this.onClosed?.(record.id, { byUser: record.closedByUser, willReconnect })
     if (!silent) this.emitStatus(record, status, error)
 
@@ -1027,7 +1297,8 @@ class SessionManager {
       connectionId: record.connectionId,
       title: record.connectionName,
       cols: record.cols,
-      rows: record.rows
+      rows: record.rows,
+      serialConfig: cfg ? { ...cfg } : undefined
     })
     const hint = cfg?.path ? `请检查 ${cfg.path} 的连接线` : '请检查设备连接线'
     this.onReconnect?.({
@@ -1046,7 +1317,30 @@ class SessionManager {
    * 只会让两处判定慢慢分叉。
    */
   async resumeSerialSessions(): Promise<void> {
+    /*
+     * 重入锁：Windows 的插拔通知常常连着来两次（设备 + 其复合端点各一次）。
+     * 第二次进来时第一次还卡在 open() 的 await 上，两边都读到同一份
+     * serialWaiting，第二次会因为 opening 里已有这个会话而提前返回 ——
+     * 却照样把它从 serialWaiting 删掉并广播「已恢复」，恢复项就此丢失。
+     */
+    if (this.resumingSerial) {
+      this.resumeSerialQueued = true
+      return
+    }
     if (this.serialWaiting.size === 0) return
+    this.resumingSerial = true
+    try {
+      // 合并重跑：这轮开始之后才插回的设备，必须在本轮结束后再扫一遍
+      do {
+        this.resumeSerialQueued = false
+        await this.resumeSerialSessionsLocked()
+      } while (this.resumeSerialQueued && this.serialWaiting.size > 0)
+    } finally {
+      this.resumingSerial = false
+    }
+  }
+
+  private async resumeSerialSessionsLocked(): Promise<void> {
     const pending = [...this.serialWaiting.keys()]
     for (const sessionId of pending) {
       const st = this.serialWaiting.get(sessionId)
@@ -1063,7 +1357,10 @@ class SessionManager {
         attempt: 0
       })
       try {
-        await this.open(sessionId, st.connectionId, st.cols, st.rows)
+        await this.open(sessionId, st.connectionId, st.cols, st.rows, st.serialConfig)
+        // open 可能因为并发（用户手动重连）直接返回而没真正建立会话：
+        // 那种情况不算恢复成功，继续留在挂起表里等下一次插拔
+        if (this.sessions.get(sessionId)?.status !== 'connected') continue
         this.serialWaiting.delete(sessionId)
         this.onReconnect?.({
           sessionId,
@@ -1106,11 +1403,35 @@ class SessionManager {
   private async scheduleReconnect(record: SessionRecord): Promise<void> {
     const existing = this.reconnectState.get(record.id)
     const attempt = (existing?.attempt ?? 0) + 1
+    const epoch = this.reconnectEpoch.get(record.id) ?? 0
 
     let settings: AppSettings
     try {
       settings = await getSettings()
     } catch {
+      /*
+       * 读配置失败不能就这么 return：pendingReconnect 已由 teardown 打上，
+       * 谁都不会再来清它 —— isReconnecting() 永远返回 true，隧道永远挂在
+       * reconnecting，SFTP 断点续传也一直以为「马上会恢复」而不收尾。
+       * 这是「不会再自动恢复」的终局之一，必须清状态并给下游一个结局。
+       * （epoch 变了说明用户已经关标签/手动重连，那时 cancelReconnect 已处理过）
+       */
+      if ((this.reconnectEpoch.get(record.id) ?? 0) === epoch) {
+        this.reconnectState.delete(record.id)
+        this.pendingReconnect.delete(record.id)
+        this.onReconnectGaveUp?.(record.id)
+      }
+      return
+    }
+    /*
+     * await 期间用户关了标签：这次重连作废，别在后台把会话拉回来。
+     * 只清自己的残留标记，**不再**调 onReconnectGaveUp —— cancelReconnect
+     * 已经同步通知过一次了。迟到第二次会把用户刚手动重连好的同 id 会话
+     * 的 SFTP 当成「重连放弃」杀掉。
+     */
+    if ((this.reconnectEpoch.get(record.id) ?? 0) !== epoch) {
+      this.pendingReconnect.delete(record.id)
+      this.reconnectState.delete(record.id)
       return
     }
     if (settings.autoReconnect === false) {
@@ -1119,6 +1440,7 @@ class SessionManager {
        * 必须通知一次，否则挂起的隧道（reconnecting）永远等不到结局，
        * 界面上会一直转圈，临时转发的端口也已经释放却还被当成活的。
        */
+      this.pendingReconnect.delete(record.id)
       this.onReconnectGaveUp?.(record.id)
       return
     }
@@ -1126,6 +1448,7 @@ class SessionManager {
     const max = Math.max(1, Math.min(settings.autoReconnectMax ?? 5, 20))
     if (attempt > max) {
       this.reconnectState.delete(record.id)
+      this.pendingReconnect.delete(record.id)
       this.onReconnectGaveUp?.(record.id)
       this.onReconnect?.({
         sessionId: record.id,
@@ -1153,6 +1476,8 @@ class SessionManager {
       cols,
       rows
     })
+    // reconnectState 已接棒，isReconnecting 从这一刻起靠它，标记可以摘了
+    this.pendingReconnect.delete(record.id)
 
     this.onReconnect?.({
       sessionId: record.id,
@@ -1173,6 +1498,13 @@ class SessionManager {
   private async runReconnect(sessionId: string): Promise<void> {
     const st = this.reconnectState.get(sessionId)
     if (!st) return
+    /*
+     * 记下进入时的作废计数。open() 里有多次 await（查凭据、建链、touch），
+     * 这期间用户完全可能已经关掉标签并在同一个 sessionId 上又开了一条新会话。
+     * 旧实现不校验，回来就无条件删状态并广播「已自动重连」—— 用户看到的是
+     * 自己关掉的标签复活，或者一条刚手动连好的会话被标成重连结果。
+     */
+    const epoch = this.reconnectEpoch.get(sessionId) ?? 0
 
     this.onReconnect?.({
       sessionId,
@@ -1184,6 +1516,9 @@ class SessionManager {
     try {
       // open 内部会在 sessions 里重新登记 record，走完整流程（跳板/代理/shell）
       await this.open(sessionId, st.connectionId, st.cols, st.rows)
+      if ((this.reconnectEpoch.get(sessionId) ?? 0) !== epoch) return
+      // open 可能因并发（用户手动重连）提前返回而没真正建立会话
+      if (this.statusOf(sessionId) !== 'connected') return
       this.reconnectState.delete(sessionId)
       this.onReconnect?.({
         sessionId,
@@ -1193,6 +1528,7 @@ class SessionManager {
       })
       return
     } catch (err) {
+      if ((this.reconnectEpoch.get(sessionId) ?? 0) !== epoch) return
       const message = err instanceof Error ? err.message : String(err)
       this.onReconnect?.({
         sessionId,
@@ -1212,15 +1548,29 @@ class SessionManager {
   private async scheduleReconnectFromState(sessionId: string): Promise<void> {
     const st = this.reconnectState.get(sessionId)
     if (!st) return
+    const epoch = this.reconnectEpoch.get(sessionId) ?? 0
 
     let settings: AppSettings
     try {
       settings = await getSettings()
     } catch {
+      // 同 scheduleReconnect：读配置失败是终局，不清状态就永久泄漏
+      if ((this.reconnectEpoch.get(sessionId) ?? 0) === epoch) {
+        this.reconnectState.delete(sessionId)
+        this.pendingReconnect.delete(sessionId)
+        this.onReconnectGaveUp?.(sessionId)
+      }
       return
     }
+    /*
+     * await 期间被取消：状态已被 cancelReconnect 清掉、结局也已通知过一次，
+     * 这里只收手，绝不重复 onReconnectGaveUp。
+     */
+    if ((this.reconnectEpoch.get(sessionId) ?? 0) !== epoch) return
+    if (!this.reconnectState.has(sessionId)) return
     if (settings.autoReconnect === false) {
       this.reconnectState.delete(sessionId)
+      this.pendingReconnect.delete(sessionId)
       this.onReconnectGaveUp?.(sessionId)
       return
     }
@@ -1229,6 +1579,7 @@ class SessionManager {
     const attempt = st.attempt + 1
     if (attempt > max) {
       this.reconnectState.delete(sessionId)
+      this.pendingReconnect.delete(sessionId)
       this.onReconnectGaveUp?.(sessionId)
       this.onReconnect?.({
         sessionId,
@@ -1256,8 +1607,17 @@ class SessionManager {
 
   /** 取消自动重连（用户主动关闭标签、手动点重连、或连接成功时调用） */
   cancelReconnect(sessionId: string): void {
+    // 无论当前有没有重连状态都递增作废计数：正在 await getSettings() 的那次
+    // 重连可能还没写入 reconnectState，靠 get() 判断会漏掉它
+    this.reconnectEpoch.set(sessionId, (this.reconnectEpoch.get(sessionId) ?? 0) + 1)
+    // 只打了 pendingReconnect 标记（还卡在 getSettings 里）的那次重连也必须给结局，
+    // 否则挂起的隧道永远等不到下文 —— 见下面 st 存在时的同一段说明
+    const hadPending = this.pendingReconnect.delete(sessionId)
     const st = this.reconnectState.get(sessionId)
-    if (!st) return
+    if (!st) {
+      if (hadPending) this.onReconnectGaveUp?.(sessionId)
+      return
+    }
     if (st.timer) clearTimeout(st.timer)
     this.reconnectState.delete(sessionId)
     /*
@@ -1271,7 +1631,7 @@ class SessionManager {
 
   /** 是否有会话正在自动重连（供测试/诊断） */
   isReconnecting(sessionId: string): boolean {
-    return this.reconnectState.has(sessionId)
+    return this.reconnectState.has(sessionId) || this.pendingReconnect.has(sessionId)
   }
 
   private cleanup(record: SessionRecord): void {
@@ -1297,7 +1657,12 @@ class SessionManager {
     } else {
       // 最后一个终端：断开连接。监听保留（teardown 已幂等），
       // 避免 end 之后迟到的 error 事件因无监听而变成未捕获异常
-      if (record.client) this.endQuietly(record.client, record.jumpClients)
+      /*
+       * 不能以 record.client 是否存在为前提：跳到第 2 跳或目标主机失败时
+       * record.client 仍为空，而 jumpClients 里已经是真实连上的会话。
+       * 原来那条 if 直接跳过，每次失败都在跳板机上漏一条带 15s keepalive 的连接。
+       */
+      this.endQuietly(record.client, record.jumpClients)
       record.jumpClients.length = 0
     }
     record.jumpClients = []
@@ -1349,16 +1714,43 @@ class SessionManager {
      *
      * 握手那一帧的 raw 不再下发给渲染层：trzsz 走的是文本协议，
      * 让渲染层的 ZMODEM Sentry 看到这串反而会误判成二进制头。
+     *
+     * 传输中则反过来：只喂原始字节，一个文本字符都不喂。
+     * processServerOutput 收到字符串会先转回字节，而 text 是 UTF-8 解码产物 ——
+     * 二进制块里的非 UTF-8 字节早被替换成 U+FFFD，远端校验必败
+     * （这正是 `sz -b` 大文件必坏、纯文本文件偶尔能过的原因）。
      */
+    const live = record.kind === 'ssh' ? trzszManager.get(record.id) : undefined
+    if (live?.active && raw.length > 0) {
+      /*
+       * 进传输态就把跨帧尾巴清掉：那段里可能还压着握手串，而过滤器传完之后
+       * 还会缓存 30 秒，之后任何一帧都会把它重新拼回来再喂一遍 ——
+       * 表现为每按一个键就重放一次握手（满屏乱码 + 反复弹原生文件框）。
+       */
+      record.tail = ''
+      const shown = live.processServerBytes(raw)
+      if (shown) this.handlers?.onData(record.id, shown, Buffer.alloc(0))
+      return
+    }
     const trzsz = record.kind === 'ssh' ? this.trzszFor(record, text) : undefined
     if (trzsz) {
-      const shown = trzsz.processServerOutput(text)
-      if (shown) this.handlers?.onData(record.id, shown, Buffer.alloc(0))
+      /*
+       * 握手被切成两帧时，过滤器在本帧里看不到完整串（它不做跨帧缓存）。
+       * 这里把完整握手补齐，并且只认「严格跨越两帧」的情况；
+       * 补齐的前缀上一帧已经显示过，要从本帧输出里剔掉，否则终端双倍回显。
+       */
+      const re = reassembleTrzszHandshake(record.handshakeTail, text)
+      // 命中完整握手后，尾巴只留握手之后的内容；否则交给 trzszFor 常规滚动
+      if (re.rest !== undefined) record.tail = keepTrzszTail('', re.rest)
+      const shown = trzsz.processServerOutput(re.feed)
+      const visible = re.shownSkip > 0 ? shown.slice(re.shownSkip) : shown
+      if (visible) this.handlers?.onData(record.id, visible, Buffer.alloc(0))
       // 录制：握手整行剔掉（回放时那是一屏乱码），其余照常
-      const recorded = stripTrzszHandshake(text)
+      const recorded = stripTrzszHandshake(text.slice(re.recordSkip))
       if (recorded) recorder.appendOutput(record.id, recorded)
       return
     }
+
     /*
      * 没有过滤器时也认一次「远端没装 trz/tsz」。
      *
@@ -1381,9 +1773,14 @@ class SessionManager {
 
   /** 已存在就复用；只有文本里出现握手串才新建 */
   private trzszFor(record: SessionRecord, text: string): TrzszSession | undefined {
+    // 先滚动尾巴再判断：握手串被切口切成两帧时，只有拼上上一帧才认得出
+    const tail = record.tail
+    // 供 flush 里跨帧重组用：keepTrzszTail 之后 tail 就滚走了
+    record.handshakeTail = tail
+    record.tail = keepTrzszTail(tail, text)
     const existing = trzszManager.get(record.id)
     if (existing) return existing
-    if (!text || !looksLikeTrzsz(text)) return undefined
+    if (!text || !looksLikeTrzszFrame(tail, text)) return undefined
     return trzszManager.ensure(record.id, this.trzszHooks(record), record.cols)
   }
 
@@ -1402,12 +1799,14 @@ class SessionManager {
 
   private trzszHooks(record: SessionRecord): TrzszBridgeHooks {
     return {
-      // 协议帧全是可打印文本（base64 加行尾换行），直接走传输层，不录制
-      // （录制里出现一串 base64 对回放没有意义，还会把行撑爆）
-      sendToServer: (data: string) => {
+      // 控制帧是文本，数据块是原始字节 —— 后者必须走 writeBytes，
+      // 否则 UTF-8 编码会把非法字节改成 U+FFFD，远端校验必败。
+      // 都不录制（录制里出现一串 base64 对回放没有意义，还会把行撑爆）。
+      sendToServer: (data: string | Uint8Array) => {
         const rec = this.sessions.get(record.id)
         if (!rec || rec.status !== 'connected') return
-        rec.transport.write(data)
+        if (typeof data === 'string') rec.transport?.write(data)
+        else rec.transport?.writeBytes(Buffer.from(data.buffer, data.byteOffset, data.byteLength))
       },
       // 进度条、Saved 文案都由 trzsz 自己拼好，当普通会话数据下发，
       // 于是回滚、搜索、会话录制全都自动生效

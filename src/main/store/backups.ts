@@ -20,7 +20,19 @@ function formatStamp(d: Date): string {
 }
 
 function sanitize(name: string): string {
-  return name.replace(/[\\/:*?"<>|\s]/g, '_').trim() || 'backup'
+  /*
+   * 连续点也要吃掉。
+   * 备份名默认取连接名，用户把连接叫「A..B」或者名字以点结尾都很正常；
+   * 而 path() 的守卫会拒绝任何含 '..' 的 id —— 两处规则不一致的结果是
+   * 「点保存就报非法备份标识」，且提示完全看不出是名字的问题。
+   * 尾点单独处理：Windows 会静默剥掉结尾的点，落盘文件名与 id 对不上。
+   */
+  const safe = name
+    .replace(/[\\/:*?"<>|\s]/g, '_')
+    .replace(/\.{2,}/g, '_')
+    .replace(/^\.+|\.+$/g, '')
+    .trim()
+  return safe || 'backup'
 }
 
 function toMeta(detail: BackupDetail): BackupMeta {

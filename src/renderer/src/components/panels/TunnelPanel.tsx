@@ -217,7 +217,6 @@ export function TunnelPanel(): React.JSX.Element {
 
   return (
     <div className="flex h-full flex-col">
-      {/* 头部 */}
       <div className="panel-head">
         <Cable size={13} className="shrink-0 text-ink-3" />
         <span className="panel-title">端口转发</span>
@@ -235,7 +234,6 @@ export function TunnelPanel(): React.JSX.Element {
         </button>
       </div>
 
-      {/* 搜索 */}
       <div className="panel-toolbar">
         <div className="relative flex-1">
           <Search
@@ -293,7 +291,8 @@ export function TunnelPanel(): React.JSX.Element {
               const fw = forwardOf(p)
               return (
                 <div
-                  key={p.port + '/' + p.proto}
+                  /* 同端口会挂在多张网卡上（0.0.0.0 与 ::），只用端口做 key 会撞 */
+                  key={p.port + '/' + p.proto + '/' + p.targetHost}
                   className="group flex items-center gap-1.5 rounded-md px-2 py-0.5 hover:bg-hover/60"
                 >
                   <span className="w-11 shrink-0 text-right font-mono text-3xs tabular-nums text-ink-2">
@@ -345,7 +344,9 @@ export function TunnelPanel(): React.JSX.Element {
                   ) : (
                     <button
                       className="btn h-5 px-1.5 text-3xs opacity-0 group-hover:opacity-100"
-                      onClick={() => currentSession && void quickStart(currentSession.id, p.port)}
+                      onClick={() =>
+                        currentSession && void quickStart(currentSession.id, p.port, p.targetHost)
+                      }
                     >
                       {tr('tunnel.action.forward')}
                     </button>
@@ -533,7 +534,6 @@ export function TunnelPanel(): React.JSX.Element {
         })}
       </div>
 
-      {/* 低噪音提示 */}
       {tunnels.length > 0 && (
         <div className="shrink-0 border-t border-edge-soft px-2.5 py-1.5 text-3xs leading-relaxed text-ink-3">
           <Zap size={10} className="mr-1 inline-block" />

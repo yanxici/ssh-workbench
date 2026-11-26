@@ -81,6 +81,13 @@ export function analyzePaste(
 export function stripMarkdownFence(text: string): string {
   const normalized = normalizeNewlines(text)
   const lines = normalized.split('\n')
+  /*
+   * 尾随空行先去掉再找结束围栏。
+   * 从文档/网页复制出来的代码块几乎都带一个结尾换行，
+   * split 之后最后一段是 '' —— 原来直接拿最后一段比 CLOSE_FENCE，
+   * 结果「带结尾换行的围栏」永远剥不掉，按钮点了跟没点一样。
+   */
+  while (lines.length > 0 && lines[lines.length - 1].trim() === '') lines.pop()
   if (lines.length < 2) return text
   const first = lines[0]
   const last = lines[lines.length - 1]

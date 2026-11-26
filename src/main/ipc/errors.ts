@@ -1,7 +1,6 @@
-import { BrowserWindow, dialog } from 'electron'
 import { promises as fs } from 'node:fs'
 import { IPC } from '@shared/ipc'
-import { dialogParent } from '../windowRef'
+import { showSaveDialog } from '../windowRef'
 import { dialogDefaultPath, rememberDialogPick } from '../util/dialogDirs'
 import { handle } from './handle'
 import {
@@ -29,7 +28,7 @@ export function registerErrorIpc(): void {
 
   handle(IPC.ERR_EXPORT, async () => {
     const text = await exportErrorsText()
-    const res = await dialog.showSaveDialog(dialogParent() as BrowserWindow, {
+    const res = await showSaveDialog({
       title: '导出错误日志',
       defaultPath: dialogDefaultPath('file', `错误日志-${Date.now()}.txt`),
       filters: [{ name: '文本文件', extensions: ['txt'] }]

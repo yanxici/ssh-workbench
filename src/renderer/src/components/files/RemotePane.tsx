@@ -16,7 +16,7 @@ import {
 } from 'lucide-react'
 import type { RemoteFile } from '@shared/types'
 import { useSftpStore } from '@/stores/sftpStore'
-import { cn, formatBytes, formatTime, remoteDirname } from '@/lib/utils'
+import { cn, formatBytes, formatTime, parseOctalMode, remoteDirname } from '@/lib/utils'
 import {
   ConfirmDialog,
   ContextMenu,
@@ -25,6 +25,7 @@ import {
   type MenuEntry
 } from '@/components/ui'
 import { isImeComposing } from '@/lib/ime'
+import { useToastStore } from '@/stores/toastStore'
 import { useTokenFlag } from '@/lib/useTokenFlag'
 import { useVirtualizer } from '@tanstack/react-virtual'
 
@@ -147,7 +148,6 @@ export function RemotePane(): React.JSX.Element {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      {/* 工具栏 */}
       <div className="flex shrink-0 items-center gap-1 border-b border-edge-soft px-2 py-1.5">
         <span className="shrink-0 text-2xs font-semibold text-ink-2">远程</span>
         <button
@@ -308,8 +308,17 @@ export function RemotePane(): React.JSX.Element {
           if (d.kind === 'mkdir') void mkdir(value)
           else if (d.kind === 'rename' && d.target) void rename(d.target, value)
           else if (d.kind === 'chmod' && d.target) {
-            const mode = parseInt(value, 8)
-            if (Number.isFinite(mode)) void chmod(d.target, mode)
+            const mode = parseOctalMode(value)
+            /*
+             * 解析失败必须出声。原实现直接 return，弹窗关了、什么都没发生 ——
+             * 用户以为权限改成了 758，实际一位都没变（parseInt('758', 8) 还会
+             * 静默截成 0o75，所以这里一律走严格解析并明确报错）。
+             */
+            if (mode === null) {
+              useToastStore.getState().push({ kind: 'warning', title: '权限格式不正确，请填 0-7777 的八进制数' })
+              return
+            }
+            void chmod(d.target, mode)
           }
         }}
       />

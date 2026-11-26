@@ -81,6 +81,32 @@ function commandDir(dir: string): string {
   return base === '/' ? '/' : base + '/'
 }
 
+
+/**
+ * 把远端相对路径拆成本地合法、且绝不会逃出下载根目录的路径段。
+ *
+ * P0：远端文件名是**攻击者可控输入**。Linux 允许文件名里带反斜杠，
+ * 一个叫 `..\\..\\Startup\\evil.bat` 的远端文件经 walkRemote 变成 rel，
+ * 再被 `join(localDir, ...rel.split('/'))` 拼开后，Windows 上反斜杠又是分隔符，
+ * 于是 mkdir -p + rename 直接写到 localDir 外面去（下载目录 -> 启动项）。
+ *
+ * 所以这里按 / 与 \\ 双重切分，丢掉 . / .. / 空段，
+ * 并把 Windows 非法字符、结尾点与空格、设备保留名一并归一化。
+ */
+export function safeRelativeSegments(rel: string): string[] {
+  return String(rel ?? '')
+    .split(/[\\/]+/)
+    .map((seg) => {
+      // 控制字符必须一起换掉：远端文件名里带 \n \t 会把 ls 输出行拼错
+      // eslint-disable-next-line no-control-regex
+      let s = seg.replace(/[<>:"|?*\x00-\x1f]/g, '_').replace(/[. ]+$/, '')
+      if (!s || s === '.' || s === '..') s = '_'
+      if (/^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$/i.test(s)) s = '_' + s
+      return s
+    })
+    .filter(Boolean)
+}
+
 function joinRemote(dir: string, name: string): string {
   const base = normalizeDisplayDir(dir)
   return base === '/' ? '/' + name : base + '/' + name
@@ -104,17 +130,33 @@ interface ChannelHandle {
   pause: () => void
   resume: () => void
   waitDrain: () => Promise<void>
+  /** 通道是否还能写（对端已 close/error 后为 false） */
+  isOpen: () => boolean
 }
 
 function makeHandle(ch: ClientChannel): ChannelHandle {
+  /*
+   * 通道死掉必须能被感知。
+   * 旧实现只写不查：远端命令报错关闭后 feed() 还在闷头读整个本地文件，
+   * 每 64 KB 因为 write 返回 false 就去 waitDrain 干等 5 秒 —— 10 MB 文件
+   * 变成「假死」13 分钟，界面上就是一个永远不动的进度条。
+   */
+  let alive = true
+  const die = (): void => {
+    alive = false
+  }
+  ch.on('close', die)
+  ch.on('error', die)
   return {
     write: (buf: Buffer): boolean => {
       try {
         return ch.write(buf)
       } catch {
+        alive = false
         return false
       }
     },
+    isOpen: (): boolean => alive,
     end: (): void => {
       try {
         ch.end()
@@ -145,16 +187,26 @@ function makeHandle(ch: ClientChannel): ChannelHandle {
     },
     waitDrain: (): Promise<void> =>
       new Promise<void>((resolve) => {
+        if (!alive) {
+          resolve()
+          return
+        }
         let done = false
         const finish = (): void => {
           if (done) return
           done = true
           clearTimeout(timer)
+          ch.removeListener('drain', finish)
+          ch.removeListener('close', finish)
+          ch.removeListener('error', finish)
           resolve()
         }
         const timer = setTimeout(finish, DRAIN_TIMEOUT_MS)
         timer.unref?.()
         ch.once('drain', finish)
+        // 通道没了就不会再有 drain：立刻收工，别按 5 秒一块白等
+        ch.once('close', finish)
+        ch.once('error', finish)
       })
   }
 }
@@ -171,6 +223,15 @@ function execChannel(
   opts: {
     timeoutMs?: number
     maxStdout?: number
+    /**
+     * 通道建好的**同步**回调。
+     *
+     * onStdin 是 setImmediate 才调的（要让写入端先就绪），但下载侧
+     * onStdout 里的 ctrl.abort/pause 需要在这之前就可用 —— 首个 data 分块
+     * 完全可能早于那个 setImmediate 到达，那时 ctrl 还是 null，
+     * 用户点取消就只是置了个标志，远端 cat 照样把整份文件推完。
+     */
+    onChannel?: (h: ChannelHandle) => void
     onStdin?: (h: ChannelHandle) => void
     onStdout?: (chunk: Buffer) => void
   } = {}
@@ -223,6 +284,13 @@ function execChannel(
             /* 忽略 */
           }
           return
+        }
+        if (opts.onChannel) {
+          try {
+            opts.onChannel(makeHandle(ch))
+          } catch {
+            /* 回调自身出错不该影响传输 */
+          }
         }
         ch.on('data', (chunk: Buffer) => {
           if (settled) return
@@ -363,8 +431,10 @@ function readTimestamp(tokens: string[], idx: number): { mtime: number; next: nu
   let year = new Date().getFullYear()
   let hh = 0
   let mi = 0
+  let hasYear = false
   if (/^\d{4}$/.test(third)) {
     year = Number(third)
+    hasYear = true
   } else if (SHORT_TIME_RE.test(third)) {
     const p = third.split(':')
     hh = Number(p[0])
@@ -372,11 +442,36 @@ function readTimestamp(tokens: string[], idx: number): { mtime: number; next: nu
   } else {
     return null
   }
-  return { mtime: Date.UTC(year, month, day, hh, mi, 0), next: idx + 3 }
+  let mtime = Date.UTC(year, month, day, hh, mi, 0)
+  /*
+   * 没有年份的条目（ls 对半年内的文件省略年份）默认取今年。
+   * 12 月建的文件在 1 月看到时，算出来是「今年 12 月」= 11 个月后，
+   * 排序和「最近修改」全乱。按 ls 的规则：算出未来就是去年。
+   */
+  if (!hasYear && mtime > Date.now() + 24 * 3600 * 1000) {
+    mtime = Date.UTC(year - 1, month, day, hh, mi, 0)
+  }
+  return { mtime, next: idx + 3 }
+}
+
+/**
+ * 按空白切词，但保留每个词在原始行里的起始下标。
+ *
+ * 只为了最后那个文件名：`ls` 会给含空格的文件名原样输出，用 split + join(' ')
+ * 重拼会把连续空格压成一个 —— `my  file.txt` 变成 `my file.txt`，
+ * 再拿它去拼路径就是另一个文件（下载/删除都会打空）。
+ */
+function splitWithOffsets(line: string): Array<{ text: string; start: number }> {
+  const out: Array<{ text: string; start: number }> = []
+  const re = /\S+/g
+  let m: RegExpExecArray | null
+  while ((m = re.exec(line)) !== null) out.push({ text: m[0], start: m.index })
+  return out
 }
 
 function parseLsLine(line: string, dir: string): RemoteFile | null {
-  const tokens = line.trim().split(/\s+/)
+  const raw = splitWithOffsets(line.replace(/\s+$/, ''))
+  const tokens = raw.map((t) => t.text)
   if (tokens.length < 8) return null
 
   const permsRaw = tokens[0]
@@ -399,7 +494,8 @@ function parseLsLine(line: string, dir: string): RemoteFile | null {
   const stamp = readTimestamp(tokens, idx)
   if (!stamp) return null
 
-  let name = tokens.slice(stamp.next).join(' ')
+  // 名字取原行剩下的整段，别用 tokens 重拼（连续空格会被吃掉）
+  let name = stamp.next < raw.length ? line.replace(/\s+$/, '').slice(raw[stamp.next].start) : ''
   if (!name) return null
 
   const kind = perms[0]
@@ -473,14 +569,25 @@ export async function shellHome(client: Client): Promise<string> {
 export async function shellList(client: Client, dir: string): Promise<RemoteFile[]> {
   const shown = normalizeDisplayDir(dir)
   const target = commandDir(dir)
+  /*
+   * 先试 --full-time，失败了再退回普通格式。
+   *
+   * 不能写成 `ls --full-time || ls`：第一条命令已经把能读的条目打到 stdout 了，
+   * 退出码非 0（目录里有个别条目 stat 失败）时第二条会把同一批再打一遍，
+   * 列表里每条都出现两次。所以先在变量里攒着，成功才用。
+   */
   const command =
-    'LC_ALL=C ls -la --full-time -- ' +
+    'o=$(LC_ALL=C ls -la --full-time -- ' +
     shQuote(target) +
-    ' 2>/dev/null || LC_ALL=C ls -la -- ' +
-    shQuote(target)
+    ' 2>/dev/null); rc=$?; ' +
+    'if [ $rc -ne 0 ]; then o=$(LC_ALL=C ls -la -- ' +
+    shQuote(target) +
+    ' 2>&1); rc=$?; fi; printf %s "$o"; exit $rc'
   const r = await execChannel(client, command, { timeoutMs: LIST_TIMEOUT_MS })
   if (r.code !== 0) {
-    throw new Error('列目录失败：' + (r.stderr || 'exit ' + String(r.code)))
+    // 兜底那趟把 stderr 并进了 stdout，报错文案从那里取
+    const noisy = (r.stderr.length > 0 ? r.stderr : r.stdout).toString('utf8').trim()
+    throw new Error('列目录失败：' + (noisy || 'exit ' + String(r.code)))
   }
   return parseLsOutput(shown, r.stdout.toString('utf8'))
 }
@@ -519,6 +626,11 @@ export interface ShellWalkEntry {
   isDir: boolean
 }
 
+/** 错误文案是不是「这个路径本来就不存在」 */
+function isMissingEntry(msg: string): boolean {
+  return /no such file|not exist|不存在|NoSuchFile/i.test(msg)
+}
+
 /** 逐层递归遍历：maxDepth 限制层数，maxFiles 限制条目总数。 */
 export async function shellWalkRemote(
   client: Client,
@@ -533,10 +645,21 @@ export async function shellWalkRemote(
   let depth = 0
 
   while (frontier.length > 0 && out.length < fileCap && depth < depthCap) {
-    const { dirs: listed } = await shellListMany(
+    const { dirs: listed, errors } = await shellListMany(
       client,
       frontier.map((f) => f.dir)
     )
+    /*
+     * 列目录失败不能静默跳过：旧实现会把它当成空目录，用户看到「下载完成」，
+     * 实际上整棵子树一个文件都没下来。目标中途消失（并发删除）是正常情况，
+     * 不算错；其余一律上抛，让上层报失败。
+     */
+    const failed = Object.entries(errors).filter(([, msg]) => !isMissingEntry(msg))
+    if (failed.length > 0) {
+      throw new Error(
+        '列目录失败，下载已中止：' + failed[0][0] + '（' + failed[0][1] + '）'
+      )
+    }
     const next: Array<{ dir: string; rel: string }> = []
     const entryDepth = depth + 1
     for (const item of frontier) {
@@ -545,6 +668,11 @@ export async function shellWalkRemote(
       for (const e of entries) {
         if (out.length >= fileCap) break
         if (entryDepth > depthCap) continue
+        /*
+         * 软链一律跳过，与 SFTP 侧 walkRemote 对称。
+         * 顺着链接递归就是把 /dev/zero、外部挂载点一起拉进来 —— 磁盘直接被写满。
+         */
+        if (e.isLink || e.type === 'symlink') continue
         const relPath = item.rel ? item.rel + '/' + e.name : e.name
         const isDir = e.type === 'directory'
         out.push({ remotePath: e.path, relPath, size: e.size, isDir })
@@ -631,7 +759,14 @@ export async function shellReadText(
     throw new Error('读取远端文件失败：' + (readRes.stderr || 'exit ' + String(readRes.code)))
   }
   const buf = readRes.stdout
-  if (buf.includes(0)) {
+  /*
+   * 带 BOM 的 UTF-16 文本每个 ASCII 字符后面都跟一个 0x00，按「含 NUL 就是二进制」
+   * 一刀切会把它们全部拒之门外。BOM 已经把这种情况标死了，先认 BOM 再判 NUL。
+   */
+  const hasBom =
+    buf.length >= 2 &&
+    ((buf[0] === 0xff && buf[1] === 0xfe) || (buf[0] === 0xfe && buf[1] === 0xff))
+  if (!hasBom && buf.includes(0)) {
     throw new Error('文件看起来是二进制数据，已按文本方式打开时中止')
   }
   return detectEncoding(buf)
@@ -728,7 +863,16 @@ export async function shellUploadFile(
           cancelled = true
           break
         }
+        if (!h.isOpen()) {
+          feedState.error = '远端通道已关闭（对端命令已退出）'
+          break
+        }
         if (hooks.isPaused()) await hooks.waitIfPaused()
+        // 暂停期间可能被取消：醒来必须重查，否则会接着把一个已取消的上传传完
+        if (hooks.isCancelled()) {
+          cancelled = true
+          break
+        }
         const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as Uint8Array)
         const ok = h.write(buf)
         sent += buf.length
@@ -759,12 +903,15 @@ export async function shellUploadFile(
   let feedDone: Promise<void> = Promise.resolve()
   const result = await execChannel(client, command, {
     timeoutMs: TRANSFER_TIMEOUT_MS,
-    onStdin: (h) => {
+    // 同下载侧：控制块要在通道一建好就可用，不能等 onStdin 的 setImmediate
+    onChannel: (h) => {
       hooks.registerStream?.({
         pause: () => h.pause(),
         resume: () => h.resume(),
         abort: () => h.close()
       })
+    },
+    onStdin: (h) => {
       feedDone = feed(h)
     }
   })
@@ -776,7 +923,13 @@ export async function shellUploadFile(
   }
   if (feedState.error !== null) {
     await cleanupQuiet(client, 'rm -f -- ' + shQuote(part))
-    throw new Error('上传失败：' + feedState.error)
+    /*
+     * 通道被对端关掉时，真正的死因在 stderr 里（没有权限 / 磁盘满 / 目标目录不存在），
+     * 而 feedState.error 只是一句「远端通道已关闭（对端命令已退出）」的通用文案。
+     * 先报 stderr，用户才知道该改什么。
+     */
+    const detail = result.code !== 0 && result.stderr ? result.stderr : feedState.error
+    throw new Error('上传失败：' + detail)
   }
   if (result.code !== 0) {
     await cleanupQuiet(client, 'rm -f -- ' + shQuote(part))
@@ -808,36 +961,106 @@ export async function shellDownloadFile(
   const fd = openSync(partPath, 'w')
   let written = 0
   let cancelled = false
+  /*
+   * fd 只能关一次。
+   * 旧实现 rename 失败后 catch 会对已经关过的整数 fd 再 closeSync 一遍 ——
+   * 那时这个号可能已经被别的 open 复用，等于把别人刚打开的文件关掉。
+   */
+  let closed = false
+  const closeFd = (): void => {
+    if (closed) return
+    closed = true
+    try {
+      closeSync(fd)
+    } catch {
+      /* 已关闭 */
+    }
+  }
+  /*
+   * 写盘失败（磁盘满最常见）：不能在 'data' 回调里抛，那会变成未捕获异常。
+   * 用盒子装而不是裸 let —— 只在闭包里赋值，TS 会在检查处把它收窄成 never。
+   */
+  const failState: { write: string | null } = { write: null }
+  let ctrl: { pause: () => void; resume: () => void; abort: () => void } | null = null
+  let paused = false
 
   try {
     const result = await execChannel(client, 'cat -- ' + shQuote(remotePath), {
       timeoutMs: TRANSFER_TIMEOUT_MS,
       onStdout: (chunk: Buffer) => {
-        if (cancelled) return
-        writeSync(fd, chunk)
+        if (cancelled || failState.write !== null) return
+        // 先查取消再落盘：避免已取消后仍写入多余字节并向 UI 回发 running 进度
+        if (hooks.isCancelled()) {
+          cancelled = true
+          ctrl?.abort()
+          return
+        }
+        try {
+          writeSync(fd, chunk)
+        } catch (e) {
+          failState.write = e instanceof Error ? e.message : String(e)
+          cancelled = true
+          ctrl?.abort()
+          return
+        }
         written += chunk.length
         hooks.onProgress(written, total)
-        if (hooks.isCancelled()) cancelled = true
+        if (hooks.isCancelled()) {
+          cancelled = true
+          // 取消要真的把远端 cat 停掉，否则它会一直被背压卡着不返回
+          ctrl?.abort()
+          return
+        }
+        if (hooks.isPaused() && !paused) {
+          paused = true
+          ctrl?.pause()
+          void hooks.waitIfPaused().then(() => {
+            paused = false
+            /*
+             * 醒来后必须重查取消：用户完全可能「刚按暂停，又按了取消」。
+             * 旧实现只看进入时那个 cancelled，于是继续把远端数据恢复下载 ——
+             * 界面显示已取消，文件还在长。
+             */
+            if (cancelled || hooks.isCancelled()) {
+              cancelled = true
+              ctrl?.abort()
+              return
+            }
+            ctrl?.resume()
+          })
+        }
       },
-      onStdin: (h) => {
-        hooks.registerStream?.({
+      // 同步拿到 ctrl：首个 data 分块可能比 onStdin 的 setImmediate 还早到
+      onChannel: (h) => {
+        ctrl = {
           pause: () => h.pause(),
           resume: () => h.resume(),
-          abort: () => h.close()
-        })
+          abort: () => {
+            cancelled = true
+            h.close()
+          }
+        }
+        hooks.registerStream?.(ctrl)
+        if (hooks.isCancelled()) {
+          ctrl.abort()
+        }
       }
     })
 
-    if (cancelled) {
-      droppedPart(partPath, fd)
+    if (failState.write !== null) {
+      droppedPart(partPath, closeFd)
+      throw new Error('下载失败：写入本地文件出错（' + String(failState.write) + '）')
+    }
+    if (cancelled || hooks.isCancelled()) {
+      droppedPart(partPath, closeFd)
       throw new Error(CANCEL_MESSAGE + '：' + remotePath)
     }
     if (result.code !== 0) {
-      droppedPart(partPath, fd)
+      droppedPart(partPath, closeFd)
       throw new Error('下载失败：' + (result.stderr || 'exit ' + String(result.code)))
     }
 
-    closeSync(fd)
+    closeFd()
     hooks.onProgress(written, total)
     try {
       renameSync(partPath, localPath)
@@ -852,11 +1075,7 @@ export async function shellDownloadFile(
       )
     }
   } catch (e) {
-    try {
-      closeSync(fd)
-    } catch {
-      /* 已关闭 */
-    }
+    closeFd()
     try {
       unlinkSync(partPath)
     } catch {
@@ -867,12 +1086,8 @@ export async function shellDownloadFile(
 }
 
 /** 关闭句柄并删掉半截 .part，供下载失败/取消路径使用。 */
-function droppedPart(partPath: string, fd: number): void {
-  try {
-    closeSync(fd)
-  } catch {
-    /* 已关闭 */
-  }
+function droppedPart(partPath: string, close: () => void): void {
+  close()
   try {
     unlinkSync(partPath)
   } catch {

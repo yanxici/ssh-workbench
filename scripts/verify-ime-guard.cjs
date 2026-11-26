@@ -274,10 +274,11 @@ for (const it of rows) {
 
 console.log('\n=== 断言 ===')
 check(
-  '需要守卫的 handler 数 === 16（少一处就是漏修）',
-  /* 14 -> 15（v2.3.2 UpdateSection 更新通道输入框）-> 16（v2.4.0 PasteConfirmDialog textarea Ctrl+Enter 提交）。
-     两者均已配 isImeComposing(e)，由下方兄弟断言同步把关。 */
-  needGuard.length === 16,
+  '需要守卫的 handler 数 === 17（少一处就是漏修）',
+  /* 14 -> 15（v2.3.2 UpdateSection 更新通道输入框）-> 16（v2.4.0 PasteConfirmDialog textarea Ctrl+Enter 提交）
+     -> 17（v2.5.0 TerminalSection NumericField 字号/行高/回滚数字框 Enter 提交）。
+     全部均已配 isImeComposing(e)，由下方兄弟断言同步把关。 */
+  needGuard.length === 17,
   `实际 ${needGuard.length}`
 )
 check(

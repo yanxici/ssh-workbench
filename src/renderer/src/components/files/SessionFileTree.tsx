@@ -25,7 +25,7 @@ import { useSftpStore } from '@/stores/sftpStore'
 import { useSessionStore } from '@/stores/sessionStore'
 import { useToastStore } from '@/stores/toastStore'
 import { call } from '@/lib/ipc'
-import { cn, formatBytes, remoteDirname, remoteJoin } from '@/lib/utils'
+import { cn, formatBytes, parseOctalMode, remoteDirname, remoteJoin } from '@/lib/utils'
 import { normalizeRemoteDir } from '@/lib/uploadDir'
 import { ShellModeBadge } from './ShellModeBadge'
 import { UploadTargetDialog } from './UploadTargetDialog'
@@ -205,7 +205,6 @@ export function SessionFileTree({
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-panel">
-      {/* 头部工具栏 */}
       <div className="flex h-8 shrink-0 items-center gap-0.5 border-b border-edge-soft pl-2 pr-1">
         <span className="shrink-0 text-2xs font-semibold text-ink-2">文件</span>
         <ShellModeBadge sessionId={sessionId} />
@@ -262,7 +261,6 @@ export function SessionFileTree({
         </button>
       </div>
 
-      {/* 当前目录路径栏 */}
       <div
         className="flex h-6 shrink-0 items-center gap-1 border-b border-edge-soft px-2 text-ink-3"
         title={currentDir ?? ''}
@@ -274,7 +272,6 @@ export function SessionFileTree({
         </span>
       </div>
 
-      {/* 树主体 */}
       <div className="scroll-thin min-h-0 flex-1 overflow-auto py-1" onClick={() => setSelected(null)}>
         {sessionStatus === 'connecting' ? (
           <div className="flex items-center justify-center gap-2 py-6 text-2xs text-ink-3">
@@ -603,8 +600,12 @@ function TreeRow({
   }
 
   const chmodTo = async (value: string): Promise<void> => {
-    const mode = parseInt(value, 8)
-    if (!Number.isFinite(mode)) return
+    const mode = parseOctalMode(value)
+    // 解析失败要出声：静默 return 会让人以为权限已经改了
+    if (mode === null) {
+      useToastStore.getState().push({ kind: 'warning', title: '权限格式不正确，请填 0-7777 的八进制数' })
+      return
+    }
     const done = await call(window.api.sftp.chmod(sessionId, file.path, mode), {
       errorTitle: '修改权限失败'
     })

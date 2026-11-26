@@ -62,10 +62,26 @@ async function flush(): Promise<void> {
   if (batchDirs.length === 1) {
     // 单目录不值得开批量通道：直接走原来的 list（少一层服务器兼容风险）
     const files = await call(window.api.sftp.list(sessionId, batchDirs[0]), { silent: true })
-    out = files ? { dirs: { [batchDirs[0]]: files }, errors: {} } : { dirs: {}, errors: {} }
+    /*
+     * 失败必须回一条 errors：返回空对象的话调用方既没数据也没错误，
+     * 界面会把「读不动这个目录」显示成「这个目录是空的」。
+     */
+    out = files
+      ? { dirs: { [batchDirs[0]]: files }, errors: {} }
+      : { dirs: {}, errors: { [batchDirs[0]]: '读取失败' } }
   } else {
     const res = await call(window.api.sftp.listMany(sessionId, batchDirs), { silent: true })
     if (res) out = res
+    else {
+      /*
+       * 批量通道整个失败（会话断、IPC 抛错）时不能交回 { dirs:{}, errors:{} }：
+       * 调用方看到「没有数据也没有错误」只会当成「空目录」，
+       * 于是用户按刷新也永远看不到内容，还以为远端目录真是空的。
+       * 每个请求过的目录都要有一条明确的失败原因。
+       */
+      out = { dirs: {}, errors: {} }
+      for (const d of batchDirs) out.errors[d] = '读取失败'
+    }
   }
 
   for (const w of batchWaiters) {

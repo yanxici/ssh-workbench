@@ -13,6 +13,7 @@ import {
 } from 'lucide-react'
 import type { BackupDiffResult, BackupMeta } from '@shared/types'
 import { cn, formatBytes, formatTime } from '@/lib/utils'
+import { useOverlayEscape } from '@/lib/overlayKeys'
 import { ConfirmDialog, EmptyState, Field, Modal } from '@/components/ui'
 import { useBackupStore } from '@/stores/backupStore'
 import { useSshSessions } from '@/stores/sessionStore'
@@ -27,13 +28,13 @@ export function BackupPanel(): React.JSX.Element | null {
   const backups = useBackupStore((s) => s.backups)
   const selectedId = useBackupStore((s) => s.selectedId)
 
-  if (!panelOpen) return null
-
   const close = (): void => useBackupStore.setState({ panelOpen: false })
+  // 面板按钮上写着「关闭 (Esc)」，这里必须真的响应 Esc
+  useOverlayEscape(panelOpen, close)
+  if (!panelOpen) return null
 
   return (
     <div className="panel-shell fixed inset-x-0 z-30 flex flex-col bg-app">
-      {/* 标题栏 */}
       <div className="flex h-9 shrink-0 items-center gap-2 border-b border-edge bg-panel px-3">
         <Archive size={14} className="text-accent" />
         <span className="text-xs font-semibold">配置备份对比</span>
@@ -157,6 +158,8 @@ function BackupDetailView(): React.JSX.Element {
   const sessions = useSshSessions()
   const connected = sessions.filter((s) => s.status === 'connected')
   const compareSessionId = useBackupStore((s) => s.compareSessionId)
+  // 还原真正写的是「对比会话」，不是备份来源；确认框必须点名真实的写入目标
+  const restoreTarget = connected.find((s) => s.id === compareSessionId) ?? null
 
   const [confirmRestoreAll, setConfirmRestoreAll] = useState(false)
   const [pendingRestore, setPendingRestore] = useState<string | null>(null)
@@ -174,7 +177,6 @@ function BackupDetailView(): React.JSX.Element {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      {/* 概览 + 工具栏 */}
       <div className="shrink-0 border-b border-edge-soft px-3 py-2">
         <div className="flex items-center gap-2">
           <span className="text-xs font-semibold text-ink">{detail.name}</span>
@@ -227,7 +229,6 @@ function BackupDetailView(): React.JSX.Element {
         </div>
       </div>
 
-      {/* 文件列表 */}
       <div className="scroll-thin min-h-0 flex-1 overflow-y-auto">
         {detail.files.length === 0 && (
           <div className="px-3 py-4 text-2xs text-ink-3">这份备份里还没有文件。</div>
@@ -270,7 +271,6 @@ function BackupDetailView(): React.JSX.Element {
         })}
       </div>
 
-      {/* 差异视图 */}
       {diffPath && (
         <div className="flex h-[42%] min-h-[200px] shrink-0 flex-col border-t border-edge">
           <div className="flex shrink-0 items-center gap-2 border-b border-edge-soft bg-panel px-3 py-1">
@@ -334,7 +334,15 @@ function BackupDetailView(): React.JSX.Element {
         confirmText="还原"
         message={
           <>
-            将把备份内容写回设备：
+            将把备份内容写回设备{' '}
+            <span className="font-medium text-ink">{restoreTarget?.target ?? '（未选择）'}</span>
+            {/*
+             * 单文件还原同样要提示跨主机：写错机器上同名路径是真实丢配置的场景
+             */}
+            {restoreTarget && restoreTarget.host !== detail.host ? (
+              <span className="text-danger">{'（不是备份来源 ' + detail.host + '）'}</span>
+            ) : null}
+            ：
             <div className="mt-1 selectable break-all font-mono text-2xs text-ink-3">{pendingRestore}</div>
             <div className="mt-2 text-2xs text-ink-3">
               设备上的原文件会先自动改名为 <span className="font-mono">.bak</span>，可用于回退。
@@ -356,10 +364,17 @@ function BackupDetailView(): React.JSX.Element {
         confirmText={`还原 ${restorable.length} 个文件`}
         message={
           <>
-            将把这份备份里的 {restorable.length} 个文件全部写回设备
-            <span className="font-medium text-ink">{detail.host}</span>。
+            将把这份备份里的 {restorable.length} 个文件全部写回设备{' '}
+            <span className="font-medium text-ink">{restoreTarget?.target ?? '（未选择）'}</span>
+            {/*
+             * 比 host 而不是 target：target 是 user@host，跟备份里的纯 host 永远不相等，
+             * 每次同机还原都会误报跨主机，警告变成狼来了。
+             */}
+            {restoreTarget && restoreTarget.host !== detail.host
+              ? '（不是备份来源 ' + detail.host + '）'
+              : ''}。
             <div className="mt-2 text-2xs text-danger">
-              批量还原可能影响设备网络/服务，请确认设备当前状态后再执行（原文件会自动留 .bak）。
+              批量还原可能影响设备网络，请确认设备当前状态后再执行。
             </div>
           </>
         }

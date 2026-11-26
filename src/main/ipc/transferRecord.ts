@@ -1,5 +1,5 @@
 import { shell } from 'electron'
-import { existsSync } from 'node:fs'
+import { existsSync, statSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { IPC } from '@shared/ipc'
 import type { TransferRecord } from '@shared/types'
@@ -48,10 +48,19 @@ export function registerTransferRecordIpc(): void {
     shell.showItemInFolder(path)
   })
 
-  /** 只打开文件所在目录（不选中文件）：用于目录类记录的「打开上级目录」 */
-  handle(IPC.TRANSFER_OPEN_DIR, (path: string) => {
-    const dir = existsSync(path) ? path : dirname(path)
+  /**
+   * 只打开文件所在目录（不选中文件）：用于目录类记录的「打开上级目录」。
+   *
+   * 旧实现拿 existsSync 当类型判断，传进来的是文件时会直接把文件交给
+   * showItemInFolder —— 那是在错误的层级打开，目录类记录点「打开上级目录」
+   * 反而跳进了自己的父级的父级。必须按 stat 判是不是目录。
+   */
+  handle(IPC.TRANSFER_OPEN_DIR, async (path: string) => {
+    if (!path) throw new Error('路径为空')
+    if (!existsSync(path)) throw new Error('目录已不存在（可能被移动或删除）')
+    const dir = statSync(path).isDirectory() ? path : dirname(path)
     if (!existsSync(dir)) throw new Error('目录已不存在（可能被移动或删除）')
-    shell.showItemInFolder(dir)
+    const err = await shell.openPath(dir)
+    if (err) throw new Error(err)
   })
 }

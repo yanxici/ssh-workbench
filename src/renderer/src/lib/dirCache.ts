@@ -106,13 +106,6 @@ export function invalidateDir(sessionId: string, path?: string): void {
   cache.delete(keyOf(sessionId, path))
 }
 
-/** 清空全部（会话关闭 / 断开时用） */
-export function clearDirCache(): void {
-  cache.clear()
-  inflight.clear()
-  gen.clear()
-}
-
 /**
  * 带缓存与请求去重的目录读取。
  *
@@ -211,7 +204,15 @@ export async function loadDirs(
     const hit = !force ? cache.get(keyOf(sessionId, dir)) : undefined
     if (hit) {
       files[dir] = hit.files
-      if (Date.now() - hit.at >= FRESH_MS) stale.push(dir)
+      /*
+       * 过期命中要**同时**进 missing：旧值只是兜底，必须再发一次请求去验证。
+       * 之前只推开进 stale 不进 missing，缺的那部分全被当成"已满足"，
+       * 于是过期缓存永远不会被刷新 —— 远端新增的文件永远看不到。
+       */
+      if (Date.now() - hit.at >= FRESH_MS) {
+        stale.push(dir)
+        missing.push(dir)
+      }
     } else {
       missing.push(dir)
     }
@@ -221,9 +222,15 @@ export async function loadDirs(
 
   const res = await fetcher(missing).catch(() => null)
   if (!res) {
+    // stale 已在上面按过期命中推过一次，这里再推就是重复项
+    const seen = new Set(stale)
     for (const d of missing) {
-      if (files[d]) stale.push(d)
-      else errors[d] = '读取目录失败'
+      if (files[d]) {
+        if (!seen.has(d)) {
+          seen.add(d)
+          stale.push(d)
+        }
+      } else errors[d] = '读取目录失败'
     }
     return { files, errors, stale }
   }
@@ -236,5 +243,14 @@ export async function loadDirs(
     if (!files[dir]) errors[dir] = msg
     else stale.push(dir)
   }
-  return { files, errors, stale }
+  /*
+   * 本轮已经验证过的目录（过期命中的那些）不算 stale 了 —— 否则调用方
+   * 会以为还需要后台再补一次，一直挂着 loading。
+   */
+  const refreshed = new Set(Object.keys(res.dirs))
+  return {
+    files,
+    errors,
+    stale: [...new Set(stale)].filter((d) => !refreshed.has(d))
+  }
 }

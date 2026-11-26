@@ -1,4 +1,4 @@
-import { BrowserWindow, clipboard, dialog } from 'electron'
+import { clipboard } from 'electron'
 import { promises as fs } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
 import { IPC } from '@shared/ipc'
@@ -8,7 +8,7 @@ import type {
   ConnectionInput,
   ExternalImportSource
 } from '@shared/types'
-import { dialogParent } from '../windowRef'
+import { showOpenDialog, showSaveDialog } from '../windowRef'
 import { dialogDefaultPath, rememberDialogPick } from '../util/dialogDirs'
 import { handle } from './handle'
 import { dataDir } from '../store/jsonStore'
@@ -57,7 +57,7 @@ export function registerConnectionIpc(): void {
   handle(IPC.CONN_EXPORT, async (opts: ConnExportOptions) => {
     const d = new Date()
     const stamp = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`
-    const res = await dialog.showSaveDialog(dialogParent() as BrowserWindow, {
+    const res = await showSaveDialog({
       title: '导出连接',
       defaultPath: dialogDefaultPath('file', `SSH连接-${stamp}.swconn`),
       filters: [{ name: 'SSH Workbench 连接', extensions: ['swconn'] }]
@@ -79,7 +79,7 @@ export function registerConnectionIpc(): void {
   }
 
   handle(IPC.CONN_IMPORT_PICK, async () => {
-    const res = await dialog.showOpenDialog(dialogParent() as BrowserWindow, {
+    const res = await showOpenDialog({
       title: '导入连接',
       defaultPath: dialogDefaultPath('file'),
       properties: ['openFile'],
@@ -138,7 +138,7 @@ export function registerConnectionIpc(): void {
         return { canceled: false, paths: rememberExtPaths([guess]), root: dirname(guess), defaultPath: guess }
       }
     }
-    const res = await dialog.showOpenDialog(dialogParent() as BrowserWindow, {
+    const res = await showOpenDialog({
       title: isSshConfig ? '选择 ssh_config 文件' : '选择外部客户端配置目录',
       defaultPath: isSshConfig ? dialogDefaultPath('file') : dialogDefaultPath('folder'),
       // 目录与文件都允许：MobaXterm 是单个 .mxtsessions，SecureCRT 是整个 Sessions 目录
@@ -185,7 +185,7 @@ export function registerConnectionIpc(): void {
 
   // 选择本地私钥：校验格式后复制到应用数据目录（原文件被移动/删除也不影响连接）
   handle(IPC.CONN_PICK_KEY, async () => {
-    const res = await dialog.showOpenDialog(dialogParent() as BrowserWindow, {
+    const res = await showOpenDialog({
       title: '选择私钥文件',
       buttonLabel: '使用此私钥',
       defaultPath: dialogDefaultPath('file'),

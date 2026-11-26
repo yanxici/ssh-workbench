@@ -93,7 +93,20 @@ export async function setSecret(connectionId: string, secret: PlainSecret): Prom
   if (!safeStorage.isEncryptionAvailable()) {
     if (clean.password || clean.passphrase || clean.proxyPassword) {
       memoryFallback.set(connectionId, clean)
-    } else memoryFallback.delete(connectionId)
+      return
+    }
+    /*
+     * 清空凭据时不能只删内存副本就 return：磁盘上可能还压着上一次（同机器
+     * 早期版本 / 别的入口写入）加密的记录，删不掉等于「清空」是假的，
+     * 下次系统恢复了 safeStorage 又会把它读出来。
+     */
+    memoryFallback.delete(connectionId)
+    await store.update((all) => {
+      if (!(connectionId in all)) return all
+      const next = { ...all }
+      delete next[connectionId]
+      return next
+    })
     return
   }
 
@@ -144,7 +157,14 @@ export async function hasProxyPassword(connectionId: string): Promise<boolean> {
 
 export async function deleteSecret(connectionId: string): Promise<void> {
   memoryFallback.delete(connectionId)
-  if (!safeStorage.isEncryptionAvailable()) return
+  /*
+   * 不能因为 safeStorage 现在不可用就直接 return。
+   * 加密可用时写下的条目仍留在磁盘上：这个环境里 safeStorage 临时失效
+   * （比如 keyring 没起来），用户删连接、删密码都不会真删，
+   * 等下次可用时旧密文又活过来了。
+   * 不可用时 read() 拿到的是空表，update 是「删一个本来就没有的键」，
+   * 不会破坏已有条目，所以无条件执行是安全的。
+   */
   await store.update((all) => {
     const next = { ...all }
     delete next[connectionId]

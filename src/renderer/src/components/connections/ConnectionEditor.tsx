@@ -546,7 +546,23 @@ export function ConnectionEditor({
 
   const clearSecret = async (): Promise<void> => {
     if (!initial) return
-    const saved = await save(buildInput(true))
+    /*
+     * 清凭据也是一次落库，必须先过校验。
+     * 旧实现不校验就写：表单里主机被清空、端口填错时，点「清除凭据」会
+     * 静默失败或存进一条坏记录。
+     * 而且旧实现用 buildInput(true)，第一参会让 buildProxy 也把代理密码清掉 ——
+     * 按钮只承诺清登录凭据，不能顺手带走代理密码。这里按正常规则组装，
+     * 再单独把 password/passphrase 置为 ''（'' 的语义就是清除）。
+     */
+    const problem = validate()
+    if (problem) {
+      useToastStore.getState().push({ kind: 'warning', title: problem })
+      return
+    }
+    const input = buildInput()
+    input.password = ''
+    input.passphrase = ''
+    const saved = await save(input)
     if (saved) {
       setHasSecret(false)
       set('password', '')
@@ -1280,7 +1296,6 @@ export function ConnectionEditor({
               </div>
             </Field>
 
-            {/* 让用户看清保存后标签上会显示什么 */}
             <div className="col-span-2 rounded-lg border border-edge-soft bg-app/60 px-3 py-2 font-mono text-2xs text-ink-3">
               <div>
                 {form.serialPath.trim()

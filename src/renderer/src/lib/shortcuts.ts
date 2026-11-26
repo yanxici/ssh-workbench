@@ -39,15 +39,31 @@ export function parseShortcut(combo: string): {
   alt: boolean
   key: string
 } | null {
-  const parts = combo
-    .trim()
-    .toLowerCase()
-    .split(/[+_\s]+/)
-    .filter(Boolean)
-  const ctrl = parts.includes('ctrl') || parts.includes('control')
+  const raw = combo.trim().toLowerCase()
+  /*
+   * "Ctrl++" 的最后一个 + 是键本身而不是分隔符。
+   * 直接按 + 切会把键切成空串，于是整条快捷键解析失败、永远匹配不上。
+   */
+  const plusKey = raw.endsWith('++')
+  const parts = (plusKey ? raw.slice(0, -1) : raw).split(/[+_\s]+/).filter(Boolean)
+  /*
+   * Cmd / Meta 与 Ctrl 等价。
+   * 匹配侧用的是 e.ctrlKey || e.metaKey（macOS 上用户按的是 ⌘），
+   * 解析侧若不认，'Cmd+K' 会退化成「裸 k」—— 一按 k 就触发命令中心。
+   */
+  const ctrl =
+    parts.includes('ctrl') ||
+    parts.includes('control') ||
+    parts.includes('cmd') ||
+    parts.includes('meta') ||
+    parts.includes('command')
   const shift = parts.includes('shift')
   const alt = parts.includes('alt') || parts.includes('option')
-  const keyPart = parts.find((p) => !['ctrl', 'control', 'shift', 'alt', 'option', 'meta', 'cmd'].includes(p))
+  const keyPart = plusKey
+    ? '+'
+    : parts.find(
+        (p) => !['ctrl', 'control', 'shift', 'alt', 'option', 'meta', 'cmd', 'command'].includes(p)
+      )
   if (!keyPart) return null
   return { ctrl, shift, alt, key: keyPart }
 }

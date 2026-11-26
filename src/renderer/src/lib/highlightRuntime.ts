@@ -83,36 +83,70 @@ function stateOf(sessionId: string): SessionHighlight {
   return s
 }
 
+/**
+ * 释放一条装饰 —— 连它底下的 marker 一起。
+ *
+ * IDecoration.dispose() 只把 DOM 装饰从终端摘掉，**不动** registerMarker
+ * 创建的那个 marker：marker 会留在终端内部数组里，一直等到它所在的行被
+ * 回滚区裁掉才消失。一次裁剪上千条就攒下上千个死 marker，
+ * 断连重染再翻一遍，长期开着的工作台会越用越卡。
+ */
+function disposeDecoration(d: IDecoration): void {
+  try {
+    d.dispose()
+  } catch {
+    /* 终端已销毁 */
+  }
+  try {
+    d.marker.dispose()
+  } catch {
+    /* marker 已随终端/裁剪消失 */
+  }
+}
+
 /** 丢掉超量的旧装饰（从最老的开始） */
 function trim(s: SessionHighlight): void {
   while (s.decorations.length > MAX_DECORATIONS) {
     const old = s.decorations.shift()
-    try {
-      old?.dispose()
-    } catch {
-      /* 终端已销毁：marker 跟着没了，dispose 会抛，忽略 */
-    }
+    if (old) disposeDecoration(old)
   }
 }
 
 /**
  * 给「这一批数据里命中的行」挂装饰。
  *
- * base 是「最后一条完整行相对光标的偏移」：
- *   - chunk 以换行结尾 → 光标停在新的空行上，最后一条完整行在 -1；
- *   - chunk 带未完成的尾巴 → 光标停在尾巴上，最后一条完整行在 -2。
+ * base 是「最后一条完整行相对光标的偏移」，由**分割器里是否还剩半行**决定：
+ *   - 没有半行（chunk 以 \n 或 \r 收尾，光标落在新行/本行行首）→ -1；
+ *   - 还有半行（光标正停在那截尾巴上）→ -2。
  * 之后每往前一行再 -1。
+ *
+ * 以前这里判的是「chunk 是否以 \n 结尾」，把「以 \r 结尾但不换行」也算成
+ * -2，于是报错行和紧跟其后的 shell 提示符挤在同一个包里时（`ERROR\r\n` +
+ * `root@host:~# `），高亮整体上移一行画到报错行的上一行去。
  */
 function decorate(
   term: Terminal,
   s: SessionHighlight,
   hits: HitLine[],
-  lineCount: number,
-  endedWithNewline: boolean
+  pendingCols: number
 ): void {
   if (hits.length === 0) return
+  /*
+   * base 是「最后一条完整行」相对光标的偏移。
+   *
+   * 光标此刻停在**最后那条完整行的尾部**（它没有跟着换行 —— 整包数据在写完
+   * 最后一行后没有换行符，xterm 就把光标留在这一行末尾）。所以最后一条完整行
+   * 永远是 -1，不再因为「还有半行」变成 -2：那半行是写在光标当前行上的，
+   * 并没有多占一行。原来的 -2 让整块高亮统一上移一行 —— 也就是报告里那个
+   * 「高亮画到报错行上一行」的老 bug。
+   *
+   * 唯一需要补偿的是折行：半行太长被折成 extraRows 行时，光标被推到折行的
+   * 末行，最后一条完整行相对它就又远了 extraRows 行。
+   */
+  const extraRows = pendingCols > 0 ? Math.floor((pendingCols - 1) / Math.max(1, term.cols)) : 0
+  const base = 1 + extraRows
   for (const hit of hits) {
-    const back = (endedWithNewline ? 1 : 2) + hit.fromEnd
+    const back = base + hit.fromEnd
     if (back > MAX_MARKER_BACK) continue
     let marker: IMarker | undefined
     try {
@@ -142,7 +176,6 @@ function decorate(
     s.decorations.push(deco)
     trim(s)
   }
-  void lineCount
 }
 
 /**
@@ -172,6 +205,14 @@ export function writeSessionData(sessionId: string, term: Terminal | undefined, 
     return
   }
 
+  /*
+   * 半行长度必须在这里同步快照。
+   *
+   * term.write 的回调是异步队列里出来的，那时下一包数据可能已经 feed 过，
+   * s.splitter.pending 装的是**别人的**尾巴：包 1（"ERROR\n"）+ 包 2
+   * （提示符）连着到时，包 1 的回调会看到包 2 的 pending 而多算一行。
+   */
+  const pendingCols = s.splitter.pending.length
   const hits: HitLine[] = []
   for (let i = 0; i < lines.length; i++) {
     const rule = matchRule(compiled, lines[i])
@@ -182,13 +223,12 @@ export function writeSessionData(sessionId: string, term: Terminal | undefined, 
     return
   }
 
-  const endedWithNewline = data.endsWith('\n')
   /*
    * write 的回调在数据真正解析完之后触发。这里不 await（App 的数据回调是同步的，
    * 也不该为染色拖慢输出）；回调只做注册，不做解析。
    */
   term.write(data, () => {
-    decorate(term, s, hits, lines.length, endedWithNewline)
+    decorate(term, s, hits, pendingCols)
   })
 }
 
@@ -196,13 +236,7 @@ export function writeSessionData(sessionId: string, term: Terminal | undefined, 
 export function clearSession(sessionId: string): void {
   const s = sessions.get(sessionId)
   if (!s) return
-  for (const d of s.decorations) {
-    try {
-      d.dispose()
-    } catch {
-      /* ignore */
-    }
-  }
+  for (const d of s.decorations) disposeDecoration(d)
   s.decorations = []
   s.splitter.reset()
 }

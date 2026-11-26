@@ -1,4 +1,4 @@
-import { BrowserWindow, dialog } from 'electron'
+import { dialog } from 'electron'
 import { createHash } from 'node:crypto'
 import { createReadStream, promises as fs } from 'node:fs'
 import { basename } from 'node:path'
@@ -9,7 +9,8 @@ import type {
   FirmwareVerifyResult
 } from '@shared/types'
 import { dialogDefaultPath, rememberDialogPick } from '../util/dialogDirs'
-import { execCollect, type CancellationToken } from './exec'
+import { dialogParent } from '../windowRef'
+import { createCancelToken, execCollect, type CancellationToken } from './exec'
 import { sessionManager } from './sessionManager'
 import { sftpManager } from './sftpManager'
 
@@ -39,17 +40,26 @@ class FirmwareOps {
 
   /** 选择本地固件文件（系统对话框），并返回基本信息 */
   async pickFile(): Promise<{ canceled: boolean; file?: FirmwareFileInfo }> {
-    const win = BrowserWindow.getFocusedWindow()
-    const res = await dialog.showOpenDialog(win as BrowserWindow, {
+    /*
+     * dialogParent() 在没有聚焦窗口时返回 undefined，不能像旧实现那样直接 as BrowserWindow：
+     * 此时把 undefined 传给 showOpenDialog，Electron 会当成「不是 parent」按无父窗口处理，
+     * 但在某些平台上等价于传了 null 而抛 TypeError，选固件直接失败。
+     * 有窗口才带 parent，没有就不带。
+     */
+    const win = dialogParent()
+    const options = {
       title: '选择固件文件',
       buttonLabel: '选择',
       defaultPath: dialogDefaultPath('firmware'),
-      properties: ['openFile'],
+      properties: ['openFile' as const],
       filters: [
         { name: '固件镜像', extensions: ['bin', 'img', 'fw', 'hex', 'gz', 'tgz', 'tar', 'zip', 'swu', 'upg'] },
         { name: '全部文件', extensions: ['*'] }
       ]
-    })
+    }
+    const res = win
+      ? await dialog.showOpenDialog(win, options)
+      : await dialog.showOpenDialog(options)
     if (res.canceled || res.filePaths.length === 0) return { canceled: true }
     const path = res.filePaths[0]
     rememberDialogPick('firmware', path, false)
@@ -82,8 +92,6 @@ class FirmwareOps {
     localPath: string,
     remotePath: string
   ): Promise<FirmwareVerifyResult> {
-    const localHash = await sha256File(localPath)
-
     await sessionManager.waitUntilReady(sessionId)
     const client = sessionManager.getClient(sessionId)
     if (!client) throw new Error('会话不可用，请检查连接状态')
@@ -91,7 +99,7 @@ class FirmwareOps {
     const q = shellQuote(remotePath)
     const out = await execCollect(
       client,
-      `sha256sum ${q} 2>/dev/null || md5sum ${q} 2>/dev/null || busybox sha256sum ${q} 2>/dev/null`,
+      `sha256sum ${q} 2>/dev/null || busybox sha256sum ${q} 2>/dev/null || md5sum ${q} 2>/dev/null`,
       30000,
       undefined,
       64 * 1024
@@ -102,8 +110,15 @@ class FirmwareOps {
         `设备端无法计算校验值（sha256sum/md5sum 不可用？）：${(out.stderr || out.stdout || '无输出').trim().slice(0, 200)}`
       )
     }
+    const algo = token.length === 64 ? 'sha256' : 'md5'
+    /*
+     * 本机必须用「和设备端同一种算法」重算。旧实现本地恒算 SHA-256（64 位），
+     * 设备端只有 md5sum 时拿 32 位 MD5 去比 64 位 SHA-256，永远不相等 ——
+     * 用户看到的是一份传输完好、却被判「校验失败」的固件。
+     */
+    const localHash = await hashFile(localPath, algo)
     return {
-      algo: token.length === 64 ? 'sha256' : 'md5',
+      algo,
       localHash,
       remoteHash: token,
       match: token === localHash,
@@ -118,7 +133,11 @@ class FirmwareOps {
     command: string,
     timeoutMs = 600000
   ): Promise<FirmwareUpgradeResult> {
-    const token: CancellationToken = { cancelled: false }
+    /*
+     * 必须用 createCancelToken：execCollect 只订阅 token.onCancel，
+     * 裸的 { cancelled: false } 没有这个回调，点「取消」永不生效。
+     */
+    const token = createCancelToken()
     this.runs.set(runId, token)
 
     const started = Date.now()
@@ -160,20 +179,31 @@ class FirmwareOps {
 
   cancel(runId: string): void {
     const token = this.runs.get(runId)
-    if (token) token.cancelled = true
+    if (!token) return
+    if (token.cancel) token.cancel()
+    else token.cancelled = true
   }
 
-  /** 重启设备（不等待结果：命令发出后连接会立刻断开，属正常现象） */
+  /**
+   * 重启设备（不等待结果：命令发出后连接会立刻断开，属正常现象）。
+   *
+   * 「不等待结果」不等于「不看结果」：execCollect 超时/连接已断时返回
+   * status='error' 而**不抛**，旧实现直接忽略返回值，界面照样弹「重启命令已下发」，
+   * 实际一个字都没发出去，用户只能对着失联的设备干等。
+   */
   async reboot(sessionId: string, command = 'reboot'): Promise<void> {
     const client = sessionManager.getClient(sessionId)
-    const token: CancellationToken = { cancelled: false }
     if (!client) throw new Error('会话不可用，请检查连接状态')
-    await execCollect(client, command, 5000, token, 8 * 1024)
+    const out = await execCollect(client, command, 5000, undefined, 8 * 1024)
+    if (out.status === 'error') {
+      throw new Error(out.error ?? '重启命令发送失败')
+    }
   }
 }
 
-async function sha256File(path: string): Promise<string> {
-  const hash = createHash('sha256')
+/** 流式算本机文件哈希：算法必须与设备端一致，否则比对毫无意义 */
+async function hashFile(path: string, algo: 'sha256' | 'md5'): Promise<string> {
+  const hash = createHash(algo)
   await new Promise<void>((resolve, reject) => {
     createReadStream(path)
       .on('data', (chunk) => hash.update(chunk))

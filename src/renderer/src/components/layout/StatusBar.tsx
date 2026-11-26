@@ -164,7 +164,8 @@ export function StatusBar(): React.JSX.Element {
 
   /* ---------- Git 分支：活动会话变更或有连接时查一次 ---------- */
   useEffect(() => {
-    if (!sessionId || !connected) {
+    // 串口设备没有 shell，拿它跑 git 每切一次标签就刷一条错误日志
+    if (!sessionId || !connected || session?.kind === 'serial') {
       setBranch(null)
       return
     }
@@ -181,7 +182,8 @@ export function StatusBar(): React.JSX.Element {
     return () => {
       cancelled = true
     }
-  }, [sessionId, connected])
+    // session?.kind 也要进依赖：串口/SSH 之间切换时不能复用上一份分支名
+  }, [sessionId, connected, session?.kind])
 
   const { activeCount, activePct, firstDirection } = transfer
 

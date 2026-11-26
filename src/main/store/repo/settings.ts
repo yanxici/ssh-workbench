@@ -70,7 +70,11 @@ function migrateShell(stored: Partial<AppSettings>): Partial<AppSettings> {
    * 仍在架的三套原样保留。
    */
   if (from < 3) {
-    next.colorTheme = normalizeColorTheme(stored.colorTheme)
+    // 兜底必须基于**用户原本存的**配色，而不是上一步刚改过的 next：
+    // v1 直达 v3 时 v2 步骤已经把 next.colorTheme 写成 vscode，
+    // 再拿它归一化就是自己覆盖自己 —— gruvbox / solarized / dracula 用户
+    // 升级后会发现配色凭空变回 vscode。
+    next.colorTheme = normalizeColorTheme(next.colorTheme)
   }
 
   return next
@@ -205,6 +209,11 @@ function mergeSettings(base: AppSettings, patch: Partial<AppSettings>): AppSetti
      * （渲染层每次都是把新数组整个传上来），否则会被默认的空数组清掉。
      */
     taskNotify: { ...base.taskNotify, ...(patch.taskNotify ?? {}) } as AppSettings['taskNotify'],
+    /*
+     * update 也必须逐键合并。渲染层改「自动下载」时只传 { update: { autoDownload } }，
+     * 整段覆盖会把用户填的镜像前缀和更新代理一起抹掉 —— 表现为
+     * 「勾一下自动下载，国内镜像就没了，下次检查更新又卡在 GitHub」。
+     */
     update: { ...base.update, ...(patch.update ?? {}) },
     splitLayout: patch.splitLayout ?? base.splitLayout,
     dangerPatterns: patch.dangerPatterns ?? base.dangerPatterns

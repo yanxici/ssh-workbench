@@ -19,12 +19,14 @@ import {
 } from 'lucide-react'
 import type { TransferRecord, TransferTask } from '@shared/types'
 import { cn, formatBytes, formatTime } from '@/lib/utils'
+import { useOverlayEscape } from '@/lib/overlayKeys'
 import { useSessionStore } from '@/stores/sessionStore'
 import { useSftpStore } from '@/stores/sftpStore'
 import { useTransferStore, isFailedRecord, type RecordFilter } from '@/stores/transferStore'
 import { useTrzszStore } from '@/stores/trzszStore'
 import { amountText, basename, locateKind, parentOf } from '@/lib/transferFormat'
 import { getZmodemRecordProgress, watchZmodem, type ZmodemProgress } from '@/lib/zmodem'
+import { closePanelsExcept } from '@/lib/panels'
 
 /**
  * 传输记录面板（覆盖主区域，与其它工具面板同一套外壳）。
@@ -35,8 +37,10 @@ import { getZmodemRecordProgress, watchZmodem, type ZmodemProgress } from '@/lib
  */
 export function TransferPanel(): React.JSX.Element | null {
   const open = useTransferStore((s) => s.panelOpen)
-  if (!open) return null
   const close = (): void => useTransferStore.setState({ panelOpen: false })
+  // 面板按钮上写着「关闭 (Esc)」，这里必须真的响应 Esc
+  useOverlayEscape(open, close)
+  if (!open) return null
 
   return (
     <div className="panel-shell fixed inset-x-0 z-30 flex flex-col bg-app">
@@ -370,6 +374,12 @@ function RemoteLocate({ record }: { record: TransferRecord }): React.JSX.Element
       .sessions.find((x) => x.connectionId === record.connectionId && x.status === 'connected')
     if (!session) return
     const dir = parentOf(record.remotePath)
+    /*
+     * 必须关自己：传输面板与文件面板同为面板层、按 App.tsx 的挂载顺序
+     * 排在最后，不关就永远盖在刚打开的文件面板上面，「定位」看着没反应。
+     * 关在打开之前 —— 先开再关会让文件面板闪一帧到下面去。
+     */
+    closePanelsExcept('sftp')
     void useSftpStore.getState().openFor(session.id, session.target).then(() => {
       if (dir) void useSftpStore.getState().navRemote(dir)
     })

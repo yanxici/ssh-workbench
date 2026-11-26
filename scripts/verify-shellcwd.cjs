@@ -144,7 +144,8 @@ const cases = [
   ["cd '/opt/my app'", '/opt/my app'],
   ['cd /opt/my\\ app', '/opt/my app'],
   // 多个 cd 取最后一个（与 shell 的最终 cwd 一致）
-  ['cd /a && cd b', '/home/dev/b'],
+  // 链式 cd 基于上一条的结果解析（bug 报告 P2-15）：/a 下再 cd b = /a/b
+  ['cd /a && cd b', '/a/b'],
   ['cd /a; cd /b', '/b'],
   // 不可判定 → null（宁可不动，也不要跟错）
   ['cd ~other/x', null],

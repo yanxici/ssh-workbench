@@ -32,7 +32,7 @@ import { useI18n } from '@/i18n'
 import { takeFlashTarget, toggleMuteConnection, watchFlash, clearFlashTarget } from '@/lib/taskNotify'
 import { isMuted, normalizeNotifyPrefs } from '@/lib/notifyPlan'
 import { useSplitStore } from '@/stores/splitStore'
-import { isNestedPane } from '@/lib/paneRegistry'
+import { isNestedPane, paneOwnerOf } from '@/lib/paneRegistry'
 import { MAX_PANES, countLeaves, leafIds } from '@/lib/paneTree'
 
 /** 「刚跑完」的标签高亮持续时间。0.6s 的动画 + 一次停顿，太短会看不见 */
@@ -103,6 +103,12 @@ export function TabBar(): React.JSX.Element {
    */
   const tabs = sessions.filter((x) => !isNestedPane(x.id))
   const hiddenTabs = Math.max(0, tabs.length - MAX_TABS)
+  /*
+   * 当前**标签**（pane owner）而不是当前会话：
+   * 焦点在子窗格里时 activeId 是嵌套 id，标签条里根本没有它，
+   * 按 activeId 比对会让整条标签栏看起来「一个都没选中」。
+   */
+  const activeOwner = activeId ? paneOwnerOf(activeId) : null
 
   const sessionById = useMemo(() => new Map(sessions.map((x) => [x.id, x])), [sessions])
   const reconnectById = useSessionStore((s) => s.reconnectById)
@@ -112,7 +118,11 @@ export function TabBar(): React.JSX.Element {
 
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editText, setEditText] = useState('')
-  const [dragIndex, setDragIndex] = useState<number | null>(null)
+  /*
+   * 拖拽按**会话 id**记账，不按下标：标签列表是过滤掉分屏格之后的 tabs，
+   * 而 reorder 走的是未过滤的 sessions —— 下标混用会把顺序彻底打乱。
+   */
+  const [dragId, setDragId] = useState<string | null>(null)
   const [dropTarget, setDropTarget] = useState<number | null>(null)
   const { menu, openMenu, closeMenu } = useContextMenu<string>()
 
@@ -176,7 +186,12 @@ export function TabBar(): React.JSX.Element {
       const t = takeFlashTarget()
       if (!t) return
       clearFlashTarget()
-      setFlashId(t.sessionId)
+      /*
+       * 通知带的是**会话** id，标签条上渲染的是**标签**（pane owner）id。
+       * 通知来自分屏副窗格时两者不同，直接存 sessionId 会一个标签也不闪 ——
+       * 用户看到通知点过来，屏幕却毫无反应。
+       */
+      setFlashId(paneOwnerOf(t.sessionId))
       if (timer !== null) window.clearTimeout(timer)
       timer = window.setTimeout(() => {
         setFlashId(null)
@@ -270,6 +285,12 @@ export function TabBar(): React.JSX.Element {
     const s = sessionById.get(id)
     const canReconnect = s && (s.status === 'disconnected' || s.status === 'error')
     const connId = s?.connectionId
+    /*
+     * 串口会话不能分屏、也不能「新建终端」：
+     * 两者都走 session.open(复用连接)，而串口是独占的一个文件句柄，
+     * 复用会开出第二个抢同一个 COM 口的会话，两个都是死的。
+     */
+    const serial = s?.kind === 'serial'
     return [
       ...(canReconnect
         ? [{ label: '重新连接', icon: <RefreshCw size={12} />, onClick: () => reconnect(id) }]
@@ -277,7 +298,7 @@ export function TabBar(): React.JSX.Element {
       {
         label: '新建终端（复用此连接）',
         icon: <SquarePlus size={12} />,
-        disabled: s?.status !== 'connected',
+        disabled: s?.status !== 'connected' || serial,
         onClick: () => openTerminal(id)
       },
       {
@@ -310,13 +331,13 @@ export function TabBar(): React.JSX.Element {
       {
         label: '向右分屏',
         icon: <Columns2 size={12} />,
-        disabled: s?.status !== 'connected' || paneCount(ownerOf(id)) >= MAX_PANES,
+        disabled: s?.status !== 'connected' || serial || paneCount(ownerOf(id)) >= MAX_PANES,
         onClick: () => splitPane(id, 'row')
       },
       {
         label: '向下分屏',
         icon: <Rows2 size={12} />,
-        disabled: s?.status !== 'connected' || paneCount(ownerOf(id)) >= MAX_PANES,
+        disabled: s?.status !== 'connected' || serial || paneCount(ownerOf(id)) >= MAX_PANES,
         onClick: () => splitPane(id, 'col')
       },
       /*
@@ -362,14 +383,14 @@ export function TabBar(): React.JSX.Element {
         {tabs.slice(0, MAX_TABS).map((s, i) => {
           // 该标签的自动重连进度（有就说明正在自动恢复）
           const rc = reconnectById[s.id]
-          const isActive = s.id === activeId
+          const isActive = s.id === activeOwner
           return (
             <div
               key={s.id}
               data-tab-id={s.id}
               draggable={editingId !== s.id}
               onDragStart={(e) => {
-                setDragIndex(i)
+                setDragId(s.id)
                 e.dataTransfer.effectAllowed = 'move'
               }}
               onDragOver={(e) => {
@@ -379,12 +400,15 @@ export function TabBar(): React.JSX.Element {
               onDragLeave={() => setDropTarget((t) => (t === i ? null : t))}
               onDrop={(e) => {
                 e.preventDefault()
-                if (dragIndex !== null && dragIndex !== i) reorder(dragIndex, i)
-                setDragIndex(null)
+                // 下标在未过滤的 sessions 里重新算一次，不能拿 tabs 的下标直接用
+                const from = dragId ? sessions.findIndex((x) => x.id === dragId) : -1
+                const to = sessions.findIndex((x) => x.id === s.id)
+                if (from >= 0 && to >= 0 && from !== to) reorder(from, to)
+                setDragId(null)
                 setDropTarget(null)
               }}
               onDragEnd={() => {
-                setDragIndex(null)
+                setDragId(null)
                 setDropTarget(null)
               }}
               className={cn(
@@ -394,7 +418,7 @@ export function TabBar(): React.JSX.Element {
                 isActive
                   ? 'bg-app text-ink'
                   : 'bg-transparent text-ink-3 hover:bg-hover/70 hover:text-ink-2',
-                dropTarget === i && dragIndex !== null && dragIndex !== i && 'bg-hover',
+                dropTarget === i && dragId !== null && dragId !== s.id && 'bg-hover',
                 // 闪一下：品牌色底光 0.6s 内淡出，非激活标签也看得见
                 flashId === s.id && 'animate-flash-ok'
               )}
@@ -406,10 +430,10 @@ export function TabBar(): React.JSX.Element {
               title={editingId === s.id ? undefined : s.target}
             >
               {/*
-                激活指示线：2px 品牌色画在标签顶部，紧贴窗口上沿。
-                用绝对定位而不是 border-top —— border 会占掉 2px 高度，标签
-                就不再是「满高」，另外几个标签会跟着上移 2px。
-              */}
+               * 激活指示线：2px 品牌色画在标签顶部，紧贴窗口上沿。
+               * 用绝对定位而不是 border-top —— border 会占掉 2px 高度，标签
+               * 就不再是「满高」，另外几个标签会跟着上移 2px。
+               */}
               {isActive && (
                 <span className="pointer-events-none absolute inset-x-0 top-0 h-0.5 bg-brand" />
               )}
@@ -504,7 +528,11 @@ export function TabBar(): React.JSX.Element {
               >
                 <X size={12} />
               </button>
-              {hiddenTabs > 0 && (
+            </div>
+          )
+        })}
+        {/* 溢出提示只能放在 map 外面：写进循环里的话每个标签都会长出一条 +N */}
+        {hiddenTabs > 0 && (
           <div
             className="flex shrink-0 items-center px-2 text-2xs text-ink-3"
             title={`另有 ${hiddenTabs} 个会话未显示标签（超过上限 ${MAX_TABS}），可在左侧连接列表切换`}
@@ -513,23 +541,23 @@ export function TabBar(): React.JSX.Element {
           </div>
         )}
       </div>
-          )
-        })}
-      </div>
 
       {/* 在当前会话上新建终端（复用 SSH 连接，免重新登录） */}
       {activeSession && (
         <button
           className="no-drag titlebar-btn ml-0.5 h-6 w-6 shrink-0 self-center"
-          title="在当前会话新建终端 (Ctrl+Shift+T)"
-          disabled={activeSession.status !== 'connected'}
+          title={
+            activeSession.kind === 'serial'
+              ? '串口会话不支持多开（COM 口独占）'
+              : '在当前会话新建终端 (Ctrl+Shift+T)'
+          }
+          disabled={activeSession.status !== 'connected' || activeSession.kind === 'serial'}
           onClick={() => openTerminal(activeSession.id)}
         >
           <SquarePlus size={14} />
         </button>
       )}
 
-      {/* 新建连接 */}
       <button
         className="no-drag titlebar-btn ml-0.5 h-6 w-6 shrink-0 self-center"
         title="新建连接 (Ctrl+N)"

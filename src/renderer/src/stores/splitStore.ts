@@ -114,16 +114,50 @@ function persist(trees: Record<string, PaneNode>): void {
   const connOf = (sessionId: string): string | null =>
     sessions.find((s) => s.id === sessionId)?.connectionId ?? null
 
-  const layout: SplitLayoutMap = {}
+  /*
+   * 在**已有**布局上合并，不要用当前打开的树整张覆盖：
+   * 用户这一刻只开了 A 连接的分屏，B/C 的分屏记录不该因为「没打开」就被抹掉。
+   * 反过来，某连接当前是单格（没有树）时必须把它那条删掉，否则把分屏合回去
+   * 之后重启又会按旧记录重新裂开。
+   */
+  const layout: SplitLayoutMap = { ...(useSettingsStore.getState().settings.splitLayout ?? {}) }
+  const splitConns = new Set<string>()
+  /*
+   * 注意下面收集 splitConns 时**也要算上副窗格所属的连接**：
+   * 删旧记录的判据是「当前没有树」，而分屏的另一半（connB 开成 connA 里的
+   * 副窗格）本来就没有自己的树 —— 旧实现会把它的记录一起删掉，
+   * 用户把 connB 从分屏里拆出来后，它曾经的分屏布局已经凭空没了。
+   */
   for (const [ownerId, node] of Object.entries(trees)) {
     const conn = persistedOwnerConnection(ownerId)
     if (!conn) continue
     const enc = encodeTree(node, connOf)
-    if (enc) layout[conn] = enc
+    if (enc) {
+      layout[conn] = enc
+      splitConns.add(conn)
+      // 副窗格所属的连接也算「有分屏记录」，别被下面的清理误删
+      for (const id of leafIds(node)) {
+        const leafConn = connOf(id)
+        if (leafConn) splitConns.add(leafConn)
+      }
+    }
+  }
+  for (const s of sessions) {
+    if (!splitConns.has(s.connectionId)) delete layout[s.connectionId]
   }
   /*
+   * 先同步乐观更新内存里的 settings，再发异步 IPC。
+   *
+   * 这条顺序是必须的：update() 要等主进程回包才 set，期间 settings.splitLayout
+   * 还是旧值。关掉 2 格分屏里的一格后，React 立刻提交 sessions=[s2] 的那一帧，
+   * App 的恢复 effect 读到的 layout 仍是那份 2 格记录、trees[s2] 又已被删掉，
+   * 于是当场 restoreFor(s2) 把刚关掉的分屏再裂一遍 —— 窗格「复活」。
+   * 自己写第一手，读到的就永远是最新意图。
+   */
+  useSettingsStore.setState((s) => ({ settings: { ...s.settings, splitLayout: layout } }))
+  /*
    * 只有树（多格）才有必要存；单格标签下次照常由 lastOpenSessions 恢复。
-   * 这里刻意不 await：拖拽松手时落盘不能卡住 UI，下一次 persist 会带整张表覆盖。
+   * 这里刻意不 await：拖拽松手时落盘不能卡住 UI。
    */
   void useSettingsStore.getState().update({ splitLayout: layout })
 }
@@ -174,37 +208,69 @@ export const useSplitStore = create<SplitState>()((set, get) => ({
     }
     const node = trees[ownerId]
     const next = removeLeaf(node, sessionId)
+    /*
+     * 焦点交接必须在 close() 之前判断：close() 会顺手把 activeId 挪到相邻
+     * 会话上，而那可能正好是刚变成隐藏嵌套格的那一个，事后再比对永不成立。
+     */
+    const wasActive = useSessionStore.getState().activeId === sessionId
     useSessionStore.getState().close(sessionId)
 
     const out = { ...trees }
-    if (!next || isLeaf(next)) delete out[ownerId]
-    else out[ownerId] = next
-    /*
-     * 缩回单窗格 = 没有「其他格子」可同步了，开关必须跟着消失。
-     * 留着它会变成一颗哑弹：下次在同一标签里再分屏，用户以为自己开的是
-     * 一次新的同步，实际上上一次的开启状态还在，敲的字直接进了所有窗格。
-     */
-    if (!next || isLeaf(next)) get().clearSync(ownerId)
-
-    // 焦点接管：关掉的那格如果是焦点，交给剩下的第一格
-    if (useSessionStore.getState().activeId === sessionId) {
-      const fallback = next ? leafIds(next)[0] : null
-      if (fallback) useSessionStore.getState().setActive(fallback)
+    delete out[ownerId]
+    if (!next || isLeaf(next)) {
+      /*
+       * 缩回单窗格 = 没有「其他格子」可同步了，开关必须跟着消失。
+       * 留着它会变成一颗哑弹：下次在同一标签里再分屏，用户以为自己开的是
+       * 一次新的同步，实际上上一次的开启状态还在，敲的字直接进了所有窗格。
+       */
+      get().clearSync(ownerId)
+    } else {
+      const rootId = rootKeyFor(ownerId, next)
+      moveSyncFlag(ownerId, rootId)
+      out[rootId] = next
     }
+
+    /*
+     * 顺序很关键：先把新树写进 store 并刷新映射，再交接焦点。
+     * 旧实现先 setActive 后 reindex，paneOwnerOf 在这中间读到的是旧树 ——
+     * 焦点落在一个已经不存在的窗格上，下一次分屏会按错的 owner 建树。
+     */
     reindex(out)
     set({ trees: out })
     persist(out)
+    // 焦点接管：关掉的那格如果是焦点，交给剩下的第一格
+    if (wasActive && next) {
+      const fallback = leafIds(next)[0]
+      if (fallback) useSessionStore.getState().setActive(fallback)
+    }
   },
 
   closeTab: (ownerId) => {
-    const { trees, closePane } = get()
+    const { trees } = get()
     const node = trees[ownerId]
     if (!node) {
       useSessionStore.getState().close(ownerId)
       return
     }
-    // 逐个关：每个 shell 都要单独 session.close，一次性从 sessions 里抹掉会漏掉主进程侧
-    for (const id of leafIds(node)) closePane(id)
+    /*
+     * 整标签一次摘掉，不能复用 closePane 逐格关。
+     *
+     * 逐格关时关掉第 1 格、树上还剩 1 格，persist 走「单格 = 没有分屏」分支
+     * 把 settings.splitLayout[connId] 删掉 —— 用户只是关标签，下次重开这个连接
+     * 就再也拿不回自己的分屏了。关整标签必须保留布局记录。
+     *
+     * 做法：先把树从 store 里摘掉（persist 只会看到「这个连接没有树」，
+     * 而它的 session 也刚被关掉，清理循环不会碰它），再逐个关 shell。
+     */
+    const ids = leafIds(node)
+    const out = { ...trees }
+    delete out[ownerId]
+    reindex(out)
+    get().clearSync(ownerId)
+    set({ trees: out })
+    // 每个 shell 都要单独 session.close，一次性从 sessions 里抹掉会漏掉主进程侧
+    for (const id of ids) useSessionStore.getState().close(id)
+    persist(out)
   },
 
   closeOtherTabs: (ownerId) => {
@@ -268,7 +334,17 @@ export const useSplitStore = create<SplitState>()((set, get) => ({
         continue
       }
       if (cur !== node) changed = true
-      out[ownerId] = cur
+      /*
+       * 树根可能是一格已经消失的会话（owner 自己先死了）。继续拿死 id 当键，
+       * reindex 会把剩下的格子全登记成「别人的嵌套格」，TabBar / 工作区按
+       * isNestedPane 过滤后整个标签从界面上消失。换到还活着的第一格。
+       */
+      const rootId = rootKeyFor(ownerId, cur)
+      if (rootId !== ownerId) {
+        changed = true
+        moveSyncFlag(ownerId, rootId)
+      }
+      out[rootId] = cur
     }
     if (!changed) return
     reindex(out)
@@ -278,6 +354,11 @@ export const useSplitStore = create<SplitState>()((set, get) => ({
   restoreFor: (sessionId) => {
     const { trees } = get()
     if (trees[sessionId]) return
+    /*
+     * 已经是别人树里的一格就直接放弃。分屏格同样会 connected、同样带
+     * connectionId，放它进来就会按同一个布局再开一整棵树（s3、s4……无限）。
+     */
+    if (ownerFor(trees, sessionId)) return
     const session = useSessionStore.getState().sessions.find((s) => s.id === sessionId)
     if (!session) return
     const saved = useSettingsStore.getState().settings.splitLayout?.[session.connectionId]
@@ -322,6 +403,28 @@ export const useSplitStore = create<SplitState>()((set, get) => ({
 function persistedLeafCount(p: PersistedPane): number {
   if (p.t === 'l') return 1
   return persistedLeafCount(p.k[0]) + persistedLeafCount(p.k[1])
+}
+
+/**
+ * 树根的键必须是这一屏里还活着的一格。
+ * 关掉原来的标签（树根那格）后，剩下的 split 子树不能继续挂在死 id 下 ——
+ * 否则所有叶子都会被登记成「别人的分屏格」而被界面过滤掉。
+ */
+function rootKeyFor(ownerId: string, node: PaneNode): string {
+  const ids = leafIds(node)
+  if (ids.includes(ownerId)) return ownerId
+  return ids[0] ?? ownerId
+}
+
+/** 树换了根键时把同步开关跟着搬过去（开关按标签存） */
+function moveSyncFlag(from: string, to: string): void {
+  if (from === to) return
+  const { syncByTab } = useSplitStore.getState()
+  if (!syncByTab[from]) return
+  const next = { ...syncByTab }
+  delete next[from]
+  next[to] = true
+  useSplitStore.setState({ syncByTab: next })
 }
 
 /** closeOtherTabs 内部用：判断某会话是否在「要保留的格子集合」里 */

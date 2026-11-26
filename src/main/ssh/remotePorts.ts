@@ -38,10 +38,17 @@ interface Candidate {
 
 const WILDCARD_HOSTS = new Set(['', '*', '0.0.0.0', '::', '0:0:0:0:0:0:0:0'])
 
-/** 去掉 IPv6 的方括号并统一小写 */
+/** 去掉 IPv6 的方括号、网卡区号（`127.0.0.53%lo`）并统一小写 */
 function bareHost(raw: string): string {
   let host = raw.trim()
   if (host.startsWith('[') && host.endsWith(']')) host = host.slice(1, -1)
+  /*
+   * ss -tlnp 在接口作用域地址后带 %网卡名（127.0.0.53%lo、fe80::1%eth0）。
+   * 不剥掉的话这个字符串既不是回环也不是通配，被归成 specific，
+   * 于是 5353/6379 这类只监听回环的服务会漏判。
+   */
+  const zone = host.indexOf('%')
+  if (zone > 0) host = host.slice(0, zone)
   return host.toLowerCase()
 }
 

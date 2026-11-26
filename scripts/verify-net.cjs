@@ -55,7 +55,13 @@ console.log('== IP / 网段 ==')
   check('非法格式被拒绝', (() => {
     try { expandCidrHosts('192.168.1.0'); return false } catch { return true }
   })())
-  check('/32 无主机', expandCidrHosts('192.168.1.1/32').length === 0)
+  /*
+   * /31 与 /32 没有网络号/广播地址的概念：
+   * /32 就是这一台主机，/31 是两端点对点链路的两台（RFC 3021）。
+   * 旧实现套用「掐头去尾」的规则，两者都返回空数组，扫描无结果。
+   */
+  check('/32 就是本机这一台', JSON.stringify(expandCidrHosts('192.168.1.1/32')) === JSON.stringify(['192.168.1.1']))
+  check('/31 两台都在线', JSON.stringify(expandCidrHosts('10.0.0.4/31')) === JSON.stringify(['10.0.0.4', '10.0.0.5']))
 }
 
 console.log('== ARP 表解析（三种格式）==')

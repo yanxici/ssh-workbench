@@ -1,5 +1,5 @@
 import type * as React from 'react'
-import { useDeferredValue, useMemo, useRef, useState } from 'react'
+import { useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ArrowDownUp,
   ChevronDown,
@@ -8,6 +8,7 @@ import {
   Copy,
   FileDown,
   FileUp,
+  Filter,
   FolderInput,
   FolderPlus,
   Pencil,
@@ -24,6 +25,7 @@ import { groupConnections, useConnectionStore } from '@/stores/connectionStore'
 import { useSessionStore } from '@/stores/sessionStore'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { useToastStore } from '@/stores/toastStore'
+import { useI18n } from '@/i18n'
 import { cn, formatRelativeTime } from '@/lib/utils'
 import { call } from '@/lib/ipc'
 import { useTokenFlag } from '@/lib/useTokenFlag'
@@ -41,6 +43,9 @@ import {
 /**
  * 左侧连接列表：分组折叠、搜索、双击打开、右键菜单、从剪贴板识别 ssh 命令。
  */
+
+/** 未分组连接的默认分组名（数据值，不参与 i18n：它是连接数据里的 group 字段） */
+const DEFAULT_GROUP = '默认'
 
 /** 分组色标候选：和连接色标同一套语义色，深浅都够辨识 */
 const GROUP_PALETTE = [
@@ -139,11 +144,10 @@ function BatchTagsEditor({
                 Array.from(selectedIds),
                 newTags,
                 addMode === 'replace' ? 'replace' : 'add'
-              ).then(() => {
-                useToastStore.getState().push({
-                  kind: 'success',
-                  title: `已更新 ${selectedIds.size} 条连接的标签`
-                })
+              ).then((n) => {
+                // n === 0 表示主进程报错了（call 已经把错误弹出来），
+                // 这时再弹一条「已更新 N 条」就是自己打自己的脸
+                if (n === 0) return
                 onConfirm()
               })
             }}
@@ -170,6 +174,7 @@ export function ConnectionSidebar({
 }: {
   onEdit: (initial: Connection | null, preset?: Partial<ConnectionInput>) => void
 }): React.JSX.Element {
+  const { t } = useI18n()
   /* 设计 token 灰度（阶段 1）：行高/动效收到新口径 */
   const tokensOn = useTokenFlag('connections')
   const connections = useConnectionStore((s) => s.connections)
@@ -206,12 +211,15 @@ export function ConnectionSidebar({
   /** 批量编辑标签 */
   const [batchTagsOpen, setBatchTagsOpen] = useState(false)
   /**
-   * 批量移动：待移动的 id 集合。
-   * 坐标复用右键菜单的 menu.x/menu.y —— 批量项本身就从那个菜单点出来，
-   * 在原位弹出分组列表，视觉上是「原地展开」而不是又跳出一坨。
+   * 批量移动：待移动的 id 集合 + 弹出坐标。
+   *
+   * 坐标必须自己存一份，不能复读 menu.x/menu.y：ContextMenu 点条目时先
+   * onClose()（= menu 置 null）再跑 onClick，靠 menu 做渲染条件的二级菜单
+   * 永远不成立，点了「已选 N 条 · 移到分组」什么都不发生。
    */
-  const [batchMoveIds, setBatchMoveIds] = useState<string[] | null>(null)
-  const setBatchMoveFor = (ids: string[]): void => setBatchMoveIds(ids)
+  const [batchMove, setBatchMove] = useState<{ ids: string[]; x: number; y: number } | null>(
+    null
+  )
   /** 正在设置色标的分组名 */
   const [colorFor, setColorForState] = useState<string | null>(null)
   const [pendingDelete, setPendingDelete] = useState<Connection | null>(null)
@@ -222,6 +230,13 @@ export function ConnectionSidebar({
   // 分组管理的三个弹窗 / 一个右键菜单
   const groupMenu = useContextMenu<string>()
   const [newGroupOpen, setNewGroupOpen] = useState(false)
+  /*
+   * 「新建分组并移入…」的待移入清单。
+   * 这个动作要连开两个弹层：先收起右键菜单 → 弹新建分组 → 建好再移进去。
+   * 旧实现收菜单时就把 movingConn / batchMove 清空了，建组回调里只剩一个
+   * createGroup(name)，连接留在原分组 —— 用户看到「已新建分组」，东西没搬过去。
+   */
+  const [pendingMoveIds, setPendingMoveIds] = useState<string[] | null>(null)
   const [renamingGroup, setRenamingGroup] = useState<string | null>(null)
   const [pendingDeleteGroup, setPendingDeleteGroup] = useState<string | null>(null)
   /** 拖拽中的分组名（用于分组之间拖拽排序） */
@@ -236,6 +251,17 @@ export function ConnectionSidebar({
    * React 先保证输入框回显，把重算放到低优先级渲染里。
    */
   const deferredKeyword = useDeferredValue(keyword)
+  /*
+   * 搜索态下的临时折叠状态：搜索命中时默认自动展开所有有命中的分组
+   * （即使该分组此前被用户手动合上），绝不改写 store 里保存的 collapsed 偏好；
+   * 若用户在搜索态下再次手动点合某个组，只记在这份临时表里，换关键字或清空搜索即重置，
+   * 清空搜索后自动恢复用户原本的折叠状态。
+   */
+  const [searchFolded, setSearchFolded] = useState<Record<string, boolean>>({})
+  const trimmedSearch = deferredKeyword.trim()
+  useEffect(() => {
+    setSearchFolded({})
+  }, [trimmedSearch])
 
   const groups = useMemo(
     () =>
@@ -249,8 +275,24 @@ export function ConnectionSidebar({
     [groups]
   )
 
-  /** 所有分组名（含空分组），用于「移到分组 / 新建同组」的候选列表 */
-  const allGroupNames = useMemo(() => groups.map((g) => g.group), [groups])
+  /*
+   * 所有分组名（含空分组），用于「移到分组 / 新建同组」的候选列表。
+   *
+   * 必须来自**未过滤**的连接列表：groups 是经过搜索/只看某组之后的产物，
+   * 一旦开着筛选，「移到分组」里就只剩命中的那几个组 —— 想把一条连接移到
+   * 别的组，那个组根本不在候选里。顺序仍按 savedOrder 排，避免覆写顺序。
+   */
+  const allGroupNames = useMemo(() => {
+    /*
+     * 排序复用 groupConnections，别再自己写一套：这里曾硬编码把 '默认' 钉在
+     * 第一位，用户把 '默认' 拖到中间后，动一下别的分组它就被弹回首位。
+     * 空分组由 groupConnections 从 savedGroups 补进来，候选不会少。
+     */
+    const groups = groupConnections(connections, '', savedGroups ?? [], savedOrder ?? [], null).map(
+      (g) => g.group
+    )
+    return groups.length > 0 ? groups : [DEFAULT_GROUP]
+  }, [connections, savedGroups, savedOrder])
 
   /**
    * 连接 id → 会话索引。
@@ -293,7 +335,16 @@ export function ConnectionSidebar({
       group: c.group,
       tags: c.tags,
       color: c.color,
-      remark: c.remark
+      remark: c.remark,
+      /*
+       * 复制必须连同连接形态一起复制：漏 kind 会让副本变成空 SSH 连接，
+       * 串口参数与老设备算法开关也会被主进程当成「显式清空」。
+       */
+      kind: c.kind,
+      serial: c.serial,
+      proxyJump: c.proxyJump,
+      proxy: c.proxy,
+      legacyAlgorithms: c.legacyAlgorithms
     })
     if (saved) {
       useToastStore.getState().push({
@@ -380,7 +431,10 @@ export function ConnectionSidebar({
         {
           label: `已选 ${batch.length} 条 · 移到分组`,
           icon: <FolderInput size={12} />,
-          onClick: () => setBatchMoveFor(batch)
+          // 菜单会在 onClick 之前先关掉，坐标得在这里抢先存下来
+          onClick: () => {
+            if (menu) setBatchMove({ ids: batch, x: menu.x, y: menu.y })
+          }
         },
         {
           label: `批量编辑标签（${batch.length} 条）`,
@@ -474,7 +528,7 @@ export function ConnectionSidebar({
           <Search size={12} className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-ink-3" />
           <input
             className="input h-7 py-0 pl-7 pr-6 text-xs"
-            placeholder="搜索连接 / 主机 / 标签…"
+            placeholder={t('conn.search.placeholder')}
             value={keyword}
             onChange={(e) => setKeyword(e.target.value)}
           />
@@ -490,7 +544,29 @@ export function ConnectionSidebar({
         </div>
       </div>
 
-      {/* 列表 */}
+      {/* 「只看这组」明显状态条：双击分组标题触发，避免用户以为其它分组莫名消失 */}
+      {onlyGroup && (
+        <div
+          data-testid="only-group-banner"
+          className="flex flex-col gap-0.5 border-b border-accent/25 bg-accent/10 px-2.5 py-1.5 text-2xs"
+        >
+          <div className="flex items-center gap-1.5">
+            <Filter size={11} className="shrink-0 text-accent" />
+            <span className="min-w-0 flex-1 truncate font-medium text-ink">
+              {t('conn.onlyGroup.banner', { group: onlyGroup })}
+            </span>
+            <button
+              type="button"
+              className="shrink-0 rounded border border-accent/35 bg-app/80 px-1.5 py-0.5 text-3xs font-medium text-accent transition-colors hover:bg-accent hover:text-white"
+              onClick={() => setOnlyGroup(null)}
+            >
+              {t('conn.onlyGroup.showAll')}
+            </button>
+          </div>
+          <div className="text-3xs text-ink-3">{t('conn.onlyGroup.bannerHint')}</div>
+        </div>
+      )}
+
       <div
         data-testid="connection-sidebar"
         className="panel-body"
@@ -524,12 +600,17 @@ export function ConnectionSidebar({
         )}
 
         {groups.map(({ group, items }) => {
-          const searching = deferredKeyword.trim().length > 0
-          // 用户手动折叠过就听用户的；没动过时，超长分组默认收起
-          const isCollapsed =
-            collapsed[group] !== undefined
+          const searching = trimmedSearch.length > 0
+          /*
+           * 搜索有命中时临时自动展开被折叠的分组，让命中结果直接可见；
+           * 清空搜索后退回 collapsed[group] 恢复用户的原折叠偏好。
+           * 非搜索态下，用户手动折叠过就听用户的；没动过时超长分组默认收起。
+           */
+          const isCollapsed = searching
+            ? searchFolded[group] === true
+            : collapsed[group] !== undefined
               ? collapsed[group]
-              : items.length > LARGE_GROUP && !searching
+              : items.length > LARGE_GROUP
           /*
            * 搜索态同样分页。
            * 旧实现 searching ? items : items.slice(0, limit) 会把命中的
@@ -588,13 +669,19 @@ export function ConnectionSidebar({
               {/* 分组头做成 sticky：几千条连接往下滚时，永远知道自己在哪个组 */}
               <button
                 className={cn(
-                  'sticky top-0 z-10 flex w-full cursor-default items-center gap-1 rounded-md bg-panel px-1.5 py-1 text-2xs font-semibold text-ink-3 transition-colors hover:text-ink-2',
+                  'group/gh sticky top-0 z-10 flex w-full cursor-default items-center gap-1 rounded-md bg-panel px-1.5 py-1 text-2xs font-semibold text-ink-3 transition-colors hover:text-ink-2',
                   draggingGroup === group && 'opacity-40',
-                  onlyGroup === group && 'text-ink'
+                  onlyGroup === group && 'bg-accent/10 text-ink ring-1 ring-inset ring-accent/25'
                 )}
                 draggable
                 title={`右键管理分组；拖拽可排序；双击只看这一组${onlyGroup === group ? "（再双击取消）" : ""}`}
-                onClick={() => toggleGroup(group, isCollapsed)}
+                onClick={() => {
+                  if (searching) {
+                    setSearchFolded((prev) => ({ ...prev, [group]: !isCollapsed }))
+                  } else {
+                    toggleGroup(group, isCollapsed)
+                  }
+                }}
                 onDoubleClick={() => setOnlyGroup(onlyGroup === group ? null : group)}
                 onDragStart={(e) => {
                   setDraggingGroup(group)
@@ -619,6 +706,16 @@ export function ConnectionSidebar({
                 />
                 <span className="truncate">{group}</span>
                 <span className="font-mono font-normal text-ink-3/60">{items.length}</span>
+                <span className="flex-1" />
+                {onlyGroup === group ? (
+                  <span className="shrink-0 rounded bg-accent/15 px-1 py-px text-3xs font-medium text-accent">
+                    {t('conn.onlyGroup.badge')}
+                  </span>
+                ) : (
+                  <span className="shrink-0 text-3xs font-normal text-ink-3/70 opacity-0 transition-opacity group-hover/gh:opacity-100">
+                    {t('conn.onlyGroup.dblHint')}
+                  </span>
+                )}
               </button>
 
               {!isCollapsed &&
@@ -836,7 +933,6 @@ export function ConnectionSidebar({
         />
       )}
 
-      {/* 分组色标 */}
       {colorFor && (
         <Modal open title={`分组色标 · ${colorFor}`} onClose={() => setColorForState(null)}>
           <div className="flex flex-wrap gap-2 py-2">
@@ -870,24 +966,40 @@ export function ConnectionSidebar({
         </Modal>
       )}
 
-      {/* 新建分组 */}
       <PromptDialog
         open={newGroupOpen}
         title="新建分组"
         label="分组名称"
         placeholder="例如：机器人 / 充电桩 / 现场设备"
-        onCancel={() => setNewGroupOpen(false)}
+        onCancel={() => {
+          setNewGroupOpen(false)
+          setPendingMoveIds(null)
+        }}
         onConfirm={(name) => {
           setNewGroupOpen(false)
-          void createGroup(name).then((ok) => {
-            if (ok) {
+          const waitMove = pendingMoveIds
+          setPendingMoveIds(null)
+          void createGroup(name).then(async (ok) => {
+            if (!ok) return
+            if (!waitMove || waitMove.length === 0) {
               useToastStore.getState().push({ kind: 'success', title: `已新建分组「${name}」` })
+              return
+            }
+            const n = await moveToGroup(waitMove, name.trim())
+            if (n > 0) {
+              useToastStore.getState().push({
+                kind: 'success',
+                title: `已新建分组「${name}」并移入 ${n} 条连接`
+              })
+              setSelectedIds(new Set())
+            } else {
+              // 组建好了但一条都没搬过去（连接已被别处删掉等），也得说清楚
+              useToastStore.getState().push({ kind: 'warning', title: `已新建分组「${name}」但没有连接被移入，请手动拖拽` })
             }
           })
         }}
       />
 
-      {/* 重命名分组 */}
       <PromptDialog
         open={renamingGroup !== null}
         title="重命名分组"
@@ -898,13 +1010,14 @@ export function ConnectionSidebar({
           const old = renamingGroup
           setRenamingGroup(null)
           if (!old) return
-          void renameGroup(old, name).then(() => {
-            useToastStore.getState().push({ kind: 'success', title: `已重命名为「${name}」` })
+          void renameGroup(old, name).then((ok) => {
+            if (ok) {
+              useToastStore.getState().push({ kind: 'success', title: `已重命名为「${name}」` })
+            }
           })
         }}
       />
 
-      {/* 删除分组确认 */}
       <ConfirmDialog
         open={pendingDeleteGroup !== null}
         title="删除分组"
@@ -919,7 +1032,11 @@ export function ConnectionSidebar({
               该分组内共
               <span className="font-medium text-ink">
                 {' '}
-                {groups.find((g) => g.group === pendingDeleteGroup)?.items.length ?? 0}{' '}
+                {/*
+                 * 按全量 connections 数，不用 groups：搜索状态下 groups 只含命中项，
+                 * 会显示成「该分组内共 0 条连接」，而确认后组织上全删。
+                 */}
+                {connections.filter((c) => (c.group || DEFAULT_GROUP) === pendingDeleteGroup).length}{' '}
               </span>
               条连接，删除后已保存的密码会一并从凭据保险箱移除，操作不可撤销。
             </div>
@@ -948,7 +1065,7 @@ export function ConnectionSidebar({
           items={[
             ...allGroupNames.map((g) => ({
               label: g,
-              disabled: (movingConn.group || '默认') === g,
+              disabled: (movingConn.group || DEFAULT_GROUP) === g,
               onClick: () => {
                 const target = movingConn
                 setMovingConn(null)
@@ -966,6 +1083,7 @@ export function ConnectionSidebar({
               label: '新建分组并移入…',
               separatorBefore: true,
               onClick: () => {
+                if (movingConn) setPendingMoveIds([movingConn.id])
                 setMovingConn(null)
                 setNewGroupOpen(true)
               }
@@ -994,16 +1112,16 @@ export function ConnectionSidebar({
       <ConnTransferDialog mode={transfer} onClose={() => setTransfer(null)} />
 
       {/* 批量移到分组：从右键菜单的批量项触发，在原右键位置弹出分组列表 */}
-      {batchMoveIds && menu && (
+      {batchMove && (
         <ContextMenu
-          x={menu.x}
-          y={menu.y}
+          x={batchMove.x}
+          y={batchMove.y}
           items={[
             ...allGroupNames.map((g) => ({
               label: g,
               onClick: () => {
-                const ids = batchMoveIds
-                setBatchMoveIds(null)
+                const ids = batchMove.ids
+                setBatchMove(null)
                 closeMenu()
                 if (!ids) return
                 void moveToGroup(ids, g).then((n) => {
@@ -1021,20 +1139,17 @@ export function ConnectionSidebar({
               label: "新建分组并移入…",
               separatorBefore: true,
               onClick: () => {
-                setBatchMoveIds(null)
+                setPendingMoveIds(batchMove.ids ?? [])
+                setBatchMove(null)
                 closeMenu()
                 setNewGroupOpen(true)
               }
             }
           ]}
-          onClose={() => {
-            setBatchMoveIds(null)
-            closeMenu()
-          }}
+          onClose={() => setBatchMove(null)}
         />
       )}
 
-      {/* 批量删除确认 */}
       <ConfirmDialog
         open={pendingBatchDelete}
         title="删除选中的连接"
@@ -1061,6 +1176,8 @@ export function ConnectionSidebar({
           }
           // 一次 IPC + 一次落盘；逐个 remove 会是 N 次读改写
           void removeMany(ids).then((n) => {
+            // 0 条要么是全失败，要么本来就一条都没匹配上 —— 都不该报成功
+            if (n <= 0) return
             useToastStore.getState().push({
               kind: "success",
               title: `已删除 ${n} 条连接`
@@ -1096,7 +1213,6 @@ export function ConnectionSidebar({
         }}
       />
 
-      {/* 批量编辑标签 */}
       {batchTagsOpen && (
         <BatchTagsEditor
           selectedIds={selectedIds}

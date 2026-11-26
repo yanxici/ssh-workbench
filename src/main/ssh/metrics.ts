@@ -81,6 +81,9 @@ class MetricsSampler {
         throw new Error(out.status === 'timeout' ? '采样超时' : (out.error ?? '采样失败'))
       }
 
+      // 采样期间用户可能已经停止监控（或会话已断开，stop 把 monitor 删了）。
+      // 这时仍然推一帧 running: true，渲染层刚清掉的卡片会自己长回来。
+      if (this.monitors.get(sessionId) !== monitor) return
       const { snapshot, metrics } = parseSample(out.stdout, monitor.snapshot)
       if (!snapshot) {
         // /proc/stat 都读不到：设备环境不支持
@@ -90,13 +93,19 @@ class MetricsSampler {
       monitor.failures = 0
       this.onEvent?.({ sessionId, running: true, sample: { ts: Date.now(), ...metrics } })
     } catch (err) {
+      /*
+       * 采样期间用户可能已经 stop() 重启监控（新的 monitor 对象已经登记），
+       * 此时拿旧对象累加 failures 会直接把新监控按「连续失败」掐掉；
+       * 而 finally 里按 sessionId 取 current 置 busy=false，又会把新监控
+       * 的 busy 抹掉，导致同一会话并发跑两次采样。两边都只认自己那个对象。
+       */
+      if (this.monitors.get(sessionId) !== monitor) return
       monitor.failures += 1
       if (monitor.failures >= MAX_CONSECUTIVE_FAILURES) {
         this.stop(sessionId, err instanceof Error ? err.message : String(err))
       }
     } finally {
-      const current = this.monitors.get(sessionId)
-      if (current) current.busy = false
+      monitor.busy = false
     }
   }
 }

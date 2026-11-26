@@ -22,7 +22,19 @@ export function sessionLogDir(): string {
 function assertInside(filePath: string): string {
   const dir = resolve(sessionLogDir())
   const target = resolve(filePath)
-  if (target !== dir && !target.startsWith(dir + sep)) {
+  /*
+   * Windows 路径不区分大小写：userData 实际是 %APPDATA%\ssh-workbench，
+   * 而日志名/目录名可能被别处按小写拼出来（或用户从旧配置搬过来），
+   * 直接 startsWith 会把合法路径判成逃逸，表现为「日志列表能看，点开就报错」。
+   */
+  const norm = (p: string): string => (process.platform === 'win32' ? p.toLowerCase() : p)
+  const nd = norm(dir)
+  /*
+   * 目标必须是日志目录**里面**的文件。
+   * 早先这里放行了 target === dir 本身，删除/读写的接口拿到目录路径后
+   * 会走到 fs 层报 EISDIR，或者更糟：把一个目录当文件删除。
+   */
+  if (!norm(target).startsWith(nd + sep)) {
     throw new Error('非法日志路径')
   }
   if (basename(target).startsWith('.')) throw new Error('非法日志路径')
@@ -53,6 +65,16 @@ export async function listSessionLogs(): Promise<SessionLogFile[]> {
     }
   }
   return out.sort((a, b) => b.mtime - a.mtime)
+}
+
+/**
+ * 取一个「允许导出」的日志路径（目录内 + 不带点开头）。
+ *
+ * 导出与读/删是同一套白名单：LOG_EXPORT 直接把入参交给 fs.copyFile，
+ * 不校验就等于给渲染层一个 「把任意本地文件复制出来」 的通道。
+ */
+export function resolveSessionLogPath(filePath: string): string {
+  return assertInside(filePath)
 }
 
 /** 读取一个录制文件（只允许日志目录内的路径） */

@@ -2,6 +2,7 @@ import type * as React from 'react'
 import { Gauge, PauseCircle, PlayCircle, Wifi, X } from 'lucide-react'
 import type { MetricsSample } from '@shared/types'
 import { cn } from '@/lib/utils'
+import { useOverlayEscape } from '@/lib/overlayKeys'
 import { EmptyState } from '@/components/ui'
 import { useMetricsStore, type SessionSeries } from '@/stores/metricsStore'
 import { useSessionStore, useSshSessions } from '@/stores/sessionStore'
@@ -15,13 +16,13 @@ export function MetricsPanel(): React.JSX.Element | null {
   const monitored = useMetricsStore((s) => s.monitored)
   const order = useMetricsStore((s) => s.order)
 
-  if (!panelOpen) return null
-
   const close = (): void => useMetricsStore.setState({ panelOpen: false })
+  // 面板按钮上写着「关闭 (Esc)」，这里必须真的响应 Esc
+  useOverlayEscape(panelOpen, close)
+  if (!panelOpen) return null
 
   return (
     <div className="panel-shell fixed inset-x-0 z-30 flex flex-col bg-app">
-      {/* 标题栏 */}
       <div className="flex h-9 shrink-0 items-center gap-2 border-b border-edge bg-panel px-3">
         <Gauge size={14} className="text-accent" />
         <span className="text-xs font-semibold">资源仪表盘</span>
@@ -176,7 +177,6 @@ function SessionCard({ series }: { series?: SessionSeries }): React.JSX.Element 
 
   return (
     <div className="rounded-lg border border-edge-soft bg-panel">
-      {/* 卡片头 */}
       <div className="flex items-center gap-2 border-b border-edge-soft px-3 py-2">
         <Wifi size={13} className={cn('shrink-0', sessionGone ? 'text-ink-3' : 'text-success')} />
         <span className="text-xs font-semibold text-ink">{title}</span>
@@ -196,7 +196,6 @@ function SessionCard({ series }: { series?: SessionSeries }): React.JSX.Element 
         </button>
       </div>
 
-      {/* 指标格 */}
       <div className="grid grid-cols-2 gap-2 p-2.5 xl:grid-cols-3">
         <MetricTile
           label="CPU 使用率"

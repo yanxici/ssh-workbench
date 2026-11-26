@@ -53,7 +53,6 @@ export function UpdateSection(): React.JSX.Element {
 
   return (
     <div className="space-y-2.5">
-      {/* ---------- 当前状态 ---------- */}
       <div
         className={cn(
           'rounded-md border px-2.5 py-2',
@@ -139,7 +138,6 @@ export function UpdateSection(): React.JSX.Element {
         </div>
       </div>
 
-      {/* ---------- 偏好 ---------- */}
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
           <div className="text-xs text-ink-2">{t('update.autoCheck')}</div>
@@ -174,7 +172,11 @@ export function UpdateSection(): React.JSX.Element {
           onKeyDown={(e) => {
             if (isImeComposing(e)) return
             if (e.key === 'Enter') commitMirror()
-            if (e.key === 'Escape') setMirrorDraft(null)
+            if (e.key === 'Escape' && mirrorDraft !== null) {
+              e.preventDefault()
+              e.stopPropagation()
+              setMirrorDraft(null)
+            }
           }}
           spellCheck={false}
         />
@@ -212,7 +214,16 @@ export function UpdateSection(): React.JSX.Element {
           onKeyDown={(e) => {
             if (isImeComposing(e)) return
             if (e.key === 'Enter') commitProxy()
-            if (e.key === 'Escape') setProxyDraft(null)
+            /*
+             * 只在**有草稿**时才吃掉 Esc，并且必须 preventDefault：
+             * 否则这次 Esc 会继续冒泡到设置面板，把整个设置窗口关掉 ——
+             * 用户只是想撤销正在输入的代理地址，结果设置页没了。
+             */
+            if (e.key === 'Escape' && proxyDraft !== null) {
+              e.preventDefault()
+              e.stopPropagation()
+              setProxyDraft(null)
+            }
           }}
           spellCheck={false}
         />

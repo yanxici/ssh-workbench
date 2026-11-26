@@ -187,7 +187,6 @@ export function CommandEditor({
           />
         </Field>
 
-        {/* 变量表 */}
         {variables.length > 0 && (
           <div className="col-span-2">
             <div className="field-label flex items-center gap-1">
@@ -222,7 +221,6 @@ export function CommandEditor({
           </div>
         )}
 
-        {/* 图标 */}
         <Field label="图标" className="col-span-2">
           <div className="flex flex-wrap gap-1 pt-0.5">
             {COMMAND_ICONS.map((ic) => (
@@ -244,7 +242,6 @@ export function CommandEditor({
           </div>
         </Field>
 
-        {/* 颜色 */}
         <Field label="色点" className="col-span-2">
           <div className="flex items-center gap-2 pt-0.5">
             <button
@@ -273,7 +270,6 @@ export function CommandEditor({
           </div>
         </Field>
 
-        {/* 适用环境 */}
         <Field
           label="适用环境"
           hint="串口会话里只显示标了「串口」或「全部环境」的命令"
@@ -298,7 +294,6 @@ export function CommandEditor({
           </div>
         </Field>
 
-        {/* 危险标记 */}
         <div className="col-span-2 flex items-center justify-between rounded-lg border border-edge-soft bg-app px-3 py-2.5">
           <div className="flex items-start gap-2">
             <AlertTriangle size={13} className="mt-0.5 shrink-0 text-warning" />

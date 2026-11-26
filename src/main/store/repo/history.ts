@@ -22,7 +22,14 @@ export async function listHistory(filter: HistoryFilter = {}): Promise<CommandHi
     const kw = filter.keyword.toLowerCase()
     list = list.filter((e) => e.command.toLowerCase().includes(kw))
   }
+  /*
+   * limit 显式传 0 是「要 0 条」，不是「没传」。
+   * ?? 会放行 0，而 slice(-0) 等于 slice(0) —— 返回全部历史，
+   * 分页/导出按 0 条请求时反而拿到全量。
+   */
   const limit = filter.limit ?? 500
+  // NaN / Infinity 都当非法：Infinity 会让 slice(-Infinity) 抛异常，NaN 会静默返回全量
+  if (!Number.isFinite(limit) || limit <= 0) return []
   return list.slice(-limit).reverse()
 }
 

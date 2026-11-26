@@ -68,6 +68,22 @@ export async function saveConnection(input: ConnectionInput): Promise<Connection
   let saved!: Connection
   /** 本次调用是否新建了记录（决定 reuseSecretFrom 要不要生效） */
   let isNew = false
+  /**
+   * 本次调用是否把已有的代理删掉了。
+   *
+   * 删代理时 input.proxy 是 undefined，而下面那个 if 的其余条件（改密码、
+   * 带代理）全都不成立，于是整块跳过 —— 保险箱里旧代理的密码留了下来。
+   * 以后再配一个不填密码的代理 B，就会把代理 A 的密码发给 B。
+   */
+  let proxyRemoved = false
+  /**
+   * 本次调用是否把代理换成了另一台。
+   *
+   * 换代理但没填新密码时，旧密码属于「代理 A」，绝不能沿用到「代理 B」上
+   * （代理 A 若是内网 socks5，等于把凭据发给一台完全不同的机器）。
+   * 判据只看代理身份四件套，不看密码字段。
+   */
+  let proxySwitched = false
 
   await connStore.update((list) => {
     const kind: ConnKind = input.kind === 'serial' ? 'serial' : 'ssh'
@@ -107,6 +123,15 @@ export async function saveConnection(input: ConnectionInput): Promise<Connection
       const idx = list.findIndex((c) => c.id === input.id)
       if (idx >= 0) {
         const next = [...list]
+        if (list[idx].proxy && !input.proxy) proxyRemoved = true
+        const prev = list[idx].proxy
+        if (prev && input.proxy) {
+          proxySwitched =
+            prev.type !== input.proxy.type ||
+            prev.host !== input.proxy.host ||
+            prev.port !== input.proxy.port ||
+            prev.username !== input.proxy.username
+        }
         saved = { ...list[idx], ...base, updatedAt: now }
         next[idx] = saved
         return next
@@ -137,6 +162,8 @@ export async function saveConnection(input: ConnectionInput): Promise<Connection
     input.password !== undefined ||
     input.passphrase !== undefined ||
     input.proxy !== undefined ||
+    proxyRemoved ||
+    proxySwitched ||
     inheritedAny
   ) {
     const current = await getSecret(saved.id)
@@ -155,7 +182,9 @@ export async function saveConnection(input: ConnectionInput): Promise<Connection
         input.proxy === undefined
           ? undefined
           : input.proxy.password === undefined
-            ? (inherited?.proxyPassword ?? current.proxyPassword)
+            ? proxySwitched
+              ? undefined
+              : (inherited?.proxyPassword ?? current.proxyPassword)
             : input.proxy.password === ''
               ? undefined
               : input.proxy.password
@@ -229,7 +258,17 @@ export async function updateConnectionsTags(
   if (ids.length === 0) return 0
   const want = new Set(ids)
   const incoming = tags.map((t) => t.trim()).filter(Boolean)
-  if (mode !== 'remove' && incoming.length === 0) return 0
+  /*
+   * 只有 'add' 需要拦空输入（追加空标签是无意义的空写）。
+   * 'replace' 传空数组恰恰是「清空所有标签」这个正常操作 ——
+   * 原来的判据把它一起挡了，界面上「清空标签」点了没反应也永远不报错。
+   */
+  /*
+   * 空输入在两种模式下都是空写：'add' 追加空标签没意义，'remove' 一个都不删
+   * 也会白跑一次全量读改写并落盘。只有 'replace' 需要放行 —— 它恰恰用空数组
+   * 表示「清空所有标签」。
+   */
+  if (mode !== 'replace' && incoming.length === 0) return 0
 
   let count = 0
   await connStore.update((list) =>
@@ -238,7 +277,8 @@ export async function updateConnectionsTags(
       count++
       const current = c.tags ?? []
       let next: string[]
-      if (mode === 'replace') next = incoming
+      // 去重：同一个标签名重复传入会让列表里出现两个一样的
+      if (mode === 'replace') next = Array.from(new Set(incoming))
       else if (mode === 'remove') next = current.filter((t) => !incoming.includes(t))
       else next = Array.from(new Set([...current, ...incoming]))
       return { ...c, tags: next, updatedAt: Date.now() }
@@ -275,6 +315,26 @@ export async function deleteConnectionGroup(group: string): Promise<number> {
   })
   for (const id of removedIds) await deleteSecret(id)
   return removedIds.length
+}
+
+/**
+ * 标记串口端口待用户重选。
+ *
+ * openSerial 解析端口失败时要把这个标记**落盘**：它存在的意义就是下次启动
+ * 界面能提示「端口没了，重选一个」，只写在内存里的 cfg 副本上等于没写
+ * （R-M14 之后 cfg 已是浅拷贝，不再顺带污染 store 缓存）。
+ */
+export async function markSerialPathPending(id: string): Promise<boolean> {
+  let hit = false
+  await connStore.update((list) =>
+    list.map((c) => {
+      if (c.id !== id || !c.serial) return c
+      if (c.serial.pathPending === true) return c
+      hit = true
+      return { ...c, serial: { ...c.serial, pathPending: true } }
+    })
+  )
+  return hit
 }
 
 /** 记录最近使用时间 */

@@ -1,7 +1,7 @@
 import { Notification } from 'electron'
 import { IPC } from '@shared/ipc'
 import type { TaskNotifyPayload } from '@shared/types'
-import { getMainWindow } from '../windowRef'
+import { getMainWindow, sendToMainWindow } from '../windowRef'
 
 /**
  * 任务完成通知（系统级，Windows 操作中心）。
@@ -103,7 +103,7 @@ export function showTaskNotification(payload: TaskNotifyPayload): boolean {
     // 窗口先聚焦再转发，渲染层切标签时窗口已经是可见的，
     // 不会出现「切了标签但窗口还在后面」的错位感
     if (payload.sessionId) {
-      getMainWindow()?.webContents.send(IPC.EVT_NOTIFY_CLICK, { sessionId: payload.sessionId })
+      sendToMainWindow(IPC.EVT_NOTIFY_CLICK, { sessionId: payload.sessionId })
     }
   })
   n.on('close', cleanup)

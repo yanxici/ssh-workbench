@@ -1,10 +1,11 @@
-import { app, BrowserWindow, dialog } from 'electron'
+import { app } from 'electron'
 import { existsSync, mkdirSync, statSync } from 'node:fs'
 import { isAbsolute } from 'node:path'
 import { IPC } from '@shared/ipc'
 import type { TextEncoding } from '@shared/types'
 import { assertRemotePath } from '@shared/remotePath'
-import { dialogParent } from '../windowRef'
+import { assertSafeReadPaths, assertSafeWriteDir } from '../store/pathGuard'
+import { showOpenDialog } from '../windowRef'
 import { dialogDefaultPath, rememberDialogDir, rememberDialogPick } from '../util/dialogDirs'
 import { getSettings, updateSettings } from '../app/settingsService'
 import { handle } from './handle'
@@ -78,7 +79,16 @@ export function registerSftpIpc(): void {
       const target = remoteDir?.trim()
         ? assertRemotePath(remoteDir, '上传目标目录')
         : await sftpManager.home(sessionId)
-      return sftpManager.upload(sessionId, localPaths, target, options)
+      // 来源路径必须校验：不校验就是「渲染层可把任意本地文件推到远端」。
+      if (!Array.isArray(localPaths) || localPaths.length === 0) {
+        throw new Error('上传文件：没有选中任何文件')
+      }
+      return sftpManager.upload(
+        sessionId,
+        assertSafeReadPaths(localPaths, '上传文件'),
+        target,
+        options
+      )
     }
   )
 
@@ -87,7 +97,10 @@ export function registerSftpIpc(): void {
       sessionId,
       // 逐个校验：一批里混进一条相对路径，落盘位置就会变成进程 cwd
       remotePaths.map((p) => assertRemotePath(p, '下载')),
-      localDir
+      // 落点同样要校验：不校验就是「往任意本地目录写文件」。
+      // 用 assertSafeWriteDir 而不是 assertSafeLocalPath —— 后者是给删除/改名用的
+      // 破坏性守卫，禁掉 homedir 与盘符根会让默认下载目录（homedir）100% 报错。
+      assertSafeWriteDir(localDir, '下载目录')
     )
   )
 
@@ -97,8 +110,10 @@ export function registerSftpIpc(): void {
 
   // 通过系统对话框选择文件（文件树面板的单点上传）
   handle(IPC.SFTP_UPLOAD_DIALOG, async (sessionId: string, remoteDir: string, force?: boolean) => {
-    const target = remoteDir?.trim() || (await sftpManager.home(sessionId))
-    const res = await dialog.showOpenDialog(dialogParent() as BrowserWindow, {
+    const target = remoteDir?.trim()
+      ? assertRemotePath(remoteDir, '上传目标目录')
+      : await sftpManager.home(sessionId)
+    const res = await showOpenDialog({
       title: `选择要上传到 ${target} 的文件`,
       buttonLabel: '上传',
       defaultPath: dialogDefaultPath('file'),
@@ -115,8 +130,10 @@ export function registerSftpIpc(): void {
   handle(
     IPC.SFTP_UPLOAD_FOLDER_DIALOG,
     async (sessionId: string, remoteDir: string, keepRoot?: boolean, force?: boolean) => {
-      const target = remoteDir?.trim() || (await sftpManager.home(sessionId))
-      const res = await dialog.showOpenDialog(dialogParent() as BrowserWindow, {
+      const target = remoteDir?.trim()
+        ? assertRemotePath(remoteDir, '上传目标目录')
+        : await sftpManager.home(sessionId)
+      const res = await showOpenDialog({
         title: `选择要上传到 ${target} 的文件夹（可多选）`,
         buttonLabel: '上传',
         defaultPath: dialogDefaultPath('folder'),
@@ -134,10 +151,15 @@ export function registerSftpIpc(): void {
   )
 
   // 扫描待上传目录（选择文件夹后先给出文件数/体积预览，再决定是否上传）
-  handle(IPC.SFTP_SCAN_FOLDERS, (localPaths: string[]) => sftpManager.scanFolders(localPaths))
+  handle(IPC.SFTP_SCAN_FOLDERS, (localPaths: string[]) =>
+    sftpManager.scanFolders(
+      // 只读扫描，但仍然要拦住相对路径与 .. 穿越：后面 upload 会照这份清单读盘
+      Array.isArray(localPaths) ? assertSafeReadPaths(localPaths, '扫描目录') : []
+    )
+  )
 
   handle(IPC.SFTP_DOWNLOAD_DIALOG, async (sessionId: string, remotePaths: string[]) => {
-    const res = await dialog.showOpenDialog(dialogParent() as BrowserWindow, {
+    const res = await showOpenDialog({
       title: '选择保存目录',
       buttonLabel: '下载到此处',
       defaultPath: dialogDefaultPath('folder'),
@@ -145,7 +167,11 @@ export function registerSftpIpc(): void {
     })
     if (res.canceled || res.filePaths.length === 0) return { canceled: true, count: 0 }
     rememberDialogDir('folder', res.filePaths[0])
-    const ids = sftpManager.download(sessionId, remotePaths, res.filePaths[0])
+    const ids = sftpManager.download(
+      sessionId,
+      remotePaths.map((p) => assertRemotePath(p, '下载')),
+      assertSafeWriteDir(res.filePaths[0], '下载目录')
+    )
     return { canceled: false, count: ids.length }
   })
 
@@ -167,14 +193,15 @@ export function registerSftpIpc(): void {
   /** 选一个下载目录并写进设置（返回设置后的生效目录） */
   handle(IPC.SFTP_PICK_DOWNLOAD_DIR, async () => {
     const settings = await getSettings()
-    const res = await dialog.showOpenDialog(dialogParent() as BrowserWindow, {
+    const res = await showOpenDialog({
       title: '选择下载目录',
       buttonLabel: '下载到这里',
       defaultPath: usableLocalDir(settings.downloadDir) ?? dialogDefaultPath('folder'),
       properties: ['openDirectory', 'createDirectory']
     })
     if (res.canceled || res.filePaths.length === 0) return { canceled: true, dir: '' }
-    const dir = res.filePaths[0]
+    // 与 SFTP_DOWNLOAD 共用同一个守卫：否则设置页允许选定、点下载才报错
+    const dir = assertSafeWriteDir(res.filePaths[0], '下载目录')
     rememberDialogDir('folder', dir)
     await updateSettings({ downloadDir: dir })
     return { canceled: false, dir }

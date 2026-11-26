@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 import type { BackupDetail, BackupDiffResult, BackupMeta } from '@shared/types'
 import { call } from '@/lib/ipc'
-import { useSessionStore } from './sessionStore'
+import { pickSshSession, useSessionStore } from './sessionStore'
 import { useToastStore } from './toastStore'
 
 /**
@@ -62,10 +62,7 @@ export const useBackupStore = create<BackupState>()((set, get) => ({
       void get().load()
       // 默认对比会话 = 当前活动在线会话
       if (!get().compareSessionId) {
-        const { sessions, activeId } = useSessionStore.getState()
-        const target =
-          sessions.find((s) => s.id === activeId && s.status === 'connected') ??
-          sessions.find((s) => s.status === 'connected')
+        const target = pickSshSession()
         if (target) set({ compareSessionId: target.id })
       }
     }
@@ -145,11 +142,19 @@ export const useBackupStore = create<BackupState>()((set, get) => ({
 
   restore: async (paths) => {
     const { selectedId, compareSessionId } = get()
-    if (!selectedId || !compareSessionId) {
+    /*
+     * 目标会话必须是「此刻仍连着」的那一个。
+     * 弹窗期间用户可能把它关了、或者换了一台设备 —— 这时把路径交给
+     * compareSessionId 就是往另一台机器写文件（原文件还被改名成 .bak）。
+     */
+    const target = useSessionStore
+      .getState()
+      .sessions.find((s) => s.id === compareSessionId && s.status === 'connected')
+    if (!selectedId || !target) {
       useToastStore.getState().push({ kind: 'warning', title: '请先选择用于还原的在线会话' })
       return
     }
-    const res = await call(window.api.backups.restore(selectedId, compareSessionId, paths), {
+    const res = await call(window.api.backups.restore(selectedId, target.id, paths), {
       errorTitle: '还原失败'
     })
     if (res) {

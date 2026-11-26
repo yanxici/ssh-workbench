@@ -222,6 +222,8 @@ const MAX_LINE_BUFFER = 8192
 export function createLineSplitter(): LineSplitter {
   let buf = ''
   let overflow = false
+  /** 上一段 chunk 以 '' 结尾：可能是进度条重绘，也可能是被切开的 CRLF，下一段才知道 */
+  let pendingCr = false
 
   return {
     get pending(): string {
@@ -230,12 +232,39 @@ export function createLineSplitter(): LineSplitter {
     reset(): void {
       buf = ''
       overflow = false
+      pendingCr = false
     },
     feed(chunk: string): string[] {
       const lines: string[] = []
       // 切行必须保留 \n / \r：剥干净的话整段输出会被粘成一行
       const text = stripAnsi(chunk, true)
-      for (let i = 0; i < text.length; i++) {
+      /*
+       * 纯转义序列的分包（比如 \r 之后紧跟一个孤零零的 "\x1b[0m"）剥完是空串。
+       * 空串必须原地返回：否则下面 pendingCr 分支会把它当成「\r 后面不是 \n」，
+       * 于是作废缓冲、把真正的那一行（通常是命令提示符）丢掉。
+       */
+      if (!text) return lines
+      let start = 0
+      /*
+       * 续上一段的落单 '\r'。
+       * 网络分包完全可能把 \r\n 拆开：前一段以 \r 结尾、后一段以 \n 开头。
+       * 原来遇到落单 \r 就直接清空缓冲，于是下一段的 \n 推出一条空行 ——
+       * 那一行真正的内容（通常正是命令提示符那一行）在界面上凭空消失。
+       */
+      if (pendingCr) {
+        pendingCr = false
+        if (text[0] === '\n') {
+          lines.push(buf)
+          buf = ''
+          overflow = false
+          start = 1
+        } else {
+          // 不是 CRLF：真的是进度条重绘，作废当前行
+          buf = ''
+          overflow = false
+        }
+      }
+      for (let i = start; i < text.length; i++) {
         const ch = text[i]
         if (ch === '\r' && text[i + 1] === '\n') {
           // CRLF：\r 只是行尾的一部分，不能先清空缓冲（否则整行内容丢失）
@@ -253,6 +282,11 @@ export function createLineSplitter(): LineSplitter {
           continue
         }
         if (ch === '\r') {
+          if (i === text.length - 1) {
+            // 落单的 \r 留在段尾：先别下结论，等下一段确认是 CRLF 还是重绘
+            pendingCr = true
+            continue
+          }
           // 进度条重绘：这一行内容作废，等下一次重绘覆盖
           buf = ''
           overflow = false

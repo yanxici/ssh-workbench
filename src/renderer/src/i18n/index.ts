@@ -213,7 +213,26 @@ const zh = {
   'tunnel.promoteFailed': '保存临时转发失败',
   'tunnel.editor.autoStart': '随连接自动启动',
   'tunnel.editor.autoStartHint': '该连接建立会话时自动拉起这条隧道；需先选择「关联连接」',
-  'tunnel.editor.autoStartOff': '选择关联连接后才能启用'
+  'tunnel.editor.autoStartOff': '选择关联连接后才能启用',
+  'zmodem.title.receive': '接收远端文件',
+  'zmodem.title.send': '发送文件到远端',
+  'zmodem.prompt.receive': '远端发起了 ZMODEM 传输（sz），是否接收文件到本机？',
+  'zmodem.prompt.send': '远端已进入接收状态（rz），是否选择本机文件发送？',
+  'zmodem.session': '会话：{name}',
+  'zmodem.hint.receive': '接收需要先选一个保存文件夹（多文件只问一次）；取消勾选时同名文件将自动加序号保留。',
+  'zmodem.hint.send': '同意后将接管该会话的字节流直到传输结束。',
+  'zmodem.skipExisting': '跳过已存在的同名文件（文件变大时覆盖旧文件）',
+  'zmodem.cancel': '取消',
+  'zmodem.accept.receive': '接收',
+  'zmodem.accept.send': '选择文件并发送',
+  'conn.onlyGroup.banner': '仅看分组「{group}」',
+  'conn.onlyGroup.showAll': '显示全部',
+  'conn.onlyGroup.bannerHint': '双击分组标题可切换只看该组',
+  'conn.onlyGroup.badge': '仅看',
+  'conn.onlyGroup.dblHint': '双击仅看',
+  'conn.search.placeholder': '搜索名称 / 主机 / 端口 / 串口 / 标签…',
+  'command.tip.longMultiline': '长命令（共 {lines} 行），Ctrl+单击编辑查看完整内容',
+  'command.tip.longSingleline': '长命令（共 {chars} 字），Ctrl+单击编辑查看完整内容'
 } as const
 
 export type I18nKey = keyof typeof zh
@@ -421,7 +440,26 @@ const en: Record<I18nKey, string> = {
   'tunnel.promoteFailed': 'Could not persist the ephemeral forward',
   'tunnel.editor.autoStart': 'Start with the connection',
   'tunnel.editor.autoStartHint': 'Starts this tunnel whenever that connection opens a session; pick a linked connection first',
-  'tunnel.editor.autoStartOff': 'Link a connection to enable this'
+  'tunnel.editor.autoStartOff': 'Link a connection to enable this',
+  'zmodem.title.receive': 'Receive remote files',
+  'zmodem.title.send': 'Send files to remote',
+  'zmodem.prompt.receive': 'Remote started a ZMODEM transfer (sz). Receive files locally?',
+  'zmodem.prompt.send': 'Remote is ready to receive (rz). Choose local files to send?',
+  'zmodem.session': 'Session: {name}',
+  'zmodem.hint.receive': 'Pick a target folder once for the batch; when unchecked, duplicates are auto-numbered instead.',
+  'zmodem.hint.send': 'Once confirmed, this session stream is taken over until the transfer completes.',
+  'zmodem.skipExisting': 'Skip existing files with the same name (overwrite if larger)',
+  'zmodem.cancel': 'Cancel',
+  'zmodem.accept.receive': 'Receive',
+  'zmodem.accept.send': 'Choose files & send',
+  'conn.onlyGroup.banner': 'Only group "{group}"',
+  'conn.onlyGroup.showAll': 'Show all',
+  'conn.onlyGroup.bannerHint': 'Double-click any group header to toggle',
+  'conn.onlyGroup.badge': 'Focused',
+  'conn.onlyGroup.dblHint': 'Dbl-click focus',
+  'conn.search.placeholder': 'Search name / host / port / serial / tag…',
+  'command.tip.longMultiline': 'Long command ({lines} lines) — Ctrl+Click to edit and view',
+  'command.tip.longSingleline': 'Long command ({chars} chars) — Ctrl+Click to edit and view'
 }
 
 const DICTS: Record<Lang, Record<I18nKey, string>> = { 'zh-CN': zh, en }

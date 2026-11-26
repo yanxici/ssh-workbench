@@ -14,16 +14,19 @@ import { netScanner } from './ssh/netScan'
 import { initUpdater } from './updater'
 import { tftpServer } from './tftp/server'
 import { sessionManager } from './ssh/sessionManager'
+import { recorder } from './ssh/recorder'
+import { JsonStore } from './store/jsonStore'
 import { SerialWatcher } from './transport/serialWatcher'
 import { setSerialWatcher, getSerialWatcher } from './transport/serialWatcherHolder'
 import { sftpManager } from './ssh/sftpManager'
 import { tunnelManager } from './ssh/portForward'
-import { getMainWindow, setMainWindow } from './windowRef'
+import { getMainWindow, sendToMainWindow, setMainWindow } from './windowRef'
 import { runSmoke } from './smoke'
 import { setRecordChangeHandler, sweepStale } from './store/transferRecord'
 import { onTransferProgress } from './window/taskbar'
 import { pickIconPath } from './window/icon'
 import { configureWindowsAppUserModelId } from './window/appUserModelId'
+import { isWebUrl } from './util/urlGuard'
 
 /* ------------------------------------------------------------------ *
  *  启动日志与全局异常 —— 排查"静默退出"的关键抓手
@@ -135,9 +138,16 @@ function createWindow(): void {
   win.on('ready-to-show', () => win.show())
   win.on('closed', () => setMainWindow(null))
 
-  // 外部链接交给系统浏览器
+  /*
+   * 外部链接交给系统浏览器 —— 但只放行 http/https。
+   *
+   * shell.openExternal 把任何协议交给 Windows ShellExecuteEx，等于「打开链接」
+   * 变成任意程序/协议执行入口：file:、\\attacker\share\x.exe、ms-msdt: 都能被拖进来。
+   * 终端里的链接点击（xterm WebLinks 走 window.open）也落到这里，所以白名单
+   * 必须放行 http/https，否则终端链接会跟着一起失效。
+   */
   win.webContents.setWindowOpenHandler((details) => {
-    void shell.openExternal(details.url)
+    if (isWebUrl(details.url)) void shell.openExternal(details.url)
     return { action: 'deny' }
   })
 
@@ -216,7 +226,10 @@ if (!gotLock) {
        * 为什么只认 type === 'GPU'：渲染进程崩溃（OOM、页面异常）与显卡无关，
        * 不该由它触发全局降级。
        */
-      if (details.type !== 'GPU') return
+      // clean-exit 是窗口关闭时 GPU 进程的正常退出，不是崩溃；
+      // 把它当成崩溃会把 softwareRender 永久置 true，之后所有用户都掉进
+      // DOM 渲染（终端在大量输出时明显卡顿），而且再也不会自动恢复。
+      if (details.type !== 'GPU' || details.reason === 'clean-exit') return
       void (async () => {
         try {
           const cur = await getSettings()
@@ -238,15 +251,15 @@ if (!gotLock) {
 
     sessionManager.setHandlers({
       onData: (sessionId, data, raw) =>
-        getMainWindow()?.webContents.send(IPC.EVT_SESSION_DATA, {
+        sendToMainWindow(IPC.EVT_SESSION_DATA, {
           sessionId,
           data,
           raw: raw?.length ? raw.toString('base64') : undefined
         }),
       onStatus: (sessionId, status, error, phase) =>
-        getMainWindow()?.webContents.send(IPC.EVT_SESSION_STATUS, { sessionId, status, error, phase }),
+        sendToMainWindow(IPC.EVT_SESSION_STATUS, { sessionId, status, error, phase }),
       onLatency: (sessionId, ms) =>
-        getMainWindow()?.webContents.send(IPC.EVT_SESSION_LATENCY, { sessionId, ms }),
+        sendToMainWindow(IPC.EVT_SESSION_LATENCY, { sessionId, ms }),
       /*
        * trzsz 传输状态。
        *
@@ -254,7 +267,7 @@ if (!gotLock) {
        * 已经在 onData 里下发了。两条路分开的好处是重绘频率互不影响。
        */
       onTrzszState: (sessionId, state) =>
-        getMainWindow()?.webContents.send(IPC.EVT_TRZSZ_STATE, { sessionId, ...state })
+        sendToMainWindow(IPC.EVT_TRZSZ_STATE, { sessionId, ...state })
     })
 
     /*
@@ -266,11 +279,11 @@ if (!gotLock) {
 
     // 自动重连进度转发到渲染层（标签栏显示倒计时/重试次数）
     sessionManager.setReconnectHandler((event) => {
-      getMainWindow()?.webContents.send(IPC.EVT_RECONNECT, event)
+      sendToMainWindow(IPC.EVT_RECONNECT, event)
     })
 
     sftpManager.setProgressHandler((event) => {
-      getMainWindow()?.webContents.send(IPC.EVT_TRANSFER_PROGRESS, event)
+      sendToMainWindow(IPC.EVT_TRANSFER_PROGRESS, event)
       // 聚合逻辑（进/出 Map、算进度）全在 window/taskbar.ts，
       // 这里只负责把事件转发给渲染层再喂给它。
       onTransferProgress(event)
@@ -283,37 +296,37 @@ if (!gotLock) {
      * 此刻的「上传/下载」不是 SFTP 语义（没有远端跳过判断、没有 mtime 保留）。
      */
     sftpManager.setModeHandler((event) => {
-      getMainWindow()?.webContents.send(IPC.EVT_SFTP_MODE, event)
+      sendToMainWindow(IPC.EVT_SFTP_MODE, event)
     })
 
     tunnelManager.setStatusHandler((info) => {
-      getMainWindow()?.webContents.send(IPC.EVT_TUNNEL_STATUS, info)
+      sendToMainWindow(IPC.EVT_TUNNEL_STATUS, info)
     })
 
     diagnosticsRunner.setProgressHandler((event) => {
-      getMainWindow()?.webContents.send(IPC.EVT_DIAG_PROGRESS, event)
+      sendToMainWindow(IPC.EVT_DIAG_PROGRESS, event)
     })
 
     batchRunner.setProgressHandler((event) => {
-      getMainWindow()?.webContents.send(IPC.EVT_BATCH_PROGRESS, event)
+      sendToMainWindow(IPC.EVT_BATCH_PROGRESS, event)
     })
 
     metricsSampler.setEventHandler((event) => {
-      getMainWindow()?.webContents.send(IPC.EVT_METRICS, event)
+      sendToMainWindow(IPC.EVT_METRICS, event)
     })
 
     firmwareOps.setLogHandler((event) => {
-      getMainWindow()?.webContents.send(IPC.EVT_FW_LOG, event)
+      sendToMainWindow(IPC.EVT_FW_LOG, event)
     })
 
     // 内置 TFTP 服务端：刷 7628 时 U-Boot 的 RRQ / 重传 / 完成都从这里出去，
     // 串口引导条靠它显示现场排错信息
     tftpServer.setLogHandler((event) => {
-      getMainWindow()?.webContents.send(IPC.EVT_TFTP_LOG, event)
+      sendToMainWindow(IPC.EVT_TFTP_LOG, event)
     })
 
     netScanner.setProgressHandler((event) => {
-      getMainWindow()?.webContents.send(IPC.EVT_DISCOVER_PROGRESS, event)
+      sendToMainWindow(IPC.EVT_DISCOVER_PROGRESS, event)
     })
 
     /*
@@ -324,7 +337,17 @@ if (!gotLock) {
      * 下游拿不到 record，也没法事后从重连状态反推（那条记录已经删了）。
      */
     sessionManager.setOnClosed((sessionId, reason) => {
-      sftpManager.clearSession(sessionId)
+      /*
+       * 这里是「瞬时断网」与「真的关了」的分水岭。
+       *
+       * teardown 每次掉线都会触发本钩子，包括开了自动重连的闪断。
+       * 之前一律 closeSession()，等于把正在续传的大文件当场 cancelTransfer ——
+       * .part 被删、任务落 canceled，断点续传 100% 失效。
+       * 还能重连就只丢通道缓存（clearSession），传输任务留着等 recoverChannel 续上；
+       * 真的不重连了才关掉它们。
+       */
+      if (reason.willReconnect) sftpManager.clearSession(sessionId)
+      else sftpManager.closeSession(sessionId)
       tunnelManager.onSessionClosed(sessionId, reason)
       metricsSampler.onSessionClosed(sessionId)
     })
@@ -340,6 +363,9 @@ if (!gotLock) {
 
     // 重连彻底放弃（次数用尽 / 配置关闭 / 用户取消）：给挂起的隧道一个结局
     sessionManager.setOnReconnectGaveUp((sessionId) => {
+      // 重连彻底放弃才是「这活不干了」：暂停中的传输必须收到终态，
+      // 否则任务栏进度条永远卡在中间值（没有别人会再发终态事件）
+      sftpManager.closeSession(sessionId)
       tunnelManager.onReconnectGaveUp(sessionId)
     })
 
@@ -351,7 +377,7 @@ if (!gotLock) {
      * 与磁盘可能不同步的镜像。
      */
     setRecordChangeHandler(() => {
-      getMainWindow()?.webContents.send(IPC.EVT_TRANSFER_RECORD_CHANGED)
+      sendToMainWindow(IPC.EVT_TRANSFER_RECORD_CHANGED)
     })
 
     /*
@@ -380,7 +406,7 @@ if (!gotLock) {
      */
     const serialWatcher = new SerialWatcher({
       onPorts: (ports) => {
-        getMainWindow()?.webContents.send(IPC.EVT_SERIAL_PORTS, ports)
+        sendToMainWindow(IPC.EVT_SERIAL_PORTS, ports)
         // 设备插回来了：让挂起的串口会话自己恢复（内部按 USB 身份匹配端口）
         void sessionManager.resumeSerialSessions()
       }
@@ -409,7 +435,7 @@ if (!gotLock) {
       initUpdater({
         log,
         broadcast: (status) => {
-          getMainWindow()?.webContents.send(IPC.EVT_UPDATE_STATUS, status)
+          sendToMainWindow(IPC.EVT_UPDATE_STATUS, status)
         },
         autoCheck: settings.update?.autoCheck !== false,
         autoDownload: settings.update?.autoDownload === true,
@@ -427,13 +453,84 @@ if (!gotLock) {
     })
   })
 
-  app.on('window-all-closed', () => {
-    bootLog('window-all-closed fired')
+  /*
+   * 退出清理。
+   *
+   * 原来只在 window-all-closed 里停串口轮询和 TFTP，会话一条都没关：
+   *   - recorder 的 .cast/.log 文件流没 flush 也没 close，内容可能缺尾巴，
+   *     且 Windows 上进程退出时文件锁要靠系统回收；
+   *   - SSH 连接、SFTP 通道、-L/-D 端口监听、远端 forwardIn 全都随进程消失，
+   *     远端那侧要等 TCP 超时才知道对端没了；
+   *   - 资源监控的 setInterval 一直在跑，退出过程中还会去 exec 命令。
+   * 关会话走 sessionManager.close()，它内部会依次停 recorder、SFTP、
+   * 隧道与监控，和用户手动关标签是同一条路径。
+   *
+   * 放在 before-quit 而不是 window-all-closed：macOS 上关窗不退出应用，
+   * 那时把所有会话掐掉是行为改变；只有真要退出时才清理。
+   * 用一次性标志兜住 —— before-quit 在退出被取消后还能再次触发。
+   */
+  let runtimeCleaned = false
+  const cleanupRuntime = (): void => {
+    if (runtimeCleaned) return
+    runtimeCleaned = true
+    // closeAll 而不是遍历 list()：重连中的标签、等设备插回的串口、还在读配置的
+    // open() 都不在 sessions 里，list() 看不到它们
+    sessionManager.closeAll(true)
     // 停掉串口轮询：它的 timer 已 unref，但显式停一次能让退出路径更干净，
     // 也避免退出过程中还去枚举设备（Windows 上会短暂占用句柄）
     getSerialWatcher()?.stop()
     // TFTP 持有 69 端口和文件句柄，退出必须关；否则下次启动会报端口被占用
     tftpServer.stop()
+  }
+
+  /*
+   * 退出前必须等写盘落地：JsonStore 的 rename、录屏流、文本日志都在异步缓冲里。
+   * 同步 cleanupRuntime() 之后立刻 app.quit()，最后几秒的终端输出与刚改的
+   * 设置会直接丢掉。这里 preventDefault 一次 → 等收尾（最多 1.5s，卡住的
+   * 流不能把应用挂住）→ 再次 quit。
+   *
+   * 三态而不是一个布尔：旧的 2 态在刷盘还没结束时就置了 true，此时
+   * window-all-closed 会再触发一次 before-quit，那一次不 preventDefault，
+   * 进程被直接强杀 —— 刷盘白等，cleanupRuntime 也没跑。只有 'ready'
+   * 才放行真正的退出。
+   */
+  type QuitPhase = 'idle' | 'flushing' | 'ready'
+  let quitPhase: QuitPhase = 'idle'
+  app.on('before-quit', (event) => {
+    bootLog('before-quit fired')
+    if (quitPhase === 'ready') return
+    event.preventDefault()
+    if (quitPhase === 'flushing') return
+    quitPhase = 'flushing'
+
+    // 先起录屏收尾：stopAllAndFlush 内部要等 stream 的 close，不能排在超时之后
+    const recFlush = recorder.stopAllAndFlush().catch((e) => {
+      console.error('[main] recorder flush on quit failed:', e)
+    })
+    // 然后才关会话：关会话会写 transfer-records.json 之类的新数据，
+    // 这些写入必须落在下面的 JsonStore.flushAll() 里，顺序反了就丢
+    cleanupRuntime()
+    void (async () => {
+      let timer: NodeJS.Timeout | undefined
+      try {
+        await Promise.race([
+          Promise.all([recFlush, JsonStore.flushAll()]),
+          new Promise<void>((resolve) => {
+            timer = setTimeout(resolve, 1500)
+          })
+        ])
+      } catch (e) {
+        console.error('[main] flush on quit failed:', e)
+      }
+      // 收尾先完成时把超时定时器拆掉，否则它会把事件循环多挂 1.5 秒
+      if (timer) clearTimeout(timer)
+      quitPhase = 'ready'
+      app.quit()
+    })()
+  })
+
+  app.on('window-all-closed', () => {
+    bootLog('window-all-closed fired')
     if (process.platform !== 'darwin') app.quit()
   })
 }

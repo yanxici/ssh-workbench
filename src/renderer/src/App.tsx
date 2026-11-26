@@ -7,6 +7,7 @@ import { useSettingsStore } from '@/stores/settingsStore'
 import { useConnectionStore } from '@/stores/connectionStore'
 import { useCommandStore } from '@/stores/commandStore'
 import { feedZmodem, isZmodemAttached } from '@/lib/zmodem'
+import { hasOpenOverlay, overlayDepth } from '@/lib/overlayKeys'
 import { clearSession as clearHighlight, writeSessionData } from '@/lib/highlightRuntime'
 import {
   flashSession,
@@ -51,7 +52,7 @@ import { ToastHost } from '@/components/ui'
 import { useSplitStore } from '@/stores/splitStore'
 import { useTrzszStore } from '@/stores/trzszStore'
 import { layoutPaneTree, leafIds, neighbor } from '@/lib/paneTree'
-import { paneOwnerOf } from '@/lib/paneRegistry'
+import { paneOwnerOf, isNestedPane } from '@/lib/paneRegistry'
 import { shouldMarkUnread } from '@/lib/tabUnread'
 
 /**
@@ -148,6 +149,12 @@ export function App(): React.JSX.Element {
   const loadSettings = useSettingsStore((s) => s.load)
   const settings = useSettingsStore((s) => s.settings)
   const loadConnections = useConnectionStore((s) => s.load)
+  /*
+   * 连接表要**订阅**，不能只在恢复 effect 里 getState()：
+   * loadSettings 通常比 loadConnections 先返回，那时连接表还是空的，
+   * 拿它去判「有没有可恢复的连接」会得到「没有」，恢复就此永久跳过。
+   */
+  const connections = useConnectionStore((s) => s.connections)
   const loadCommands = useCommandStore((s) => s.load)
 
   const sidebarVisible = useLayoutStore((s) => s.sidebarVisible)
@@ -255,30 +262,84 @@ export function App(): React.JSX.Element {
 
   /* ---------- 会话恢复：启动时自动打开上次退出时的连接 ---------- */
   const restoredRef = useRef(false)
+  /**
+   * 只由「启动恢复」创建出来的会话 id。
+   *
+   * 自动分屏必须且只能对这批 id 触发一次：
+   *   - 用户手动新建的标签（哪怕连接已有分屏记录）不该被强行拆成 N 格；
+   *   - 关掉分屏某一格后剩下的那格，如果还允许恢复，就会当场再裂出一个新窗格 ——
+   *     看起来像「关掉的分屏自己复活了」。
+   * 触发后立刻移除，同一个 id 不会二次分屏。
+   */
+  const startupRestoredIds = useRef(new Set<string>())
+  /*
+   * 就绪判据用 store 的 loaded，而不是 connections.length === 0。
+   *
+   * 连接库为空（新装/清空过）时，length === 0 会让 effect 每次更新都早退；
+   * 等用户手动建了第一条连接，length 变成 1，effect 反而在那时「就绪」，
+   * 拿着上一轮遗留的 lastOpenSessions 莫名其妙恢复一批旧标签。
+   */
+  const connectionsLoaded = useConnectionStore((s) => s.loaded)
+  /*
+   * 就绪判据必须包含「设置已加载」。
+   *
+   * 旧实现只看 settings 对象在不在，而 store 在 load() 之前就带着一份 FALLBACK ——
+   * 于是 restoreSessions: false 的用户在启动瞬间 effect 早退、什么也没标记，
+   * 等设置真正加载完（或用户在盘中的设置页里把开关打开）effect 再跑一次，
+   * 就把一份陈旧的 lastOpenSessions 全打开了。
+   */
+  const settingsLoaded = useSettingsStore((s) => s.loaded)
   useEffect(() => {
-    // 确保settings和connections都已加载，且只恢复一次
-    if (restoredRef.current || !settings || !settings.restoreSessions) return
-    
-    const connections = useConnectionStore.getState().connections
-    const lastSessions = settings.lastOpenSessions
-    if (!lastSessions || lastSessions.length === 0 || connections.length === 0) return
-    
-    restoredRef.current = true
+    // 设置与连接表都就绪，且只恢复一次
+    if (restoredRef.current || !settingsLoaded || !connectionsLoaded) return
+
+    const lastSessions = settings.restoreSessions ? settings.lastOpenSessions : undefined
+    if (!lastSessions || lastSessions.length === 0) {
+      /*
+       * 没有待恢复项（含「恢复开关关着」）也要标记完成，否则后面每次设置更新
+       * 都会重进这个 effect，用户盘中打开开关时会把陈旧列表放出来。
+       */
+      restoredRef.current = true
+      return
+    }
+
+    /*
+     * restoredRef 只在**定时器真正跑起来**时才置 true。
+     *
+     * 原来在 setTimeout 之前就置 true：只要启动 300ms 内 settings/connections
+     * 任一次更新触发 cleanup（clearTimeout），重进 effect 时就被 restoredRef
+     * 挡死，会话恢复永久失效 —— 开发态 StrictMode 的双挂载必然踩到。
+     */
     const openSession = useSessionStore.getState().open
-    
+
     // 延迟恢复，避免在初始化期间阻塞
-    setTimeout(() => {
+    const timer = setTimeout(() => {
+      restoredRef.current = true
       lastSessions.forEach(({ connectionId, connectionName }) => {
         const conn = connections.find((c) => c.id === connectionId)
-        if (conn) {
-          openSession({ id: conn.id, name: conn.name, host: conn.host, username: conn.username })
-        } else {
+        if (!conn) {
           // 连接已被删除，跳过
           console.warn(`会话恢复：连接 ${connectionName} (${connectionId}) 不存在`)
+          return
         }
+        /*
+         * kind / serial 必须一起带过去：
+         * 少了它们，恢复出来的串口会话会被当成 SSH 去连 host:22，
+         * 永远连不上（而用户看到的现象是「串口标签打不开」）。
+         */
+        const sid = openSession({
+          id: conn.id,
+          name: conn.name,
+          host: conn.host,
+          username: conn.username,
+          kind: conn.kind,
+          serial: conn.serial
+        })
+        startupRestoredIds.current.add(sid)
       })
     }, 300)
-  }, [settings])
+    return () => clearTimeout(timer)
+  }, [settings, settingsLoaded, connections, connectionsLoaded])
 
   /* ---------- 分屏树：会话连上后按连接恢复，会话消失后摘格 ---------- */
   useEffect(() => {
@@ -297,34 +358,82 @@ export function App(): React.JSX.Element {
     const layout = settings.splitLayout
     if (!layout || Object.keys(layout).length === 0) return
     for (const s of sessions) {
+      if (!startupRestoredIds.current.has(s.id)) continue
       if (s.status !== 'connected') continue
+      /*
+       * 只对「独立标签」恢复：分屏格自己也是 connected，拿它去恢复会按同一个
+       * connectionId 再开一整棵新树，开出 s3、s4……无限膨胀。
+       */
+      if (isNestedPane(s.id)) {
+        startupRestoredIds.current.delete(s.id)
+        continue
+      }
+      /*
+       * 触发一次就出队，无论恢复成功与否。
+       * 留在集合里的后果是：用户关掉分屏的一格（或把树合回单格）之后，
+       * 下一次 sessions 变化时这里又会命中同一个 id、又看到旧的 splitLayout，
+       * 于是当场把刚关掉的分屏再裂一遍。
+       */
+      startupRestoredIds.current.delete(s.id)
       if (!layout[s.connectionId]) continue
       useSplitStore.getState().restoreFor(s.id)
     }
   }, [sessions, settings?.restoreSessions, settings?.splitLayout])
 
   /* ---------- 退出时保存打开的会话列表 ---------- */
+  /*
+   * 离开窗口时记下当前打开的会话。
+   *
+   * 两个坑：
+   * 1) 原来只在 toSave.length > 0 时写 —— 用户把标签全关掉再退出，
+   *    上一次的恢复列表原样留在设置里，下次启动又自动打开一堆他明确关掉的会话。
+   * 2) update() 是异步 IPC，beforeunload 之后再派发的写很可能随窗口一起没了。
+   *    所以记账改成 pagehide/visibilitychange 双保险，并且只在内容真的变了才写，
+   *    避免每次切后台都刷一次磁盘。
+   */
   useEffect(() => {
     if (!settings.restoreSessions) return
-    
-    const handleBeforeUnload = (): void => {
-      const activeSessions = sessions
-        .filter((s) => s.status === 'connected' || s.status === 'connecting')
-        .map((s) => ({
-          connectionId: s.connectionId,
-          connectionName: s.connectionName
-        }))
-      
-      // 最多保存 10 个会话避免文件膨胀
-      const toSave = activeSessions.slice(0, 10)
-      
-      if (toSave.length > 0) {
-        void useSettingsStore.getState().update({ lastOpenSessions: toSave })
-      }
+
+    const remember = (): void => {
+      const toSave = sessions
+        /*
+         * 只记顶层标签。
+         *
+         * 分屏格也是 connected、也带同一个 connectionId，记进去就会在下次启动时
+         * 变成 N 个独立标签：1 个标签分 3 格 → 记 3 条 → 启动开 3 个标签 →
+         * 每个都按同一份布局再裂成 3 格 = 9 个 shell，再重启 27 个，
+         * 直接撑爆远端 MaxSessions。
+         */
+        .filter(
+          (s) =>
+            !isNestedPane(s.id) && (s.status === 'connected' || s.status === 'connecting')
+        )
+        // 最多保存 10 个会话避免文件膨胀
+        .slice(0, 10)
+        .map((s) => ({ connectionId: s.connectionId, connectionName: s.connectionName }))
+
+      const prev = useSettingsStore.getState().settings.lastOpenSessions ?? []
+      const same =
+        prev.length === toSave.length &&
+        prev.every(
+          (p, i) =>
+            p.connectionId === toSave[i].connectionId && p.connectionName === toSave[i].connectionName
+        )
+      if (same) return
+      void useSettingsStore.getState().update({ lastOpenSessions: toSave })
     }
-    
-    window.addEventListener('beforeunload', handleBeforeUnload)
-    return () => window.removeEventListener('beforeunload', handleBeforeUnload)
+
+    const onVisibility = (): void => {
+      if (document.visibilityState === 'hidden') remember()
+    }
+    window.addEventListener('beforeunload', remember)
+    window.addEventListener('pagehide', remember)
+    document.addEventListener('visibilitychange', onVisibility)
+    return () => {
+      window.removeEventListener('beforeunload', remember)
+      window.removeEventListener('pagehide', remember)
+      document.removeEventListener('visibilitychange', onVisibility)
+    }
   }, [sessions, settings.restoreSessions])
 
   /*
@@ -516,10 +625,47 @@ export function App(): React.JSX.Element {
         e.stopPropagation()
       }
 
+      /*
+       * 焦点在终端里时，终端专属快捷键让给终端自己。
+       *
+       * 这个监听是 capture 阶段，比 xterm 的 keydown 早：用户把某个全局动作
+       * 绑到了 Ctrl+F（终端搜索）这类终端动作的同一组合上时，capture 先吃掉，
+       * 终端永远收不到。终端的键位（Ctrl+C 复制/中断、Ctrl+F 搜索、
+       * Ctrl+V 粘贴）由 TerminalView 自己按 attachCustomKeyEventHandler 判定，
+       * 这里只要认出「这是终端作用域的键」就直接放行。
+       */
+      const inTerminal = Boolean(document.activeElement?.closest('.xterm'))
+      if (
+        inTerminal &&
+        (matchShortcut(e, map.terminalSearch) ||
+          matchShortcut(e, map.terminalCopy) ||
+          matchShortcut(e, map.terminalPaste))
+      ) {
+        return
+      }
+
+      /*
+       * 有弹层开着就整体让路。
+       *
+       * 这个监听挂在 capture 阶段（必须的，否则终端的 keydown 会先吃掉 Ctrl+K
+       * 之类的组合），代价是它比任何组件内监听都早 —— 设置面板里「录制快捷键」
+       * 录 Ctrl+K 会直接弹出命令中心，永远录不进去。弹层在场时把分发交还给它。
+       *
+       * 唯一例外是命令中心自己：Ctrl+K 是开关式快捷键，让路的话它只能开不能关，
+       * 用户只能先点一下再按 Esc。层数恰为 1（栈顶就是它、没有叠着变量框）时
+       * 放行这一条；叠了子层或开着别的弹窗时仍旧整体让路。
+       */
+      const commandCenterOnly = overlayDepth() === 1 && useUiStore.getState().commandCenterOpen
+      if (hasOpenOverlay() && !commandCenterOnly) return
+
       if (matchShortcut(e, map.commandCenter)) {
         consume()
         useUiStore.getState().toggleCommandCenter()
-      } else if (matchShortcut(e, map.newConnection)) {
+        return
+      }
+      if (hasOpenOverlay()) return
+
+      if (matchShortcut(e, map.newConnection)) {
         consume()
         openConnEditor(null)
       } else if (matchShortcut(e, map.settings)) {
@@ -584,8 +730,33 @@ export function App(): React.JSX.Element {
       const item = t.closest('[data-cmd-id]')
       dragCommandIdRef.current = item?.getAttribute('data-cmd-id') ?? null
     }
+    /*
+     * 拖到终端外松手（或按 Esc 取消拖拽）时浏览器只对源元素发 dragend，
+     * 容器的 dragleave 未必命中 currentTarget —— 高亮环就一直挂着不消失，
+     * 看起来像终端进入了「等待投放」的死状态。全局兜一层。
+     */
+    const onEnd = (): void => {
+      dragCommandIdRef.current = null
+      setDragOverTerminal(false)
+    }
     window.addEventListener('dragstart', onStart, { capture: true })
-    return () => window.removeEventListener('dragstart', onStart, { capture: true })
+    window.addEventListener('dragend', onEnd, { capture: true })
+    /*
+     * drop 必须走**冒泡**，不能 capture。
+     *
+     * 终端容器（<main onDrop={handleTerminalDrop}>）在冒泡阶段读取
+     * dragCommandIdRef.current 做兜底 —— 因为 handleTerminalDragOver 为了
+     * 阻止浏览器默认行为已经把 dataTransfer 的内容清掉了。而 window 上的
+     * capture 监听严格早于冒泡：先把它清成 null，handleTerminalDrop 随后
+     * 读到 null，拖命令到终端就静默失败（看起来像拖拽根本没生效）。
+     * 改成冒泡后，终端先消费，未命中终端的外部投放再由这里兜底清理。
+     */
+    window.addEventListener('drop', onEnd)
+    return () => {
+      window.removeEventListener('dragstart', onStart, { capture: true })
+      window.removeEventListener('dragend', onEnd, { capture: true })
+      window.removeEventListener('drop', onEnd)
+    }
   }, [])
 
   const handleTerminalDragOver = (e: DragEvent<HTMLDivElement>): void => {
@@ -670,7 +841,6 @@ export function App(): React.JSX.Element {
       {/* 全局传输进度浮层：不依赖文件管理面板，长文件下载也能随时看到进度 */}
       <TransferProgressDock />
 
-      {/* ================= 弹窗层 ================= */}
       <CommandCenter onEdit={openCommandEditor} />
       <ConnectionEditor
         open={connEditorOpen}

@@ -160,16 +160,20 @@ const MOBA = [
   'SubRep=\u5ba2\u6237A\\\u7f51\u5173',
   'ImgNum=42',
   'SSH=#109#0%10.0.0.5%22%root%%-1%-1%%%22%%0%0%0%-1%-1%0%0',
-  'RDP=#98#0%10.0.0.6%3389%administrator%%-1%-1%%%22%%0%0%0%-1%-1%0%0',
+  'RDP=#91#4%10.0.0.6%3389%administrator%%-1%-1%%%22%%0%0%0%-1%-1%0%0',
   'SubRep=\u5ba2\u6237B',
   'SSH=#109#0%10.0.0.7%2222%admin%%-1%-1%%%22%%0%0%0%-1%-1%0%0',
+  // R-H25：自定义图标（120）的 SSH 必须照常导入
+  'Custom=#120#0%10.0.0.9%22%deploy%%-1%-1%%%22%%0%0%0%-1%-1%0%0',
+  // R-H25：图标仍是默认 109 的 RDP 不能被误当成 SSH
+  'Fake=#109#4%10.0.0.10%3389%administrator%%-1%-1%%%22%%0%0%0%-1%-1%0%0',
   ''
 ].join('\r\n')
 const moba = M.parseMobaXterm(MOBA)
-eq(moba.connections.length, 2, 'C1 只导入 SSH 行')
+eq(moba.connections.length, 3, 'C1 只导入 SSH 行')
 eq(
   moba.connections.map((c) => c.group),
-  ['\u5ba2\u6237A/\u7f51\u5173', '\u5ba2\u6237B'],
+  ['\u5ba2\u6237A/\u7f51\u5173', '\u5ba2\u6237B', '\u5ba2\u6237B'],
   'C2 SubRep 的反斜杠必须转成分组分隔符'
 )
 eq(
@@ -178,7 +182,17 @@ eq(
   'C3 #109#0%host%port%user 字段顺序'
 )
 eq(moba.connections[1].port, 2222, 'C4 端口必须按十进制解析')
-eq(moba.skippedNonSsh, 1, 'C5 RDP 行必须计入 skippedNonSsh')
+eq(moba.skippedNonSsh, 2, 'C5 RDP 行必须计入 skippedNonSsh')
+/*
+ * R-H25：#1 是图标号、#2 才是会话类型。按图标号判协议会同时判反两条 ——
+ * 自定义图标的 SSH 被丢掉，图标留在 109 的 RDP 被当成 SSH 导进来。
+ */
+eq(
+  moba.connections.map((c) => c.host),
+  ['10.0.0.5', '10.0.0.7', '10.0.0.9'],
+  'C6 按会话类型判定：#120#0 导入、#109#4 跳过'
+)
+eq(moba.connections[2].username, 'deploy', 'C7 自定义图标 SSH 的账号必须解析正确')
 
 /* ---------------- D. Xshell .xsh（UTF-16LE + BOM） ---------------- */
 const XSH = [
@@ -319,8 +333,8 @@ async function main() {
   const mobaFile = path.join(xshDir, 'sessions.mxtsessions')
   fs.writeFileSync(mobaFile, MOBA, 'utf8')
   const previewM = await H.previewExternalImport('mobaxterm', [mobaFile])
-  eq(previewM.count, 2, 'H22 MobaXterm 预览条数')
-  eq(previewM.skippedNonSsh, 1, 'H23 MobaXterm 跳过 RDP 计数')
+  eq(previewM.count, 3, 'H22 MobaXterm 预览条数')
+  eq(previewM.skippedNonSsh, 2, 'H23 MobaXterm 跳过 RDP 计数')
 
   if (fails.length > 0) {
     console.error('\n\u2717 verify-external-import 失败 ' + fails.length + ' 项（通过 ' + pass + ' 项）：\n')

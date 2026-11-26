@@ -1,4 +1,5 @@
 import type * as React from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { Row } from './sectionUi'
 
@@ -7,13 +8,39 @@ export function DangerSection(): React.JSX.Element {
   const settings = useSettingsStore((s) => s.settings)
   const update = useSettingsStore((s) => s.update)
 
-  const commitDanger = (text: string): void => {
+  /*
+   * 本地草稿 + 失焦提交：每敲一个字就写设置会产生大量落盘。
+   * 但草稿必须是受控的 —— 原来用非受控 defaultValue，外部改了这个设置
+   * （导入配置、重置）文本框还显示老内容；而且按 Esc 关掉设置面板时
+   * 输入框直接卸载，onBlur 不一定来得及触发，改了半天的关键词就白改了。
+   */
+  const [draft, setDraft] = useState(settings.dangerPatterns.join('\n'))
+  const focused = useRef(false)
+  const draftRef = useRef(draft)
+  draftRef.current = draft
+
+  // 未聚焦时才跟随外部变化，否则用户正在输入会被覆盖
+  useEffect(() => {
+    if (!focused.current) setDraft(settings.dangerPatterns.join('\n'))
+  }, [settings.dangerPatterns])
+
+  const commit = (text: string): void => {
     const patterns = text
       .split('\n')
       .map((s) => s.trim())
       .filter(Boolean)
+    if (patterns.join('\n') === settings.dangerPatterns.join('\n')) return
     void update({ dangerPatterns: patterns })
   }
+
+  // 卸载（Esc 关闭设置面板）时兜底提交，避免编辑丢失
+  const commitRef = useRef(commit)
+  commitRef.current = commit
+  useEffect(() => {
+    return () => {
+      if (focused.current) commitRef.current(draftRef.current)
+    }
+  }, [])
 
   return (
     <>
@@ -22,9 +49,15 @@ export function DangerSection(): React.JSX.Element {
       </div>
       <textarea
         className="input scroll-thin h-24 resize-none selectable py-2 font-mono text-xs leading-relaxed"
-        defaultValue={settings.dangerPatterns.join('\n')}
-        // 用 onBlur 提交而不是受控 onChange：每敲一个字就写一次设置会产生大量落盘
-        onBlur={(e) => commitDanger(e.target.value)}
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onFocus={() => {
+          focused.current = true
+        }}
+        onBlur={(e) => {
+          focused.current = false
+          commit(e.target.value)
+        }}
         spellCheck={false}
       />
       <Row label="当前生效" hint={`${settings.dangerPatterns.length} 条关键词`}>

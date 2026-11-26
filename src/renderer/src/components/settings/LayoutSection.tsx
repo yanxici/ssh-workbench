@@ -59,8 +59,19 @@ export function LayoutSection(): React.JSX.Element {
       <button
         className="btn h-7 w-full justify-center text-2xs"
         onClick={() => {
-          for (const key of KEYS) setPane(key, PANE_SPECS[key].default)
-          useToastStore.getState().push({ kind: 'success', title: '栏宽已全部恢复默认' })
+          /*
+           * 一次写全部键，不能循环调 setPane。
+           * setPane 每次都拿 render 时那份 layoutSizes 展开，
+           * 循环里第二次会把第一次写入的值又覆盖回去 ——
+           * 结果是只有最后一栏（commandRail）被真的重置了。
+           */
+          const next: Required<LayoutSizes> = {
+            sidebar: PANE_SPECS.sidebar.default,
+            commandRail: PANE_SPECS.commandRail.default
+          }
+          void update({ layout: next }).then(() => {
+            useToastStore.getState().push({ kind: 'success', title: '栏宽已全部恢复默认' })
+          })
         }}
       >
         <RotateCcw size={11} />

@@ -37,17 +37,67 @@ const store = new JsonStore<ErrorEntry[]>(join(dataDir(), 'error-log.json'), () 
  * 甚至私钥内容塞进 error.message。日志是会被用户复制发给别人的东西，
  * 一旦带上明文密码就是安全事故。
  */
+/**
+ * 敏感键名。三处规则共用同一份清单 —— 以前 JSON 分支和带引号分支各写一份，
+ * 结果 pwd / proxy_password / apiKey 只在其中一条里生效，换个写法就漏。
+ */
+const SECRET_KEY =
+  'password|passwd|pwd|passphrase|proxyPassword|proxy_passwd|proxy_password|secret|token|apikey|api_key'
+
+/*
+ * 三条规则预先编译到模块级。
+ *
+ * 关键在 Rule 1 的两个分支必须**严格互斥**：旧写法 (?:\\.|(?!\2).)* 里，一个反斜杠
+ * 同时能被「转义对」和「普通字符」两条路吃掉，回溯成 Fibonacci O(phi^n)：n=45 个
+ * 反斜杠能让主进程卡死 30 秒以上（错误日志本来是救火用的，不能被一行日志打死）。
+ * 现在分支一是「反斜杠 + 任意字符」，分支二是「非反斜杠」，互斥后线性；
+ * 顺带用 [\s\S] 让多行引号密码也能整段吃掉。
+ */
+const QUOTED_VALUE_RE = new RegExp(
+  `((?:${SECRET_KEY})\\s*[=:]\\s*)(['"])(?:\\\\[\\s\\S]|(?!\\2)[^\\\\])*\\2`,
+  'gi'
+)
+/** 无引号 KV：口令到空白/分隔符为止 */
+const PLAIN_VALUE_RE = new RegExp(`((?:${SECRET_KEY})\\s*[=:]\\s*)([^\\s,;'"\x60\\]}]+)`, 'gi')
+/** JSON 片段："password":"xxx"，引号内的 \\" 不能让匹配提前结束 */
+const JSON_VALUE_RE = new RegExp(
+  `("(?:${SECRET_KEY})"\\s*:\\s*")((?:\\\\[\\s\\S]|[^"\\\\])*)(")`,
+  'gi'
+)
+
 function redact(text: string): string {
   return (
     text
-      // password=xxx / passwd: xxx / pwd=xxx
-      .replace(/((?:password|passwd|pwd|secret|token|apikey|api_key)\s*[=:]\s*)([^\s,;'"`\]}]+)/gi, '$1***')
-      // 形如 "password":"xxx" 的 JSON 片段
-      .replace(/("(?:password|passwd|secret|token)"\s*:\s*")([^"]*)(")/gi, '$1***$3')
+      /*
+       * 普通 KV：password=xxx / proxy_passwd: xxx。
+       * 先处理**带引号**的值，否则含空格或分号的口令会在空格处被截断，
+       * 剩下半截照样明文留在日志里。
+       */
+      .replace(QUOTED_VALUE_RE, '$1$2***$2')
+      .replace(PLAIN_VALUE_RE, '$1***')
+      /* JSON 片段："password":"xxx" */
+      .replace(JSON_VALUE_RE, '$1***$3')
+      /*
+       * URL 里的凭据：http://user:pass@host:port。
+       * 用户名里可能带 : 或 /（百分号编码），旧写法 [^\s/:@]+ 漏掉这些；
+       * 这里整体吃掉 @ 之前的所有非空白字符，只保留协议头。
+       */
+      /*
+       * 但必须在 ? / # 之前停下：旧写法 [^\s/]* 会把
+       * https://<host>?email=a@b.com 截成 https://***@b.com ——
+       * 该脱的没脱，有用的 URL 还毁了。
+       */
+      .replace(/(\b[a-z][a-z0-9+.-]*:\/\/)[^\s/?#]*@/gi, '$1***@')
       // PRIVATE KEY 块整体抹掉
-      .replace(/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g, '[PRIVATE KEY REDACTED]')
-      // OpenSSH 私钥单行形态
-      .replace(/-----BEGIN OPENSSH PRIVATE KEY-----[\s\S]*$/g, '[PRIVATE KEY REDACTED]')
+      .replace(
+        /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g,
+        '[PRIVATE KEY REDACTED]'
+      )
+      /*
+       * 被 clip() 截断的半截私钥：没有 END 行，上面的块匹配不到，
+       * 于是前几行 base64 原样留在日志里。OPENSSH 与 PEM 两种头都要认。
+       */
+      .replace(/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*$/g, '[PRIVATE KEY REDACTED]')
   )
 }
 
@@ -74,6 +124,11 @@ export interface RecordErrorInput {
 export async function recordError(input: RecordErrorInput): Promise<ErrorEntry | null> {
   try {
     const now = Date.now()
+    /*
+     * title 也要脱敏：调用方经常把 e.message 直接当 title 传进来
+     * （那一行里同样可能带着 password=xxx），只洗 detail 等于白洗。
+     */
+    const title = redact(String(input.title))
     const detail = input.detail ? clip(redact(String(input.detail)), MAX_DETAIL) : undefined
     const level = input.level ?? 'error'
     let saved: ErrorEntry | null = null
@@ -83,7 +138,7 @@ export async function recordError(input: RecordErrorInput): Promise<ErrorEntry |
       const dupIdx = list.findIndex(
         (e) =>
           e.source === input.source &&
-          e.title === input.title &&
+          e.title === title &&
           e.detail === detail &&
           now - e.lastAt < DEDUPE_WINDOW_MS
       )
@@ -105,7 +160,7 @@ export async function recordError(input: RecordErrorInput): Promise<ErrorEntry |
         lastAt: now,
         level,
         source: input.source,
-        title: input.title,
+        title,
         detail,
         count: 1,
         version: app.getVersion()

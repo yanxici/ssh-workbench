@@ -29,7 +29,10 @@ export function formatRelativeTime(ts?: number): string {
 export function formatMode(mode: number): string {
   const perm = (m: number): string =>
     `${m & 4 ? 'r' : '-'}${m & 2 ? 'w' : '-'}${m & 1 ? 'x' : '-'}`
-  const type = mode & 0o40000 ? 'd' : mode & 0o120000 ? 'l' : '-'
+  // 必须先整体取出类型位再比较：直接 `mode & 0o120000` 对普通文件（0o100000）也为真，
+  // 于是所有普通文件都会显示成软链接 'l'。
+  const kind = mode & 0o170000
+  const type = kind === 0o040000 ? 'd' : kind === 0o120000 ? 'l' : '-'
   return type + perm((mode >> 6) & 7) + perm((mode >> 3) & 7) + perm(mode & 7)
 }
 
@@ -58,11 +61,37 @@ export function remoteDirname(path: string): string {
   return path.slice(0, idx)
 }
 
-/** 本地路径父目录（兼容 Windows 反斜杠） */
+/**
+ * 本地路径父目录（兼容 Windows 反斜杠）。
+ *
+ * 根目录必须是固定值：'C:\\Users' 的父级是 'C:\\' 而不是 'C:'
+ * （'C:' 是盘符相对路径，主进程按绝对路径校验会直接拒绝），'/tmp' 的父级是 '/'。
+ */
 export function localDirname(path: string): string {
-  const idx = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'))
-  if (idx <= 0) return path
-  return path.slice(0, idx)
+  // 先剥掉尾部的悬浮分隔符：'C:\\a\\b\\' 的父级是 'C:\\a' 而不是它自己，
+  // '/tmp/' 的父级是 '/'。盘符根剥完会变成 'C:'（盘符相对路径），须补回分隔符。
+  let p = path
+  while (p.length > 1 && /[\\/]$/.test(p)) p = p.slice(0, -1)
+  if (/^[a-zA-Z]:$/.test(p)) return p + '\\'
+  const idx = Math.max(p.lastIndexOf('/'), p.lastIndexOf('\\'))
+  if (idx < 0) return p
+  if (idx === 0) return '/'
+  // 盘符根：'C:\\Users' → idx=2，前缀 'C:'
+  if (idx === 2 && /^[a-zA-Z]:[\\/]/.test(p)) return p.slice(0, 3)
+  return p.slice(0, idx)
+}
+
+/**
+ * 严格解析八进制权限（'755' / '0755'）。
+ *
+ * parseInt('758', 8) 会静默截断成 0o75 —— 属主权限被整段剥掉还不报错。
+ * 非八进制数字或超范围时返回 null，让调用方放弃提交。
+ */
+export function parseOctalMode(text: string): number | null {
+  const s = text.trim().replace(/^0o?/i, '')
+  if (!s || !/^[0-7]{1,4}$/.test(s)) return null
+  const mode = Number.parseInt(s, 8)
+  return Number.isFinite(mode) ? mode : null
 }
 
 /** 本地路径拼接（保持原分隔符风格） */

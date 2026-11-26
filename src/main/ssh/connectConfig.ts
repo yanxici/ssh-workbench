@@ -262,33 +262,76 @@ export function connectClient(
     const client = new Client()
     let settled = false
 
+    /*
+     * 失败路径**不能** removeAllListeners：client.end() 之后 ssh2 仍可能把
+     * 迟到的 'error'（延迟 RST、认证中途再报一次错）派发出来，没有监听器
+     * 就是主进程级 uncaughtException。这里只摘掉自己那两个具名监听，再挂一个
+     * 空监听兜底，把「关连接」这段时间里的一切错误吃掉。
+     */
+    const swallow = (): void => {}
+    const releaseSock = (): void => {
+      if (!sock) return
+      try {
+        sock.destroy()
+      } catch {
+        /* ignore */
+      }
+    }
+
     const fail = (err: Error): void => {
       if (settled) return
       settled = true
-      client.removeAllListeners()
+      clearTimeout(timer)
+      client.removeListener('ready', onReady)
+      client.removeListener('error', onError)
+      client.on('error', swallow)
       try {
         client.end()
       } catch {
         /* ignore */
       }
+      releaseSock()
       reject(err)
     }
 
-    const timer = setTimeout(() => fail(new Error(`连接超时（${READY_TIMEOUT_MS / 1000}s）`)), READY_TIMEOUT_MS)
-
-    if (onBanner) client.on('banner', (msg: string) => onBanner(msg.trim()))
-
-    client.once('ready', () => {
+    // 具名函数：ready 之后要摘掉的就是同一个引用（原来摘的是另一个匿名箭头，
+    // 摘不掉，于是过期错误监听一直挂在已建好的连接上）
+    function onReady(): void {
       clearTimeout(timer)
       if (settled) return
       settled = true
-      client.removeListener('error', fail)
+      client.removeListener('error', onError)
+      client.removeListener('ready', onReady)
+      /*
+       * 交接期兜底监听：**不能**在 resolve 后留下 0 个 'error' 监听。
+       *
+       * 这里摘掉 onError 之后到调用方 wireClientEvents 挂上业务监听之间隔着微任务；
+       * 而 ProxyJump 的跳板机 Client 被 push 进 record.jumpClients 后**全程**没人
+       * 绑 'error' —— ssh2 的 Client 继承 EventEmitter，'error' 无监听时 emit 直接
+       * 变 uncaughtException，主进程当场崩溃（跳板机网络抖动 / keepalive 超时
+       * 都会走到这里）。testConnection 的 finally、endQuietly 的关闭期同理。
+       *
+       * 挂在这里而不是逐调用点补：所有拿到 Client 的路径都经过 onReady，
+       * 一处兜住，兄弟文件不用各自记得。EventEmitter 会依次执行全部监听器，
+       * 所以业务侧的 client.on('error', fn) 照常收到回调，不会被这里屏蔽。
+       */
+      client.on('error', swallow)
       resolve(client)
-    })
-    client.once('error', (err: Error) => {
-      clearTimeout(timer)
+    }
+    function onError(err: Error): void {
       fail(err)
-    })
+    }
+
+    /* 定时器只创建一次：声明在这里是为了让上面几个闭包都能按 const 引用它 */
+    const timer = setTimeout(
+      () => fail(new Error(`连接超时（${READY_TIMEOUT_MS / 1000}s）`)),
+      READY_TIMEOUT_MS
+    )
+
+    if (onBanner) client.on('banner', (msg: string) => onBanner(msg.trim()))
+
+    client.once('ready', onReady)
+    client.once('error', onError)
 
     // 兼容走 keyboard-interactive 的设备（dropbear / 部分嵌入式 SSH）
     if (cfg.password) {
@@ -300,7 +343,6 @@ export function connectClient(
     try {
       client.connect(sock ? { ...cfg, sock } : cfg)
     } catch (err) {
-      clearTimeout(timer)
       fail(err instanceof Error ? err : new Error(String(err)))
     }
   })

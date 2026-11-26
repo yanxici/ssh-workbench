@@ -86,7 +86,13 @@ export function ShortcutSection(): React.JSX.Element {
   }
 
   const onKeyDown = (e: React.KeyboardEvent): void => {
-    if (!recording) return
+    /*
+     * 冲突弹窗弹出期间必须完全让路。
+     * recording 这时还没清（用户是在上一次录制里撞的冲突），只要还拦着键盘，
+     * 弹窗里的 Enter / Space / Tab 全被这里吞掉 —— 用户点不了「仍然使用」，
+     * 只能靠鼠标，而 Esc 又会被当成「取消录制」把整个流程关掉。
+     */
+    if (!recording || conflictWarning) return
     e.preventDefault()
     e.stopPropagation()
     if (e.key === 'Escape') {
@@ -116,13 +122,17 @@ export function ShortcutSection(): React.JSX.Element {
   }
 
   return (
-    <div className="space-y-1.5" onKeyDown={onKeyDown}>
+    /*
+     * 用 capture 挂在这里：录制态下要先于任何内层元素拿到按键。
+     * App 那个 window 上的全局分发由弹层栈负责让路（见 lib/overlayKeys.ts），
+     * 设置面板本身就是一个 Modal，所以录制时它不会抢键。
+     */
+    <div className="space-y-1.5" onKeyDownCapture={onKeyDown}>
       <div className="mb-1 text-2xs leading-relaxed text-ink-3">
         点击右侧键位进入录制，按下新组合键即保存；<kbd className="kbd">Esc</kbd> 取消、
         <kbd className="kbd">Backspace</kbd> 清除该项。
       </div>
 
-      {/* 冲突警告 */}
       {conflicts.length > 0 && (
         <div className="mb-2 flex items-start gap-2 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2">
           <AlertTriangle size={14} className="mt-0.5 shrink-0 text-warning" />
@@ -190,7 +200,6 @@ export function ShortcutSection(): React.JSX.Element {
         在终端聚焦时同样生效；避免与系统/浏览器快捷键冲突。
       </div>
 
-      {/* 快捷键冲突确认弹窗 */}
       {conflictWarning && (
         <Modal
           open

@@ -11,7 +11,7 @@ import type {
 import { call } from '@/lib/ipc'
 import { uid } from '@/lib/utils'
 import { notifyTask } from '@/lib/taskNotify'
-import { useSessionStore } from './sessionStore'
+import { pickSshSession } from './sessionStore'
 import { useToastStore } from './toastStore'
 
 /**
@@ -148,10 +148,8 @@ export const useDiagStore = create<DiagState>()((set, get) => ({
       return
     }
 
-    const { sessions, activeId } = useSessionStore.getState()
-    const session =
-      sessions.find((s) => s.id === activeId && s.status === 'connected') ??
-      sessions.find((s) => s.status === 'connected')
+    // 串口会话没有 shell，诊断只认 SSH
+    const session = pickSshSession()
     if (!session) {
       useToastStore.getState().push({
         kind: 'warning',
@@ -178,6 +176,8 @@ export const useDiagStore = create<DiagState>()((set, get) => ({
     const report = await call(window.api.diag.run(runId, session.id, selected), {
       errorTitle: '诊断执行失败'
     })
+    // 同 discoveryStore：进度事件一到 done 就能开下一轮，旧轮的收尾不能清掉新轮状态
+    if (get().runId !== runId) return
     set({ running: false, runId: null, progress: null })
     if (report) {
       set({ lastReport: report })
@@ -201,6 +201,8 @@ export const useDiagStore = create<DiagState>()((set, get) => ({
 
   applyProgress: (e) =>
     set((s) => {
+      // 上一轮在途事件会污染新一轮的进度条与结果表
+      if (e.runId !== s.runId) return s
       const statuses = { ...s.statuses, [e.sectionId]: e.status }
       const progress = { index: e.index, total: e.total }
       if (e.result) {

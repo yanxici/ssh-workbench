@@ -1,6 +1,7 @@
 import { useEffect } from 'react'
 import type * as React from 'react'
 import { ArrowDownToLine, ArrowLeft, ArrowRight, FolderTree, X } from 'lucide-react'
+import { useOverlayEscape } from '@/lib/overlayKeys'
 import { useSftpStore } from '@/stores/sftpStore'
 import { LocalPane } from './LocalPane'
 import { RemotePane } from './RemotePane'
@@ -38,6 +39,13 @@ export function FileManagerPanel(): React.JSX.Element | null {
     if (open && sessionId) void syncMode(sessionId)
   }, [open, sessionId, syncMode])
 
+  /*
+   * 面板按钮上写着「关闭 (Esc)」，这里必须真的响应 Esc。
+   * 编辑器开着时不参与：它压在栈顶自己处理 Esc，否则一次 Esc 会把面板
+   * 连同编辑器一起卸载（未保存的修改直接没了）。
+   */
+  const editing = useSftpStore((s) => s.editing)
+  useOverlayEscape(open && !editing, close)
   if (!open) return null
 
   const activeCount = transfers.filter(
@@ -46,7 +54,6 @@ export function FileManagerPanel(): React.JSX.Element | null {
 
   return (
     <div className="panel-shell fixed inset-x-0 z-30 flex flex-col bg-app">
-      {/* 标题栏 */}
       <div className="flex h-9 shrink-0 items-center gap-2 border-b border-edge bg-panel px-3">
         <FolderTree size={14} className="text-accent" />
         <span className="text-xs font-semibold">文件管理</span>
@@ -74,7 +81,6 @@ export function FileManagerPanel(): React.JSX.Element | null {
         </button>
       </div>
 
-      {/* 双栏 + 中间操作列 */}
       <div className="flex min-h-0 flex-1">
         <div className="flex min-w-0 flex-1 flex-col">
           <LocalPane />

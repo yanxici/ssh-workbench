@@ -40,8 +40,14 @@ const NOT_FOUND_RE = /command not found:?\s*(?:trz|tsz)|(?:trz|tsz)(?: -d)?: (?:
 export type TrzszState = TrzszTransferState
 
 export interface TrzszBridgeHooks {
-  /** 把协议帧写回远端。trzsz 发出的全是可打印文本（base64 + \n），不是二进制 */
-  sendToServer: (data: string) => void
+  /**
+   * 把协议帧写回远端。
+   *
+   * 上传的数据块是原始二进制（trzsz 的压缩 + 校验都按字节算），
+   * 绝不能先 decode 成 UTF-8 字符串再 encode 回去 —— 非法字节会变成 U+FFFD，
+   * 远端校验必败。类型为 string 的只有控制帧，其余原样透传。
+   */
+  sendToServer: (data: string | Uint8Array) => void
   /** 把要显示在终端里的文本送出去（进度条、Saved 文案都由 trzsz 自己拼好） */
   emitText: (text: string) => void
   /** 传输状态变化，给状态条与提示用 */
@@ -65,9 +71,96 @@ export function looksLikeTrzsz(text: string): boolean {
   return text.includes(HANDSHAKE)
 }
 
-/** 从文本里剔除握手整行（只用于会话录制，终端照常显示） */
+/**
+ * 握手串长度 - 1：只要留这么长的尾巴，任何跨帧切分都能拼回来。
+ * 再多留就是白占内存（每个 SSH 会话一份），再少就可能漏掉两帧之间被切开的串。
+ */
+const TAIL_KEEP = Math.max(HANDSHAKE.length - 1, 64)
+
+/**
+ * 跨帧握手识别：拼接上一帧尾巴与本帧文本后匹配。
+ *
+ * 握手串 16 字节，超过一个 MSS 时被 TCP 切成两帧是常态 ——
+ * 只在单帧上匹配会永远看不到握手，于是整个会话都不建过滤器。
+ */
+export function looksLikeTrzszFrame(tail: string, text: string): boolean {
+  if (!text && !tail) return false
+  return (tail ? tail + text : text).includes(HANDSHAKE)
+}
+
+/** 握手整行的非全局副本：exec 一次就够，不共享 lastIndex */
+const HANDSHAKE_MATCH_RE = new RegExp(HANDSHAKE_RE.source)
+
+export interface TrzszReassembly {
+  /** 要喂给过滤器的文本（跨帧时已把上一帧的尾巴补在前面） */
+  feed: string
+  /** 本帧开头已显示过的字符数（跨帧重组补回来的前缀），终端要剔掉免得双倍回显 */
+  shownSkip: number
+  /** 本帧开头属于握手的字符数（跨帧时的后半段），录制要剔掉 */
+  recordSkip: number
+  /** 命中完整握手后剩下的尾巴；undefined 表示本帧没出现完整握手，由调用方滚动保留 */
+  rest?: string
+}
+
+/**
+ * 跨帧握手重组。
+ *
+ * TrzszFilter 只在**单次传入的字符串**里找握手正则，它自己不做跨帧缓存。
+ * TCP 自适应 flush 把握手切成 "::TRZSZ:TRAN" + "SFER:S:1.1.0:..." 是常态，
+ * 于是过滤器永远看不到完整串 —— 传输根本起不来。
+ *
+ * 判据是「完整握手**严格跨越**边界」（起点在尾巴里、终点在本帧里）：
+ * - 完整落在尾巴里 = 上一帧早就处理过，这帧不能再喂一遍（旧实现只判起点，
+ *   于是传输结束后每敲一个字符都把旧握手重新喂进过滤器 —— 反复弹文件框）；
+ * - 起点在本帧 = 没被切开，原样喂。
+ * 只要命中完整握手，尾巴就截到握手之后，别让握手长期赖在 record.tail 里。
+ */
+export function reassembleTrzszHandshake(tail: string, text: string): TrzszReassembly {
+  const plain: TrzszReassembly = { feed: text, shownSkip: 0, recordSkip: 0 }
+  const joined = tail + text
+  if (joined.length === 0) return plain
+  const m = HANDSHAKE_MATCH_RE.exec(joined)
+  if (!m) return plain
+  const start = m.index
+  const end = start + m[0].length
+  const rest = joined.slice(end)
+  // 完整落在尾巴里：解释过了，本帧原样喂，只把陈旧握手从尾巴里丢掉
+  if (end <= tail.length) return { ...plain, rest }
+  // 起点在本帧：没被切开
+  if (start >= tail.length) return { ...plain, rest }
+  // 严格跨帧：补回上一帧的前缀，同时把已显示过/已属于握手的部分记下来
+  return {
+    feed: joined.slice(start),
+    shownSkip: tail.length - start,
+    recordSkip: end - tail.length,
+    rest
+  }
+}
+
+/** 更新每会话保留的输出尾巴（只留恰好够跨帧匹配的长度） */
+export function keepTrzszTail(prev: string, text: string): string {
+  const joined = prev ? prev + text : text
+  return joined.length <= TAIL_KEEP ? joined : joined.slice(-TAIL_KEEP)
+}
+
+/**
+ * 从文本里剔除握手整行（只用于会话录制，终端照常显示）。
+ *
+ * 顺带剔掉**结尾的半截握手**：跨帧切开时前半段本身不构成整行，
+ * 旧实现原样录进 .cast，回放里就是一段乱码。半截留在内存里没意义，
+ * 下一帧会由 reassembleTrzszHandshake 补全。
+ */
 export function stripTrzszHandshake(text: string): string {
-  return text.includes(HANDSHAKE) ? text.replace(HANDSHAKE_RE, '') : text
+  let out = text.includes(HANDSHAKE) ? text.replace(HANDSHAKE_RE, '') : text
+  // 至少 4 个字符才当半截握手：普通输出以 ":" 结尾（如 "root@host:"）时不能误删
+  const limit = Math.min(out.length, HANDSHAKE.length - 1)
+  for (let n = limit; n >= 4; n -= 1) {
+    if (out.endsWith(HANDSHAKE.slice(0, n))) {
+      out = out.slice(0, out.length - n)
+      break
+    }
+  }
+  return out
 }
 
 /**
@@ -124,7 +217,7 @@ class TrzszSession {
   ) {
     this.filter = new TrzszFilter({
       writeToTerminal: (output) => this.onWrite(asText(output)),
-      sendToServer: (input) => this.hooks.sendToServer(typeof input === 'string' ? input : asText(input)),
+      sendToServer: (input) => this.hooks.sendToServer(input),
       // Node 环境下这两个回调是构造函数的硬性要求（否则直接 throw），
       // 即便我们上传时总是自己传 paths，也必须给出来。
       chooseSendFiles: (directory) => this.hooks.pickSendFiles(Boolean(directory)),
@@ -147,12 +240,32 @@ class TrzszSession {
         })
       },
       terminalColumns: columns,
-      isWindowsShell: process.platform === 'win32'
+      /*
+       * 这里问的是「远端 shell 是不是 cmd/PowerShell」，不是本机。
+       * 原来写 process.platform === 'win32'，于是 Windows 客户端连 Linux 服务器时，
+       * trzsz 按 ConPTY 规则改写长度/换行，进度条与传输全废。
+       */
+      isWindowsShell: false
     })
   }
 
+  /**
+   * 是否处于传输态。
+   *
+   * 不能只看 this.transferring：它要等 syncState 在下一帧才同步，而 trzsz 内部
+   * 用 setTimeout(..., 10) 才把 isTransferringFiles() 翻转成 true。紧跟着的
+   * 第 2 帧二进制块到达时 this.transferring 还是 false —— 于是这一帧走了
+   * processServerOutput（字符串）而不是 processServerBytes，非 UTF-8 字节
+   * 当场被替换成 U+FFFD，远端校验必败。两个都算才和库的真实状态对齐。
+   */
   get active(): boolean {
-    return this.transferring
+    if (this.disposed) return false
+    if (this.transferring) return true
+    try {
+      return this.filter.isTransferringFiles()
+    } catch {
+      return false
+    }
   }
 
   /** 服务端输出进来：过滤后返回该给终端的内容（同步，包含握手那一帧） */
@@ -162,6 +275,27 @@ class TrzszSession {
     let out = ''
     try {
       this.filter.processServerOutput(text)
+    } finally {
+      out = this.capture.join('')
+      this.capture = null
+    }
+    this.syncState()
+    return out
+  }
+
+  /**
+   * 传输中喂原始字节（Uint8Array）。
+   *
+   * 不转字符串是这条路径的全部意义：trzsz 的 addReceivedData 认得 Uint8Array，
+   * 二进制块按字节校验；换成 string 就等于把非法字节换成 U+FFFD，文件必坏。
+   * 返回值是本帧过滤后该给终端的内容（传输态通常是空）。
+   */
+  processServerBytes(data: Uint8Array): string {
+    if (this.disposed || data.length === 0) return ''
+    this.capture = []
+    let out = ''
+    try {
+      this.filter.processServerOutput(data)
     } finally {
       out = this.capture.join('')
       this.capture = null

@@ -107,6 +107,15 @@ export const useDiscoveryStore = create<DiscoveryState>()((set, get) => ({
       window.api.discovery.scan(runId, cidr.trim(), ports, scanTimeoutMs),
       { errorTitle: '扫描失败' }
     )
+    /*
+     * 只认自己这一轮的结果。
+     *
+     * applyProgress 收到 done: true 时已经把 scanning 置 false，用户可以在
+     * 「上一轮 IPC 还没回」的窗口里立刻开第二轮；上一轮回来后无条件
+     * set({ scanning: false, runId: null, hosts: 旧结果 }) 会把刚开始的
+     * 第二轮直接掐死，并把旧网段的列表贴到新扫描上。
+     */
+    if (get().runId !== runId) return
     set({ scanning: false, runId: null })
     if (hosts) {
       set({ hosts })
@@ -126,7 +135,11 @@ export const useDiscoveryStore = create<DiscoveryState>()((set, get) => ({
   },
 
   applyProgress: (e) =>
-    set({ scanned: e.scanned, total: e.total, hosts: e.found, scanning: !e.done }),
+    set((s) => {
+      // 旧扫描的 done: true 会把刚开始的新扫描直接关停，必须按 runId 过滤
+      if (e.runId !== s.runId) return s
+      return { scanned: e.scanned, total: e.total, hosts: e.found, scanning: !e.done }
+    }),
 
   runMdns: async () => {
     if (get().mdnsRunning) return

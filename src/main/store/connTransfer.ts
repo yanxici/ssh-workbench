@@ -35,6 +35,7 @@ import { bulkUpsertConnections, listConnections } from './repository'
 import { getSecret, setSecretsBulk, type PlainSecret } from './vault'
 import { listSerialPorts } from '../transport/serialPorts'
 import { resolveSerialPath } from '../transport/serialResolve'
+import { inspectPrivateKey } from '../util/privateKey'
 
 /**
  * 连接导出 / 导入：把连接发给同事，对方导入后直接可用。
@@ -275,6 +276,26 @@ export async function inspectImportFile(file: string): Promise<{ encrypted: bool
   return { encrypted: env.encrypted === true }
 }
 
+/**
+ * 把导入文件里的串口配置换成「本机端口」，并判断是否要用户重选。
+ *
+ * 预览与真正导入必须同判：预览说「有 1 条要重选端口」，导入后就得正好 1 条。
+ * 旧实现两边各写一份 resolve + 计数，漏了「被跳过的重复项」，数字永远对不上。
+ */
+function resolveImportedSerial(
+  kind: ConnKind | undefined,
+  cfg: SerialConfig | undefined,
+  ports: SerialPortInfo[]
+): { serial: SerialConfig | undefined; pendingPort: boolean } {
+  if (kind !== 'serial' || !cfg) return { serial: undefined, pendingPort: false }
+  const resolved = resolveSerialPath(cfg, ports)
+  if (resolved.ok) {
+    return { serial: { ...cfg, path: resolved.path, pathPending: false }, pendingPort: false }
+  }
+  // 找不到或匹配到多台：保留原路径但标记待确认，交给用户决定
+  return { serial: { ...cfg, pathPending: true }, pendingPort: true }
+}
+
 export async function previewImport(file: string, passphrase?: string): Promise<ConnImportPreview> {
   const env = await readEnvelope(file)
   const p = await openEnvelope(env, passphrase)
@@ -291,7 +312,7 @@ export async function previewImport(file: string, passphrase?: string): Promise<
   const serials = p.connections.filter((c) => c.kind === 'serial')
   const ports = serials.length > 0 ? await listPorts() : []
   const pendingPorts = serials.filter(
-    (c) => !c.serial || !resolveSerialPath(c.serial, ports).ok
+    (c) => resolveImportedSerial(c.kind, c.serial, ports).pendingPort
   ).length
 
   return {
@@ -302,7 +323,10 @@ export async function previewImport(file: string, passphrase?: string): Promise<
     groups: [...groupCount.entries()]
       .sort(([a], [b]) => a.localeCompare(b, 'zh-CN'))
       .map(([name, count]) => ({ name, count })),
-    duplicates: p.connections.filter((c) => existing.has(dupKey(c))).length,
+    duplicates: p.connections.filter((c) => {
+      const { serial } = resolveImportedSerial(c.kind, c.serial, ports)
+      return existing.has(dupKey(serial ? { ...c, serial } : c))
+    }).length,
     keyCount: p.keys.size,
     withSecrets: p.connections.filter(
       (c) =>
@@ -332,17 +356,38 @@ export async function applyImport(
   const keysDir = join(dataDir(), 'keys')
   const keyPath = new Map<string, string>()
   let keysWritten = 0
+  let invalidKeys = 0
+  /*
+   * 同一个损坏私钥常被十几条连接共用（一把公钥登一片机器）。
+   * 只按调用次数累加的话，用户会看到「22 把私钥无效」，实际只坏了 1 把。
+   */
+  const badKeys = new Set<string>()
   const ensureKey = async (ref: string | undefined): Promise<string | undefined> => {
     if (!ref) return undefined
     const cached = keyPath.get(ref)
     if (cached) return cached
     const k = p.keys.get(ref)
     if (!k) return undefined
+    const data = Buffer.isBuffer(k.data) ? k.data : Buffer.from(k.data, 'base64')
+    /*
+     * 导出文件来自别人的机器，里面的私钥未必能用：可能是 .pub、可能被截断、
+     * 可能是别的客户端的自定义封装。不校验就落进 data/keys/ 的话，
+     * 用户连的时候才在 ssh2 里报「无法解析私钥」，而界面上显示"导入成功"。
+     * 这里先过一遍与手动选私钥相同的校验，坏的直接丢掉并计数。
+     */
+    try {
+      inspectPrivateKey(data)
+    } catch {
+      badKeys.add(ref)
+      invalidKeys = badKeys.size
+      return undefined
+    }
     await fs.mkdir(keysDir, { recursive: true })
-    const dest = join(keysDir, `imp-${sha16(k.data)}-${k.name}`)
-    const same = await fs.readFile(dest).then((b) => b.equals(k.data), () => false)
+    const safeName = k.name.replace(/[^\w.-]/g, '_') || 'key'
+    const dest = join(keysDir, `imp-${sha16(data)}-${safeName}`)
+    const same = await fs.readFile(dest).then((b) => b.equals(data), () => false)
     if (!same) {
-      await fs.writeFile(dest, k.data, { mode: 0o600 })
+      await fs.writeFile(dest, data, { mode: 0o600 })
       keysWritten++
     }
     keyPath.set(ref, dest)
@@ -373,29 +418,28 @@ export async function applyImport(
   let pendingPorts = 0
 
   for (const src of p.connections) {
-    const k = dupKey(src)
+    const isSerial = src.kind === 'serial'
+    const resolved = resolveImportedSerial(src.kind, src.serial, ports)
+    const serial = resolved.serial
+    /*
+     * 串口必须按「解析后的本机端口」判重。
+     * 文件里写的是导出方机器的 COM3，导入到本机可能成了 /dev/ttyUSB0 或别的 COM 号；
+     * 拿文件里的旧串口名去比，本机已有的那条永远命中不了 ——
+     * 同一台设备每导一次就多一条，越导越乱。
+     */
+    const k = dupKey({ ...src, serial: serial ?? src.serial })
     const hit = byKey.get(k)
     // 文件内重复 或 skip 模式下与现有重复：跳过，但跳板引用仍指向那条连接
     if (hit && (pending.has(hit.id) || mode === 'skip')) {
       refToId.set(src.ref, hit.id)
       skipped++
+      // 被跳过的这条根本不落库，不能算进「导入后还要重选端口」的提示里
       continue
     }
+    if (resolved.pendingPort) pendingPorts++
 
     const id = hit?.id ?? randomUUID()
     refToId.set(src.ref, id)
-    const isSerial = src.kind === 'serial'
-    let serial: SerialConfig | undefined
-    if (isSerial && src.serial) {
-      const resolved = resolveSerialPath(src.serial, ports)
-      if (resolved.ok) {
-        serial = { ...src.serial, path: resolved.path, pathPending: false }
-      } else {
-        // 找不到或匹配到多台：保留原路径但标记待确认，交给用户决定
-        serial = { ...src.serial, pathPending: true }
-        pendingPorts++
-      }
-    }
     const conn: Connection = {
       id,
       name: src.name,
@@ -428,10 +472,23 @@ export async function applyImport(
     // 串口连接没有密码/私钥；照 SSH 走会给它写一条空凭据记录，白白占一行
     if (isSerial) continue
     const cur: PlainSecret = hit ? await getSecret(id) : {}
+    /*
+     * 代理密码只在「代理目标没变」时才沿用旧值。
+     * 覆盖导入换了代理（另一台跳板、另一个端口）还带着旧代理密码，
+     * 会拿 A 的密码去连 B —— 表现为认证失败，或者更糟：连上了别人的代理。
+     */
+    const sameProxy =
+      Boolean(hit?.proxy) &&
+      Boolean(src.proxy) &&
+      // type 也要比：socks5 与 http 可能同名同端口，但走的是完全不同的协议
+      hit?.proxy?.type === src.proxy?.type &&
+      hit?.proxy?.host === src.proxy?.host &&
+      hit?.proxy?.port === src.proxy?.port &&
+      hit?.proxy?.username === src.proxy?.username
     secrets.set(id, {
       password: src.password ?? cur.password,
       passphrase: src.passphrase ?? cur.passphrase,
-      proxyPassword: src.proxy ? (src.proxy.password ?? cur.proxyPassword) : undefined
+      proxyPassword: src.proxy ? (src.proxy.password ?? (sameProxy ? cur.proxyPassword : undefined)) : undefined
     })
   }
 
@@ -446,7 +503,7 @@ export async function applyImport(
 
   await bulkUpsertConnections([...pending.values()])
   await setSecretsBulk([...secrets.entries()])
-  return { added, updated, skipped, keysWritten, invalid: p.invalid, pendingPorts }
+  return { added, updated, skipped, keysWritten, invalidKeys, invalid: p.invalid, pendingPorts }
 }
 
 async function readEnvelope(file: string): Promise<Envelope> {

@@ -9,6 +9,7 @@ const os = require('os')
 const path = require('path')
 const esbuild = require('esbuild')
 const { Server, utils } = require('ssh2')
+const { ed25519HostKey } = require('./lib/testkeys.cjs')
 
 const ROOT = path.join(__dirname, '..')
 const OUT_DIR = path.join(ROOT, '.tsc-verify')
@@ -114,7 +115,7 @@ sm.setHandlers({
 /* ---------- 测试 SSH 服务器 ---------- */
 const liveConns = new Set()
 let shellCount = 0
-const hostKey = utils.generateKeyPairSync('ed25519').private
+const hostKey = ed25519HostKey()
 const server = new Server({ hostKeys: [hostKey] }, (client) => {
   liveConns.add(client)
   client.on('close', () => liveConns.delete(client))

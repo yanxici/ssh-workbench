@@ -1,5 +1,5 @@
 import type * as React from 'react'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Eraser, History, Play, Search, Star } from 'lucide-react'
 import type { CommandHistoryEntry } from '@shared/types'
 import { useCommandStore } from '@/stores/commandStore'
@@ -21,7 +21,14 @@ export function HistoryPanel(): React.JSX.Element {
   const [connectionId, setConnectionId] = useState('')
   const [confirmClear, setConfirmClear] = useState(false)
 
+  /*
+   * 请求序号：每次 reload 先 +1，回来时只认最后一次。
+   * 关键词是逐字触发的，慢请求后到就会把快请求的结果盖掉 ——
+   * 表现为「搜索框写着 abc，列表却是 ab 的结果」，而且不会自己恢复。
+   */
+  const reqRef = useRef(0)
   const reload = async (): Promise<void> => {
+    const seq = ++reqRef.current
     const list = await call(
       window.api.history.list({
         keyword: keyword.trim() || undefined,
@@ -30,6 +37,7 @@ export function HistoryPanel(): React.JSX.Element {
       }),
       { silent: true }
     )
+    if (seq !== reqRef.current) return
     setEntries(list ?? [])
   }
 

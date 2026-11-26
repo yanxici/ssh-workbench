@@ -14,6 +14,7 @@ import {
 import type { TextEncoding } from '@shared/types'
 import { useI18n } from '@/i18n'
 import { isImeComposing } from '@/lib/ime'
+import { useOverlayEscape } from '@/lib/overlayKeys'
 import {
   applyTabIndent,
   countLines,
@@ -202,19 +203,6 @@ export function RemoteEditorDialog({
       openFindBar(true)
       return
     }
-    if (e.key === 'Escape') {
-      e.preventDefault()
-      if (confirmClose) {
-        setConfirmClose(false)
-        return
-      }
-      if (findOpen) {
-        setFindOpen(false)
-        textareaRef.current?.focus()
-        return
-      }
-      requestClose()
-    }
   }
 
   useEffect(() => {
@@ -222,6 +210,30 @@ export function RemoteEditorDialog({
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [])
+
+  /*
+   * Esc 走统一弹层栈，不再自己监听 window。
+   *
+   * 自己监听时它和文件管理面板各挂一个 window 监听器：面板那个在 capture 阶段、
+   * 又恰好是栈顶，按一次 Esc 会先把文件管理面板连同这里的编辑器一起卸载，
+   * 未保存的修改一声不响全丢。现在编辑器压栈在最上，Esc 只交给它，
+   * 由它按 确认框 → 搜索框 → 真正关闭 的顺序处理。
+   *
+   * 也不能让内层输入框先吃掉 Esc：搜索框/确认框的处理都放在这里，而输入框
+   * 自己的 Esc 会 preventDefault 表示已消费，栈监听器就不再往下走。
+   */
+  useOverlayEscape(true, () => {
+    if (confirmClose) {
+      setConfirmClose(false)
+      return
+    }
+    if (findOpen) {
+      setFindOpen(false)
+      textareaRef.current?.focus()
+      return
+    }
+    requestClose()
+  })
 
   const handleTextareaKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>): void => {
     if (isImeComposing(e)) return

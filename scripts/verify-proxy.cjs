@@ -6,6 +6,8 @@
 const net = require('node:net')
 const { connectViaSocks5, connectViaHttpConnect } = require('../.tsc-verify/main/util/proxySockets.js')
 const { handleSocks5 } = require('../.tsc-verify/main/util/socks5.js')
+const crypto = require('node:crypto')
+const { Client, Server } = require('ssh2')
 
 let pass = 0
 let fail = 0
@@ -161,6 +163,148 @@ async function main() {
     }).then(() => null, (e) => e.message)
     check('407 → 报 CONNECT 被拒', failed && failed.includes('407'), failed)
     proxy.close()
+  }
+
+  /*
+   * 粘包回归：代理握手回包与 SSH banner 在同一个 TCP 段里。
+   *
+   * 这是 P0-13 的实际触发形态（本地/低延迟代理几乎必然粘包），也是两种错误
+   * 实现最容易被"看起来能通"骗过去的地方 —— 不粘包的用例两种写法都过。
+   * 判据是「resolve 之后才挂的 data 监听能不能收到 banner」：
+   * 拿到 socket 才挂监听正是 ssh2 的做法，也是 resume() 版本丢字节的原因。
+   */
+  console.log('== SOCKS5 粘包：CONNECT 回包 + SSH banner 同段 ==')
+  {
+    const BANNER = 'SSH-2.0-FakeTest_1.0\r\n'
+    // 极简 SOCKS5 服务端：第一次读 → 方法协商；第二次读 → CONNECT 回包与 banner 一次写出
+    const proxy = net.createServer((socket) => {
+      let step = 0
+      socket.on('data', () => {
+        step += 1
+        if (step === 1) {
+          socket.write(Buffer.from([0x05, 0x00]))
+          return
+        }
+        // 0x05 0x00 | RSV | ATYP=IPv4 | 127.0.0.1 | port 22 —— 与 banner 合并成一个 write
+        const reply = Buffer.from([0x05, 0x00, 0x00, 0x01, 127, 0, 0, 1, 0x00, 0x16])
+        socket.write(Buffer.concat([reply, Buffer.from(BANNER, 'ascii')]))
+      })
+    })
+    const proxyPort = await listen(proxy)
+
+    const socket = await connectViaSocks5({
+      proxyHost: '127.0.0.1',
+      proxyPort,
+      targetHost: '127.0.0.1',
+      targetPort: 22
+    })
+    const got = await new Promise((resolve) => {
+      const timer = setTimeout(() => resolve('<超时：banner 被丢弃>'), 1000)
+      socket.on('data', (d) => {
+        clearTimeout(timer)
+        resolve(d.toString('ascii'))
+      })
+    })
+    check('粘包 banner 在 resolve 后仍能被读到', got === BANNER, JSON.stringify(got))
+    socket.destroy()
+    proxy.close()
+  }
+
+  console.log('== HTTP CONNECT 粘包：200 回包 + SSH banner 同段 ==')
+  {
+    const BANNER = 'SSH-2.0-FakeTest_1.0\r\n'
+    const proxy = net.createServer((socket) => {
+      socket.on('data', () => {
+        socket.write('HTTP/1.1 200 Connection Established\r\n\r\n' + BANNER)
+      })
+    })
+    const proxyPort = await listen(proxy)
+
+    const socket = await connectViaHttpConnect({
+      proxyHost: '127.0.0.1',
+      proxyPort,
+      targetHost: '127.0.0.1',
+      targetPort: 22
+    })
+    const got = await new Promise((resolve) => {
+      const timer = setTimeout(() => resolve('<超时：banner 被丢弃>'), 1000)
+      socket.on('data', (d) => {
+        clearTimeout(timer)
+        resolve(d.toString('ascii'))
+      })
+    })
+    check('粘包 banner 在 resolve 后仍能被读到', got === BANNER, JSON.stringify(got))
+    socket.destroy()
+    proxy.close()
+  }
+
+  /*
+   * 上面两段用的是裸 socket 挂 'data' 读 banner，只证明字节没丢。
+   * 真正要保证的是「把这条 socket 原样交给 ssh2」能握手成功 ——
+   * ssh2 会自己接管 readable 状态与缓冲，任何 pause/resume 时序错乱都在这步暴露。
+   */
+  console.log('== 真实 ssh2.Client 经 SOCKS5 完成握手 ==')
+  {
+    const { privateKey } = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 })
+    const hostKey = privateKey.export({ type: 'pkcs1', format: 'pem' })
+    const sshServer = new Server({ hostKeys: [hostKey] }, (client) => {
+      client.on('authentication', (ctx) => ctx.accept())
+    })
+    const sshPort = await new Promise((r) => sshServer.listen(0, '127.0.0.1', () => r(sshServer.address().port)))
+
+    // 迷你 SOCKS5：方法协商 → CONNECT 回包后把连接桥到真实 sshd 上
+    const proxy = net.createServer((socket) => {
+      let step = 0
+      socket.on('data', () => {
+        step += 1
+        if (step === 1) {
+          socket.write(Buffer.from([0x05, 0x00]))
+          return
+        }
+        if (step === 2) {
+          socket.write(Buffer.from([0x05, 0x00, 0x00, 0x01, 127, 0, 0, 1, (sshPort >> 8) & 0xff, sshPort & 0xff]))
+          const up = net.connect(sshPort, '127.0.0.1')
+          up.on('error', () => socket.destroy())
+          up.pipe(socket)
+          socket.pipe(up)
+        }
+      })
+      socket.on('error', () => undefined)
+    })
+    const proxyPort = await listen(proxy)
+
+    const sock = await connectViaSocks5({
+      proxyHost: '127.0.0.1',
+      proxyPort,
+      targetHost: '127.0.0.1',
+      targetPort: sshPort
+    })
+    const client = new Client()
+    const events = []
+    client.on('handshake', () => events.push('handshake'))
+    client.on('ready', () => events.push('ready'))
+    client.on('error', (e) => events.push('error:' + e.message))
+    client.connect({ sock, username: 'u', password: 'p', readyTimeout: 4000 })
+    const ok = await new Promise((resolve) => {
+      const timer = setTimeout(() => resolve(false), 5000)
+      const done = () => {
+        if (events.includes('ready')) {
+          clearTimeout(timer)
+          resolve(true)
+        }
+      }
+      client.on('ready', done)
+      client.on('error', () => {
+        clearTimeout(timer)
+        resolve(false)
+      })
+    })
+    check('ssh2.Client 经代理 socket 握手成功', ok, events.join(','))
+    check('握手事件按 handshake → ready 顺序发生', events.join(',') === 'handshake,ready', events.join(','))
+    client.end()
+    sock.destroy()
+    proxy.close()
+    sshServer.close()
   }
 
   console.log('== 代理不可达 ==')

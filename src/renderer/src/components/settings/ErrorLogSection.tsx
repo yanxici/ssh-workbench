@@ -84,7 +84,6 @@ export function ErrorLogSection(): React.JSX.Element {
 
   return (
     <div className="space-y-2">
-      {/* 工具条 */}
       <div className="flex items-center gap-1.5">
         <div className="relative min-w-0 flex-1">
           <Search
@@ -154,7 +153,12 @@ export function ErrorLogSection(): React.JSX.Element {
           title="清空全部错误日志"
           disabled={entries.length === 0}
           onClick={() => {
-            void call(window.api.errors.clear(), { errorTitle: '清空失败' }).then(() => {
+            // call() 失败返回 null 并已弹错误提示；这里不能只 .then，
+            // 否则清空失败也会把本地列表抹掉并报「已清空」
+            void call(window.api.errors.clear(), { errorTitle: '清空失败' }).then((ok) => {
+              // call() 成功时返回 res.data —— clearErrors 是 void，成功即 undefined，
+              // 所以只能用 ok === null 判失败，!ok 会把成功也当成失败。
+              if (ok === null) return
               setEntries([])
               useToastStore.getState().push({ kind: 'success', title: '已清空错误日志' })
             })
@@ -171,7 +175,6 @@ export function ErrorLogSection(): React.JSX.Element {
             (keyword ? `（已按「${keyword}」筛选）` : '')}
       </div>
 
-      {/* 列表 */}
       <div className="space-y-1">
         {filtered.map((e) => {
           const open = expanded.has(e.id)
@@ -223,7 +226,8 @@ export function ErrorLogSection(): React.JSX.Element {
                   className="btn-icon h-5 w-5 shrink-0 hover:text-danger"
                   title="删除这条"
                   onClick={() => {
-                    void call(window.api.errors.remove(e.id), { silent: true }).then(() => {
+                    void call(window.api.errors.remove(e.id)).then((ok) => {
+                      if (ok === null) return
                       setEntries((prev) => prev.filter((x) => x.id !== e.id))
                     })
                   }}

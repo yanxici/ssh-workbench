@@ -122,6 +122,19 @@ function isLineBreakAt(text: string, index: number): boolean {
   return false
 }
 
+/**
+ * 造发送编码器。
+ *
+ * 旧实现把 JS 字符串直接交给 port.write，serialport 一律按 UTF-8 编码 ——
+ * 现场大量设备是 GBK/GB18030，发中文过去就是乱码，设备侧日志也跟着坏。
+ * 必须与入站解码用同一个 charset，收发才是对称的。
+ */
+function makeEncoder(charset: SerialCharset): (text: string) => Buffer | string {
+  // UTF-8 直接交给驱动：Node 内部就是 UTF-8，多一次 Buffer.from 纯属浪费
+  if (charset === 'utf-8') return (text) => text
+  return (text) => iconv.encode(text, charset)
+}
+
 /** 取流式解码器；iconv-lite 对未知编码返回 undefined，此处兜底 UTF-8 */
 function makeDecoder(charset: SerialCharset): (buf: Buffer) => string {
   if (charset === 'utf-8') {
@@ -175,6 +188,7 @@ export class SerialTransport implements Transport {
   private readonly portFactory?: (config: SerialConfig) => SerialPort
   private port?: SerialPort
   private decode: (buf: Buffer) => string
+  private encodeText: (text: string) => Buffer | string
   private opened = false
   /** 本实现主动 close()：之后的端口事件不再上报 */
   private closing = false
@@ -211,6 +225,7 @@ export class SerialTransport implements Transport {
     this.events = events
     this.portFactory = options.portFactory
     this.decode = makeDecoder(options.config.charset)
+    this.encodeText = makeEncoder(options.config.charset)
     // 构造函数里就收敛一次：串口参数在会话存续期间不会变（改参数即重连），
     // 每个字符都重新解析一遍配置纯属浪费
     this.charDelayMs = normalizeCharDelayMs(options.config.charDelayMs)
@@ -249,6 +264,17 @@ export class SerialTransport implements Transport {
       port.open((err) => (err ? reject(err) : resolve()))
     })
 
+    /*
+     * 打开是异步的，期间用户可能关了标签。旧实现只在 open 之前查了一次
+     * closing —— 关闭发生在 open 等待中时，句柄已经开好却没人释放：
+     * Windows 上 COM 口从此永久占用，直到退出整个程序。
+     * 这里补一次检查，失败路径也保证把端口关掉。
+     */
+    if (this.closing) {
+      this.releasePort(port)
+      throw new Error('会话已关闭')
+    }
+
     if (this.config.autoReset) await this.pulseDtr()
   }
 
@@ -258,7 +284,7 @@ export class SerialTransport implements Transport {
     // 没有配置延迟时保持原来的整段直发：多数连接不需要节流，
     // 走队列只会给键盘输入平白加一层定时器
     if (this.charDelayMs === 0 && this.lineDelayMs === 0 && this.queue.length === 0) {
-      this.port.write(payload)
+      this.port.write(this.encodeText(payload))
       return
     }
     this.queue.push({ kind: 'text', data: payload })
@@ -352,11 +378,7 @@ export class SerialTransport implements Transport {
     const port = this.port
     this.port = undefined
     if (!port) return
-    try {
-      port.close(() => {})
-    } catch {
-      /* 端口已失效时忽略 */
-    }
+    this.releasePort(port)
   }
 
   /**
@@ -388,7 +410,7 @@ export class SerialTransport implements Transport {
 
       const at = this.cursor
       const { head: ch, size } = nextUnit(head.data, at)
-      port.write(ch)
+      port.write(this.encodeText(ch))
       this.cursor += size
       if (this.cursor >= head.data.length) {
         this.queue.shift()
@@ -453,11 +475,24 @@ export class SerialTransport implements Transport {
     }
   }
 
+  /** 关掉一个端口句柄，吞掉「已经关了」之类的错误 */
+  private releasePort(port: SerialPort): void {
+    try {
+      if (port.isOpen) port.close(() => {})
+    } catch {
+      /* 端口已失效时忽略 */
+    }
+  }
+
   private handleClosed(err?: Error): void {
     if (this.closing) return
     this.closing = true
     this.resetPacing()
+    // 端口报错（拔线、驱动异常）时句柄仍被本进程持有：不主动 close
+    // 就会一直占着 COM 口，用户重新插上也打不开，只能重启程序。
+    const port = this.port
     this.port = undefined
+    if (port) this.releasePort(port)
     // 拔线在 Windows 上表现为 error（EIO / "设备未就绪"），正常关闭则无 error。
     // 上层据此区分「设备掉了」与「对端关掉了」。
     this.events.onClose(err instanceof Error ? err : undefined)

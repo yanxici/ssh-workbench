@@ -32,9 +32,20 @@ function statusLabel(r: DiagSectionResult): string {
   }
 }
 
-/** 输出围栏：内容含 ``` 时用更长的围栏避免截断 */
+/**
+ * 输出围栏：比正文里最长的一串反引号还长，否则围栏会被正文提前闭合。
+ *
+ * 旧实现只看「有没有三个反引号」，正文里出现四个时会用三个收尾 —— 而 CommonMark
+ * 规定闭合围栏必须「至少同样长」，于是内容里的四个反引号直接截断了围栏，
+ * 后半段被当成正文渲染。
+ */
 function fenceFor(text: string): string {
-  return text.includes('```') ? '````' : '```'
+  // 显式标注：match() 返回 RegExpMatchArray | null，直接 `?? []` 会被推成 never[]，
+  // 在 lib 更严的 tsconfig.verify.json 下 reduce 的初值类型对不上。
+  const runs: string[] = text.match(/`+/g) ?? []
+  let longest = 0
+  for (const r of runs) longest = Math.max(longest, r.length)
+  return '`'.repeat(Math.max(3, longest + 1))
 }
 
 function escapeHtml(text: string): string {

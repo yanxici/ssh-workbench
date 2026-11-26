@@ -7,6 +7,7 @@ import type { SessionLogFile } from '@shared/types'
 import { call } from '@/lib/ipc'
 import { resolveDark, useSettingsStore } from '@/stores/settingsStore'
 import { getXtermTheme } from '@/theme/colorThemes'
+import { useOverlayEscape } from '@/lib/overlayKeys'
 
 interface CastEvent {
   t: number
@@ -47,8 +48,22 @@ export function LogPlayerDialog({
   const [speed, setSpeed] = useState(2)
   const [duration, setDuration] = useState(0.1)
 
+  // 入弹层栈：回放器常驻在标签页里（不是条件渲染），必须入栈才能抢到 Esc 优先级
+  useOverlayEscape(true, onClose)
+
+  /**
+   * 倍速换算的时刻基准。
+   *
+   * 播放循环里的 evt 是「base.evt + 真实经过时间 × 倍速」。倍速一改，
+   * 若还沿用启动时那个 base，整段已播放的时间会被新倍速重算一遍 ——
+   * 从 2x 切到 8x，evt 立刻跳到 4 倍位置；切回 1x 反而倒退到起点之后，
+   * 而事件游标只前不后，于是「倒退就卡住不动」。
+   * 换速率时把当前时刻固化成新的基准，时间轴才能连续。
+   */
+  const rebaseRef = useRef<() => void>(() => {})
   useEffect(() => {
     speedRef.current = speed
+    rebaseRef.current()
   }, [speed])
 
   /* 初始化终端 + 加载日志数据 */
@@ -126,6 +141,10 @@ export function LogPlayerDialog({
   useEffect(() => {
     if (!playing || !ready) return
     const base = { wall: Date.now(), evt: currentEvtRef.current }
+    rebaseRef.current = () => {
+      base.evt = currentEvtRef.current
+      base.wall = Date.now()
+    }
     let raf = 0
     let lastUi = 0
 
@@ -158,7 +177,10 @@ export function LogPlayerDialog({
     }
 
     raf = requestAnimationFrame(tick)
-    return () => cancelAnimationFrame(raf)
+    return () => {
+      cancelAnimationFrame(raf)
+      rebaseRef.current = () => {}
+    }
   }, [playing, ready])
 
   const restart = (): void => {
@@ -211,7 +233,6 @@ export function LogPlayerDialog({
             {playing ? '暂停' : '播放'}
           </button>
 
-          {/* 只读进度条 */}
           <div className="mx-2 h-1 min-w-0 flex-1 overflow-hidden rounded-full bg-raised">
             <div
               className="h-full rounded-full bg-accent transition-[width] duration-150"

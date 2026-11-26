@@ -153,23 +153,25 @@ export function resolveServices(records: DnsRecord[]): MdnsService[] {
       r.type === 12 &&
       r.ptr &&
       /\._(tcp|udp)\.local$/i.test(r.name) &&
-      r.name !== '_services._dns-sd._udp.local'
+      r.name.toLowerCase() !== '_services._dns-sd._udp.local'
     ) {
       services.set(r.ptr, {
         type: r.name,
         name: r.ptr.replace(new RegExp(`\\.?${escapeRegex(r.name)}$`), '')
       })
     }
-    if (r.type === 33 && r.srv) srvs.set(r.name, r)
-    if (r.type === 1 && r.a) addrs.set(r.name, r.a)
+    // DNS 名字大小写不敏感（RFC 4343）：对端 SRV 里的 target 可能是 Host.local
+    // 而 A 记录是 host.local，精确匹配会丢掉地址，服务列表里只剩名字没有 IP。
+    if (r.type === 33 && r.srv) srvs.set(r.name.toLowerCase(), r)
+    if (r.type === 1 && r.a) addrs.set(r.name.toLowerCase(), r.a)
   }
 
   for (const [instance, svc] of services) {
-    const srv = srvs.get(instance)
+    const srv = srvs.get(instance.toLowerCase())
     if (srv?.srv) {
       svc.port = srv.srv.port
       svc.host = srv.srv.target
-      const address = addrs.get(srv.srv.target)
+      const address = addrs.get(srv.srv.target.toLowerCase())
       if (address) svc.address = address
     }
   }
@@ -224,16 +226,39 @@ export function discoverMdns(timeoutMs = 6000): Promise<MdnsService[]> {
         /* 忽略无法解析的报文 */
       }
     })
-    socket.on('error', () => finish())
-
-    socket.bind(() => {
+    /*
+     * 必须绑 5353。mDNS 的应答是发往 5353 组播的，绑随机端口时标准实现
+     * （Bonjour / avahi / 各类路由器）的应答根本到不了这里，只能收到极少数
+     * 「直接回源端口」的实现 —— 表现为发现列表常年为空。
+     * 5353 已被系统自带 mDNS 服务占用时退回随机端口，聊胜于无。
+     */
+    let listening = false
+    let bindRetried = false
+    const startListening = (): void => {
+      if (listening) return
+      listening = true
       try {
         socket.addMembership(MDNS_ADDR)
       } catch {
         /* 某些环境不允许加组播组 */
       }
       send(buildDnsQuery('_services._dns-sd._udp.local', 12))
+    }
+
+    socket.on('error', () => {
+      if (!bindRetried && !listening) {
+        bindRetried = true
+        try {
+          socket.bind(0, startListening)
+          return
+        } catch {
+          /* 落到 finish */
+        }
+      }
+      finish()
     })
+
+    socket.bind(MDNS_PORT, startListening)
 
     const defaultTypes = ['_ssh._tcp.local', '_http._tcp.local', '_https._tcp.local', '_smb._tcp.local']
 

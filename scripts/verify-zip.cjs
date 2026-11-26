@@ -2,7 +2,7 @@
  * ZIP 打包自检：用 Python 标准库 zipfile 独立校验（跨实现验证）。
  * 用法：node node_modules/typescript/bin/tsc -p tsconfig.verify.json && node scripts/verify-zip.cjs
  */
-const { createZip, crc32 } = require('../.tsc-verify/main/util/zip.js')
+const { createZip, crc32, zipEntryName } = require('../.tsc-verify/main/util/zip.js')
 
 let pass = 0
 let fail = 0
@@ -162,6 +162,22 @@ try {
 } catch (err) {
   check('Python 校验可运行（无 python 时提示）', false, String(err).slice(0, 200))
 }
+
+/* ---------- 归档内路径清洗（Zip Slip 防护） ---------- */
+// 备份目录名 + 备份内绝对路径拼出来的条目名：中间的 // 是拼接残留，
+// 若先 map 后 filter，空段会被净成 '_'，条目变成 配置备份/b1/_/etc/...
+check(
+  '拼接路径的 // 不产生 _ 段',
+  zipEntryName('配置备份/b1//etc/nginx/nginx.conf') === '配置备份/b1/etc/nginx/nginx.conf',
+  zipEntryName('配置备份/b1//etc/nginx/nginx.conf')
+)
+// ".. " 是经典的 Windows 绕过：解压时尾随空格被剥掉又还原成 ..
+check('".. " 段被净化为 _', zipEntryName('.. ') === '_', zipEntryName('.. '))
+check('盘符冒号被净化（防 NTFS 数据流）', zipEntryName('/C:/Windows/win.ini') === 'C_/Windows/win.ini', zipEntryName('/C:/Windows/win.ini'))
+// 空结果不能是 ''，否则归档里出现一个根条目
+check('仅斜杠返回 file 而非空串', zipEntryName('/') === 'file', JSON.stringify(zipEntryName('/')))
+check('空串返回 file', zipEntryName('') === 'file', JSON.stringify(zipEntryName('')))
+check('反斜杠统一成正斜杠', zipEntryName('a\\b\\c.txt') === 'a/b/c.txt', zipEntryName('a\\b\\c.txt'))
 
 // 空条目列表
 check('空条目抛错或返回空（不崩溃）', (() => {

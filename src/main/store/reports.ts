@@ -1,9 +1,10 @@
-import { app, dialog, shell, BrowserWindow } from 'electron'
+import { app, shell } from 'electron'
 import { promises as fs } from 'node:fs'
 import { basename, join, resolve, sep } from 'node:path'
 import type { DiagReport, DiagReportMeta } from '@shared/types'
 import { generateHtml, generateMarkdown } from '../util/reportFormat'
 import { dialogDefaultPath, rememberDialogPick } from '../util/dialogDirs'
+import { showSaveDialog } from '../windowRef'
 
 /**
  * 诊断报告的持久化与导出。
@@ -18,7 +19,14 @@ function formatStamp(d: Date): string {
 }
 
 function sanitize(name: string): string {
-  return name.replace(/[\\/:*?"<>|\s]/g, '_').trim() || 'report'
+  // 与 backups.ts 的 sanitize 保持同一套规则：名字里的 '..' 会被 reportPath 拒掉，
+  // 而连接名带两个点完全合法 —— 不在这里吃掉就变成「保存报告必失败」。
+  const safe = name
+    .replace(/[\\/:*?"<>|\s]/g, '_')
+    .replace(/\.{2,}/g, '_')
+    .replace(/^\.+|\.+$/g, '')
+    .trim()
+  return safe || 'report'
 }
 
 function reportsDir(): string {
@@ -105,9 +113,7 @@ export async function exportReport(
   const report = await readReport(id)
   const text = format === 'html' ? generateHtml(report) : generateMarkdown(report)
   const ext = format === 'html' ? 'html' : 'md'
-  const win = BrowserWindow.getFocusedWindow()
-
-  const res = await dialog.showSaveDialog(win as BrowserWindow, {
+  const res = await showSaveDialog({
     title: format === 'html' ? '导出诊断报告（HTML）' : '导出诊断报告（Markdown）',
     defaultPath: dialogDefaultPath(
       'report',

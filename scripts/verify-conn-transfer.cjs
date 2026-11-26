@@ -96,7 +96,13 @@ async function main() {
   /* ================= 电脑 A：准备数据 ================= */
   const A = machine('A')
   const keyFile = path.join(A.dir, 'node_key')
-  const keyData = Buffer.from('-----BEGIN RSA PRIVATE KEY-----\nTESTKEY\n-----END RSA PRIVATE KEY-----\n')
+  /*
+   * 必须是真能被 ssh2 解析的私钥。
+   * 导入侧现在会过 inspectPrivateKey（与「手动选私钥」同一套校验），
+   * 免得把别人机器上那些 .pub、截断、别的封装塞进 data/keys/ 后连接时才炸。
+   * 用一把假 PEM 当夹具的话，这条路径永远进不去。
+   */
+  const keyData = Buffer.from(require('ssh2').utils.generateKeyPairSync('rsa', { bits: 2048 }).private)
   fs.writeFileSync(keyFile, keyData)
 
   const mk = (o) =>
@@ -333,6 +339,18 @@ async function main() {
       bList.map((c) => c.serial.path).sort().join() === 'COM11,COM9',
       bList.map((c) => c.serial.path).join()
     )
+
+    /*
+     * 再导一次（skip 模式）：三条与已有记录重复，全部跳过。
+     * 预览与导入必须同口径：按 USB 身份重映射后的端口（COM3 → COM7）也应算作重复；
+     * pendingPorts 统计的是「导入后还要用户重选端口」的条数 ——
+     * 被跳过的根本没落库，算进去就会在 UI 上提示重选一个不存在的连接。
+     */
+    const pvAgain = await F.previewImport(fSerial)
+    check('重复预览按解析后的端口识别全部 3 条重复', pvAgain.duplicates === 3, JSON.stringify(pvAgain))
+    const rAgain = await F.applyImport(fSerial, undefined, 'skip')
+    check('重复导入全部跳过', rAgain.added === 0 && rAgain.skipped === 3, JSON.stringify(rAgain))
+    check('跳过模式下不再统计待确认端口', rAgain.pendingPorts === 0, `实际 ${rAgain.pendingPorts}`)
 
     // 串口参数非法：必须计入 invalid，而不是被当成「缺 host」的坏 SSH 丢掉
     const fBadSerial = bad(

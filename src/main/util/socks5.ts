@@ -28,13 +28,29 @@ export function handleSocks5(socket: Socket, options: Socks5Options): void {
   // 协议层自护：客户端异常断开（RST）等场景不能让 'error' 事件冒泡成未捕获异常
   socket.on('error', () => socket.destroy())
 
+  /*
+   * 失败回复必须先写出去再关连接。
+   *
+   * 原来 write() 之后紧跟 destroy()：destroy 会在写缓冲出队之前掐断连接，
+   * 客户端收到的是 RST 而不是 0x05 0xNN，于是报「代理无响应」而不是
+   * 「目标端口不通」—— 排查方向被带偏。end() 会先把数据刷完再发 FIN。
+   */
   const fail = (code: number): void => {
+    /*
+     * 一票否决：失败后立刻摘掉握手监听并封死阶段。
+     *
+     * 原来只 end() 不摘监听，客户端在收到失败应答前又发来一段数据时，
+     * onData 会拿旧的 buf/stage 再走一遍解析，对已经半关的 socket 再 write
+     * 一次应答（ERR_STREAM_WRITE_AFTER_END），或者走到 request 阶段
+     * 带着一个畸形的 buf 去 open() —— 失败被报成「连接成功」。
+     */
+    stage = 'done'
+    socket.removeListener('data', onData)
     try {
-      socket.write(reply(code))
+      socket.end(reply(code))
     } catch {
-      /* ignore */
+      socket.destroy()
     }
-    socket.destroy()
   }
 
   const onData = (chunk: Buffer): void => {
@@ -48,12 +64,15 @@ export function handleSocks5(socket: Socket, options: Socks5Options): void {
       if (buf.length < 2 + n) return
       const methods = buf.subarray(2, 2 + n)
       if (!methods.includes(0x00)) {
+        // 与方法协商失败同款收尾：不封阶段、不摘监听的话，客户端在收到
+        // 0x05 0xff 前再发一段数据，onData 会拿旧 buf 再走一遍解析
+        stage = 'done'
+        socket.removeListener('data', onData)
         try {
-          socket.write(Buffer.from([0x05, 0xff]))
+          socket.end(Buffer.from([0x05, 0xff]))
         } catch {
-          /* ignore */
+          socket.destroy()
         }
-        socket.destroy()
         return
       }
       socket.write(Buffer.from([0x05, 0x00]))
@@ -106,6 +125,20 @@ export function handleSocks5(socket: Socket, options: Socks5Options): void {
     options
       .open(host, port)
       .then((channel) => {
+        /*
+         * open 是异步的（SSH 里是一次 forwardOut 往返），回来时客户端可能
+         * 早就断了。往已销毁的 socket 写应答会抛 ERR_STREAM_DESTROYED，
+         * 而且那条 channel 再没人消费，只能等远端超时。
+         */
+        if (socket.destroyed || !socket.writable) {
+          try {
+            channel.end()
+          } catch {
+            /* ignore */
+          }
+          socket.destroy()
+          return
+        }
         socket.write(reply(0x00)) // succeeded
         if (rest.length > 0) channel.write(rest)
         socket.pipe(channel)
