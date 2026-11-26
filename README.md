@@ -118,7 +118,7 @@ npm run dev                   # dev mode with hot reload
 | `npm run build:win` | Build the Windows installer (NSIS) and portable exe; runs the integrity-label check first |
 | `npm run build:win:portable` | Build only the portable exe (no install, no registry writes) |
 | `npm run check:integrity` / `fix:integrity` | Inspect / repair the directory integrity label (`Low` makes a double-clicked exe silently do nothing) |
-| `npm run guard:integrity` / `unguard:integrity` | Install / remove a `WRITE_OWNER` deny guard so sandbox tools can no longer re-stamp the tree as `Low` (see `RELEASE_CHECKLIST.md` §0.1) |
+| `npm run guard:integrity` / `unguard:integrity` | Install / remove a `WRITE_OWNER` deny guard so sandbox tools can no longer re-stamp the tree as `Low` (see [`docs/archive/RELEASE_CHECKLIST.md`](./docs/archive/RELEASE_CHECKLIST.md) §0.1) |
 | `npm run test:cwdfollow` | Regressions for terminal-cwd following (`shellCwd` parser + `cwdStore` session isolation) |
 | `npm run test:ipc` | IPC integrity: every channel constant has a registered handler, `ipcMain` count matches, failures wrapped as `{ ok: false }` |
 | `npm run test:repository` | Persistence behaviour: credential semantics, group defaults, history cap, settings merge, timeout clamping |
