@@ -27,10 +27,6 @@ import { CommandRail } from '@/components/layout/CommandRail'
 import { PaneResizer, usePaneSizes } from '@/components/layout/PaneResizer'
 import { MainWorkspace } from '@/components/layout/MainWorkspace'
 import { StatusBar } from '@/components/layout/StatusBar'
-import { ConnectionEditor } from '@/components/connections/ConnectionEditor'
-import { CommandCenter } from '@/components/commands/CommandCenter'
-import { CommandEditor } from '@/components/commands/CommandEditor'
-import { RemoteEditorDialog } from '@/components/files/RemoteEditorDialog'
 import { TransferProgressDock } from '@/components/files/TransferProgressDock'
 import { useTunnelStore } from '@/stores/tunnelStore'
 import { useDiagStore } from '@/stores/diagStore'
@@ -46,7 +42,6 @@ import { useTftpStore } from '@/stores/tftpStore'
 import { useUiStore } from '@/stores/uiStore'
 import { matchShortcut, matchShortcutIgnoringShift, resolveShortcuts } from '@/lib/shortcuts'
 import { isCommandDrag, readDraggedCommandId, stripDragPayload } from '@/lib/commandDrag'
-import { SettingsPanel } from '@/components/settings/SettingsPanel'
 import { DangerConfirmDialog, VariablePromptDialog } from '@/components/execution/ExecutionDialogs'
 import { ToastHost } from '@/components/ui'
 import { useSplitStore } from '@/stores/splitStore'
@@ -71,7 +66,24 @@ import { shouldMarkUnread } from '@/lib/tabUnread'
  *   - 真没加载完时才用 PanelSkeleton 兜底，骨架尺寸与真实面板一致。
  */
 import { PanelSkeleton } from './components/panels/PanelSkeleton'
-import { panelIdFor, prefetchPanelsIdle } from './lib/panelPrefetch'
+import { panelIdFor } from './lib/panelPrefetch'
+import { tNow, useI18n } from '@/i18n'
+
+const ConnectionEditor = lazy(() =>
+  import('@/components/connections/ConnectionEditor').then((m) => ({ default: m.ConnectionEditor }))
+)
+const CommandCenter = lazy(() =>
+  import('@/components/commands/CommandCenter').then((m) => ({ default: m.CommandCenter }))
+)
+const CommandEditor = lazy(() =>
+  import('@/components/commands/CommandEditor').then((m) => ({ default: m.CommandEditor }))
+)
+const RemoteEditorDialog = lazy(() =>
+  import('@/components/files/RemoteEditorDialog').then((m) => ({ default: m.RemoteEditorDialog }))
+)
+const SettingsPanel = lazy(() =>
+  import('@/components/settings/SettingsPanel').then((m) => ({ default: m.SettingsPanel }))
+)
 
 const FileManagerPanel = lazy(() =>
   import('@/components/files/FileManagerPanel').then((m) => ({ default: m.FileManagerPanel }))
@@ -188,33 +200,21 @@ export function App(): React.JSX.Element {
     backup: backupOpen,
     transfer: transferOpen
   }
+  const { t } = useI18n()
   const currentPanel = panelIdFor(openMap)
+  const commandCenterOpen = useUiStore((s) => s.commandCenterOpen)
   const PANEL_TITLES: Record<string, string> = {
-    sftp: '文件',
-    diag: '一键诊断巡检',
-    batch: '批量执行',
-    profile: '客户 / 设备档案',
-    metrics: '资源仪表盘',
-    firmware: '固件升级助手',
-    discovery: '设备发现',
-    backup: '配置备份对比',
-    transfer: '传输记录'
+    sftp: t('common.panel.sftp'),
+    diag: t('common.panel.diag'),
+    batch: t('common.panel.batch'),
+    profile: t('common.panel.profile'),
+    metrics: t('common.panel.metrics'),
+    firmware: t('common.panel.firmware'),
+    discovery: t('common.panel.discovery'),
+    backup: t('common.panel.backup'),
+    transfer: t('common.panel.transfer')
   }
   const panelSkeletonTitle = currentPanel ? PANEL_TITLES[currentPanel] : undefined
-
-  /*
-   * 空闲预加载：启动后把尚未加载的面板 chunk 逐步拉下来，并排除当前面板
-   * （它正在加载，不该再排一次队）。切换面板时重跑一次，把「刚用的这个」排除掉。
-   *
-   * 依赖 currentPanel：用户切面板说明带宽/CPU 该优先给这个新面板，
-   * 预加载队列要重新排。cancel 在清理里调用，避免多条队列并行。
-   */
-  useEffect(() => {
-    const handle = prefetchPanelsIdle(currentPanel)
-    return () => handle.cancel()
-  }, [currentPanel])
-
-
 
   const connEditorOpen = useUiStore((s) => s.connEditorOpen)
   const editingConn = useUiStore((s) => s.editingConn)
@@ -319,7 +319,9 @@ export function App(): React.JSX.Element {
         const conn = connections.find((c) => c.id === connectionId)
         if (!conn) {
           // 连接已被删除，跳过
-          console.warn(`会话恢复：连接 ${connectionName} (${connectionId}) 不存在`)
+          console.warn(
+            tNow('common.app.restoreMissing', { name: connectionName, id: connectionId })
+          )
           return
         }
         /*
@@ -590,8 +592,8 @@ export function App(): React.JSX.Element {
       if (state.notice === 'no-remote-trz') {
         useToastStore.getState().push({
           kind: 'warning',
-          title: '远端没有 trz / tsz',
-          detail: '这台机器的 trzsz 没装或不在 PATH 上：apt install trzsz（Debian/Ubuntu）或 brew install trzsz'
+          title: tNow('common.app.noRemoteTrzTitle'),
+          detail: tNow('common.app.noRemoteTrzDetail')
         })
       }
     })
@@ -778,8 +780,8 @@ export function App(): React.JSX.Element {
     if (useSessionStore.getState().sessions.length === 0) {
       useToastStore.getState().push({
         kind: 'warning',
-        title: '请先打开一个 SSH 连接',
-        detail: '然后再把常用命令拖进终端执行'
+        title: tNow('common.app.dropNoSessionTitle'),
+        detail: tNow('common.app.dropNoSessionDetail')
       })
       return
     }
@@ -795,15 +797,21 @@ export function App(): React.JSX.Element {
 
   return (
     <div className="flex h-screen w-screen flex-col overflow-hidden bg-app text-ink-2">
-      {/* ================= 顶部标题栏（36px，中性仪器底） ================= */}
+      {/*
+        * ================= 顶部标题栏（36px，中性仪器底） =================
+        */}
       <TitleBar />
 
-      {/* ================= 主体：活动栏 + 侧栏 + 工作区 ================= */}
+      {/*
+        * ================= 主体：活动栏 + 侧栏 + 工作区 =================
+        */}
       <div className="flex min-h-0 flex-1">
         <ActivityBar />
         <SideNav width={paneSizes.sidebar} onEditConnection={handleEditConnection as never} />
-        {/* 分隔条只在侧栏可见时存在；收起时它会把 6px 热区留在窗口边缘，
-            拖拽会「拖出」一个看不见的侧栏宽度，非常困惑。 */}
+        {/*
+          * 分隔条只在侧栏可见时存在；收起时它会把 6px 热区留在窗口边缘，
+          * 拖拽会「拖出」一个看不见的侧栏宽度，非常困惑。
+          */}
         {sidebarVisible && (
           <PaneResizer
             pane="sidebar"
@@ -823,7 +831,9 @@ export function App(): React.JSX.Element {
           onDrop={handleTerminalDrop}
           onNewConnection={openNewConnection}
         />
-        {/* 命令栏分隔条：与左侧同理，收起时不渲染（否则 6px 热区留在窗口边缘） */}
+        {/*
+          * 命令栏分隔条：与左侧同理，收起时不渲染（否则 6px 热区留在窗口边缘）
+          */}
         {commandRailVisible && (
           <PaneResizer
             pane="commandRail"
@@ -835,25 +845,41 @@ export function App(): React.JSX.Element {
         <CommandRail width={paneSizes.commandRail} onEdit={openCommandEditor} />
       </div>
 
-      {/* ================= 状态栏（28px） ================= */}
+      {/*
+        * ================= 状态栏（28px） =================
+        */}
       <StatusBar />
 
-      {/* 全局传输进度浮层：不依赖文件管理面板，长文件下载也能随时看到进度 */}
+      {/*
+        * 全局传输进度浮层：不依赖文件管理面板，长文件下载也能随时看到进度
+        */}
       <TransferProgressDock />
 
-      <CommandCenter onEdit={openCommandEditor} />
-      <ConnectionEditor
-        open={connEditorOpen}
-        initial={editingConn}
-        preset={connPreset}
-        onClose={closeConnEditor}
-      />
-      <CommandEditor
-        open={cmdEditorOpen}
-        initial={editingCmd}
-        presetGroup={cmdPresetGroup}
-        onClose={() => setCmdEditorOpen(false)}
-      />
+      {commandCenterOpen && (
+        <Suspense fallback={null}>
+          <CommandCenter onEdit={openCommandEditor} />
+        </Suspense>
+      )}
+      {connEditorOpen && (
+        <Suspense fallback={null}>
+          <ConnectionEditor
+            open={connEditorOpen}
+            initial={editingConn}
+            preset={connPreset}
+            onClose={closeConnEditor}
+          />
+        </Suspense>
+      )}
+      {cmdEditorOpen && (
+        <Suspense fallback={null}>
+          <CommandEditor
+            open={cmdEditorOpen}
+            initial={editingCmd}
+            presetGroup={cmdPresetGroup}
+            onClose={() => setCmdEditorOpen(false)}
+          />
+        </Suspense>
+      )}
       {/*
         * 按需加载的功能面板：只有对应开关打开时才挂载并拉取 chunk。
         *
@@ -877,16 +903,22 @@ export function App(): React.JSX.Element {
       </Suspense>
       </div>
       {editing && (
-        <RemoteEditorDialog
-          key={`${editing.sessionId}:${editing.path}`}
-          path={editing.path}
-          content={editing.content}
-          encoding={editing.encoding}
-          onClose={closeEditor}
-          onSave={(content, close) => saveEditor(content, { close })}
-        />
+        <Suspense fallback={null}>
+          <RemoteEditorDialog
+            key={`${editing.sessionId}:${editing.path}`}
+            path={editing.path}
+            content={editing.content}
+            encoding={editing.encoding}
+            onClose={closeEditor}
+            onSave={(content, close) => saveEditor(content, { close })}
+          />
+        </Suspense>
       )}
-      <SettingsPanel open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+      {settingsOpen && (
+        <Suspense fallback={null}>
+          <SettingsPanel open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+        </Suspense>
+      )}
       <VariablePromptDialog />
       <DangerConfirmDialog />
       <ToastHost />
@@ -913,7 +945,7 @@ if (__ZM_TEST__ && typeof window !== 'undefined') {
       layout: useLayoutStore
     },
     /* 终端实例注册表：让验证脚本能读到 xterm 的 buffer 文本。
-       仅在 ZM_TEST 构建里挂载，生产构建没有这个全局。 */
+     * 仅在 ZM_TEST 构建里挂载，生产构建没有这个全局。 */
     terminals: terminalRegistry,
     setters: {
       sftpSet: (v: boolean) => useSftpStore.setState({ open: v }),
@@ -942,12 +974,12 @@ if (__ZM_TEST__ && typeof window !== 'undefined') {
         sessions: Array.from({ length: n }, (_, i) => ({
           id: `smoke-tab-${i}`,
           connectionId: `smoke-conn-${i}`,
-          connectionName: `设备 ${i + 1}`,
+          connectionName: tNow('common.app.smokeDevice', { index: i + 1 }),
           host: `192.168.1.${10 + i}`,
           username: 'root',
           kind: 'ssh' as const,
           target: `root@192.168.1.${10 + i}`,
-          title: `设备 ${i + 1}`,
+          title: tNow('common.app.smokeDevice', { index: i + 1 }),
           status: 'connected' as const,
           cols: 120,
           rows: 32,

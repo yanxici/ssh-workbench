@@ -3,6 +3,7 @@ import type { AppSettings, ThemeMode } from '@shared/types'
 import { call } from '@/lib/ipc'
 import { getThemeVariant, type ThemeVars } from '@/theme/colorThemes'
 import { applyHighlightPrefs } from '@/lib/highlightRuntime'
+import { setActiveLang } from '@/i18n/core'
 
 /** 与主进程 DEFAULT_SETTINGS 对齐的兜底值（加载完成前使用） */
 const FALLBACK: AppSettings = {
@@ -14,7 +15,7 @@ const FALLBACK: AppSettings = {
     lineHeight: 1.35,
     cursorStyle: 'block',
     cursorBlink: true,
-    scrollback: 5000
+    scrollback: 3000
   },
   commandPanelPosition: 'right',
   latencyProbe: true,
@@ -97,6 +98,7 @@ export const useSettingsStore = create<SettingsState>()((set) => ({
   load: async () => {
     const s = await call(window.api.settings.get(), { silent: true })
     const settings = s ?? FALLBACK
+    setActiveLang(settings.language ?? 'zh-CN')
     set({ settings, loaded: true })
     applyTheme(settings.theme, settings.colorTheme)
     applyMotion(settings.experimental?.motion)
@@ -125,6 +127,7 @@ export const useSettingsStore = create<SettingsState>()((set) => ({
     const raw = await window.api.settings.set(patch)
     const next = raw.ok ? raw.data : null
     if (next) {
+      setActiveLang(next.language ?? 'zh-CN')
       set({ settings: next })
       applyTheme(next.theme, next.colorTheme)
       applyMotion(next.experimental?.motion)

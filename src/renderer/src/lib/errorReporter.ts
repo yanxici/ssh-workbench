@@ -10,6 +10,7 @@
  */
 
 import { call } from './ipc'
+import { tNow } from '../i18n/core'
 
 let installed = false
 /** 防止同一个异常在短时间里刷爆日志（主进程还会再做一次聚合，这里是第一道闸） */
@@ -48,7 +49,7 @@ export function installErrorReporter(): void {
     const err: unknown = event.error
     report(
       'window-error',
-      event.message || '未捕获的脚本错误',
+      event.message || tNow('common.error.uncaughtScript'),
       err instanceof Error ? (err.stack ?? err.message) : String(event.message ?? '')
     )
   })
@@ -58,7 +59,7 @@ export function installErrorReporter(): void {
     const reason: unknown = event.reason
     report(
       'unhandled-rejection',
-      '未处理的 Promise 异常',
+      tNow('common.error.unhandledRejection'),
       reason instanceof Error ? (reason.stack ?? reason.message) : String(reason)
     )
   })
@@ -66,5 +67,5 @@ export function installErrorReporter(): void {
 
 /** React 错误边界用：手动上报渲染期异常 */
 export function reportRenderError(error: Error, componentStack?: string): void {
-  report('react-render', '界面渲染出错', (error.stack ?? error.message) + (componentStack ?? ''))
+  report('react-render', tNow('common.error.renderError'), (error.stack ?? error.message) + (componentStack ?? ''))
 }

@@ -18,6 +18,7 @@ import {
 } from '@/stores/updateStore'
 import { cn } from '@/lib/utils'
 import { useOverlayEscape } from '@/lib/overlayKeys'
+import { useI18n, type I18nKey } from '@/i18n'
 
 /**
  * 标题栏右侧的更新入口。
@@ -34,29 +35,36 @@ import { useOverlayEscape } from '@/lib/overlayKeys'
  */
 
 /** chip 上的文案与图标 */
-function chipContent(status: UpdateStatus): {
+function chipContent(
+  status: UpdateStatus,
+  t: (key: I18nKey, vars?: Record<string, string | number>) => string
+): {
   icon: React.JSX.Element
   label: string
   spin?: boolean
 } {
   switch (status.phase) {
     case 'checking':
-      return { icon: <Loader2 size={12} />, label: '检查中', spin: true }
+      return { icon: <Loader2 size={12} />, label: t('common.update.chip.checking'), spin: true }
     case 'downloading':
       return {
         icon: <Download size={12} />,
-        label: status.percent !== undefined ? `${Math.floor(status.percent)}%` : '下载中'
+        label:
+          status.percent !== undefined
+            ? `${Math.floor(status.percent)}%`
+            : t('common.update.chip.downloading')
       }
     case 'downloaded':
-      return { icon: <RotateCcw size={12} />, label: '重启安装' }
+      return { icon: <RotateCcw size={12} />, label: t('common.update.chip.downloaded') }
     case 'available':
-      return { icon: <ArrowUpCircle size={12} />, label: '更新' }
+      return { icon: <ArrowUpCircle size={12} />, label: t('common.update.chip.available') }
     default:
-      return { icon: <Check size={12} />, label: '已是最新' }
+      return { icon: <Check size={12} />, label: t('common.update.chip.latest') }
   }
 }
 
 export function UpdateBadge(): React.JSX.Element | null {
+  const { t } = useI18n()
   const status = useUpdateStore((s) => s.status)
   const panelOpen = useUpdateStore((s) => s.panelOpen)
   const setPanelOpen = useUpdateStore((s) => s.setPanelOpen)
@@ -107,7 +115,7 @@ export function UpdateBadge(): React.JSX.Element | null {
 
   if (!visible || !status) return null
 
-  const chip = chipContent(status)
+  const chip = chipContent(status, t)
 
   return (
     <>
@@ -126,14 +134,14 @@ export function UpdateBadge(): React.JSX.Element | null {
         )}
         title={
           status.phase === 'available'
-            ? `发现新版本 ${status.latestVersion}，点击更新`
+            ? t('common.update.title.available', { version: status.latestVersion ?? '' })
             : status.phase === 'downloaded'
-              ? '更新已下载，点击重启安装'
+              ? t('common.update.title.downloaded')
               : status.phase === 'downloading'
-                ? '正在下载更新'
-                : '正在检查更新'
+                ? t('common.update.title.downloading')
+                : t('common.update.title.checking')
         }
-        aria-label="应用更新"
+        aria-label={t('common.update.ariaLabel')}
         onClick={() => setPanelOpen(!panelOpen)}
       >
         <span className={cn('inline-flex', chip.spin && 'animate-spin')}>{chip.icon}</span>
@@ -146,16 +154,18 @@ export function UpdateBadge(): React.JSX.Element | null {
           className="no-drag fixed z-[70] w-[320px] overflow-hidden rounded-md border border-edge bg-panel text-ink shadow-pop"
           style={{ top: pos.top, right: pos.right }}
           role="dialog"
-          aria-label="应用更新"
+          aria-label={t('common.update.ariaLabel')}
         >
-          {/* 头部：版本对比 */}
+          {/*
+            * 头部：版本对比
+            */}
           <div className="flex items-start gap-2 border-b border-edge-soft px-3 py-2.5">
             <div className="min-w-0 flex-1">
               <div className="text-xs font-semibold">
-                {status.phase === 'available' && '发现新版本'}
-                {status.phase === 'downloading' && '正在下载更新'}
-                {status.phase === 'downloaded' && '更新已就绪'}
-                {status.phase === 'checking' && '正在检查更新'}
+                {status.phase === 'available' && t('common.update.header.available')}
+                {status.phase === 'downloading' && t('common.update.header.downloading')}
+                {status.phase === 'downloaded' && t('common.update.header.downloaded')}
+                {status.phase === 'checking' && t('common.update.header.checking')}
               </div>
               <div className="mt-0.5 font-mono text-2xs text-ink-3">
                 {status.currentVersion}
@@ -174,9 +184,9 @@ export function UpdateBadge(): React.JSX.Element | null {
             </div>
             <button
               type="button"
-              className="titlebar-btn !h-6 !w-6 text-ink-3 hover:!bg-hover hover:!text-ink"
-              title="关闭"
-              aria-label="关闭"
+              className="titlebar-btn !h-6 !w-6 text-ink-3 !hover:bg-hover !hover:text-ink"
+              title={t('common.ui.close')}
+              aria-label={t('common.ui.close')}
               onClick={() => setPanelOpen(false)}
             >
               <X size={12} />
@@ -220,21 +230,21 @@ export function UpdateBadge(): React.JSX.Element | null {
                   onClick={() => void download()}
                 >
                   <Download size={12} />
-                  立即更新
+                  {t('common.update.now')}
                 </button>
                 <button
                   type="button"
                   className="inline-flex h-7 items-center rounded px-2 text-2xs text-ink-3 hover:bg-hover hover:text-ink"
                   onClick={() => void later()}
                 >
-                  稍后
+                  {t('common.update.later')}
                 </button>
               </>
             )}
 
             {status.phase === 'downloading' && (
               <span className="flex-1 text-2xs text-ink-3">
-                下载完成后会提示重启，期间可继续使用。
+                {t('common.update.downloadingNote')}
               </span>
             )}
 
@@ -246,14 +256,14 @@ export function UpdateBadge(): React.JSX.Element | null {
                   onClick={() => void install()}
                 >
                   <RotateCcw size={12} />
-                  重启并安装
+                  {t('common.update.installNow')}
                 </button>
                 <button
                   type="button"
                   className="inline-flex h-7 items-center rounded px-2 text-2xs text-ink-3 hover:bg-hover hover:text-ink"
                   onClick={() => void later()}
                 >
-                  稍后
+                  {t('common.update.later')}
                 </button>
               </>
             )}
@@ -265,7 +275,7 @@ export function UpdateBadge(): React.JSX.Element | null {
                 className="inline-flex h-7 flex-1 items-center justify-center gap-1 rounded border border-edge px-2 text-2xs text-ink-3"
               >
                 <Loader2 size={12} className="animate-spin" />
-                请稍候…
+                {t('common.update.pleaseWait')}
               </button>
             )}
 
@@ -275,15 +285,15 @@ export function UpdateBadge(): React.JSX.Element | null {
                 'inline-flex h-7 shrink-0 items-center gap-1 rounded px-2 text-2xs text-ink-3',
                 'hover:bg-hover hover:text-ink'
               )}
-              title="在浏览器中打开发布页"
+              title={t('common.update.openRelease')}
               onClick={() => void openRelease()}
             >
               <ExternalLink size={12} />
             </button>
             <button
               type="button"
-              className="inline-flex h-7 shrink-0 items-center rounded px-2 text-2xs text-ink-3 hover:bg-hover hover:text-ink"
-              title="重新检查"
+              className="inline-flex h-7 shrink-0 items-center rounded-sm px-2 text-2xs text-ink-3 hover:bg-hover hover:text-ink"
+              title={t('common.update.recheck')}
               onClick={() => void check()}
             >
               <RotateCcw size={12} />

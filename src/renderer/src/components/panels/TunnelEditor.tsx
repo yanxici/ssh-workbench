@@ -14,21 +14,21 @@ import { useTunnelStore } from '@/stores/tunnelStore'
  * 字段随类型（-L / -R / -D）动态调整，保存后立即可启动。
  */
 
-const TYPE_OPTIONS: Array<{ value: TunnelType; label: string; hint: string }> = [
+const TYPE_OPTIONS = [
   {
-    value: 'local',
-    label: '本地 -L',
-    hint: '把「从设备侧可达的服务」映射到本机端口 —— 最常见：访问设备 Web 界面或内网服务'
+    value: 'local' as TunnelType,
+    labelKey: 'panel.tunnel.type.local' as const,
+    hintKey: 'panel.tunnel.type.localHint' as const
   },
   {
-    value: 'remote',
-    label: '远程 -R',
-    hint: '把「从本机可达的服务」临时暴露到设备侧 —— 设备通过它的端口反向访问你电脑'
+    value: 'remote' as TunnelType,
+    labelKey: 'panel.tunnel.type.remote' as const,
+    hintKey: 'panel.tunnel.type.remoteHint' as const
   },
   {
-    value: 'dynamic',
-    label: '动态 -D',
-    hint: '在本机开启一个 SOCKS5 代理，浏览器等工具把它当代理即可让流量经设备出去'
+    value: 'dynamic' as TunnelType,
+    labelKey: 'panel.tunnel.type.dynamic' as const,
+    hintKey: 'panel.tunnel.type.dynamicHint' as const
   }
 ]
 
@@ -122,25 +122,26 @@ export function TunnelEditor({
     setForm((f) => ({ ...f, [key]: value }))
   }
 
-  const typeHint = TYPE_OPTIONS.find((o) => o.value === form.type)?.hint ?? ''
+  const typeOpt = TYPE_OPTIONS.find((o) => o.value === form.type)
+  const typeHint = typeOpt ? t(typeOpt.hintKey) : ''
 
   const validate = (): string | null => {
-    if (!form.name.trim()) return '请填写隧道名称'
+    if (!form.name.trim()) return t('panel.tunnel.errName')
     const bindPort = Number(form.bindPort)
     if (!Number.isInteger(bindPort) || bindPort < 0 || bindPort > 65535) {
-      return '监听端口需为 0-65535 的整数'
+      return t('panel.tunnel.errBindPortRange')
     }
     if (form.type === 'remote' && bindPort === 0) {
       // 允许：由远端服务端自动分配
     } else if (bindPort === 0) {
-      return '监听端口不能为 0（仅远程转发支持 0 = 自动分配）'
+      return t('panel.tunnel.errBindPortZero')
     }
-    if (!form.bindHost.trim()) return '请填写监听地址'
+    if (!form.bindHost.trim()) return t('panel.tunnel.errBindHost')
     if (form.type !== 'dynamic') {
-      if (!form.targetHost.trim()) return '请填写目标地址'
+      if (!form.targetHost.trim()) return t('panel.tunnel.errTargetHost')
       const targetPort = Number(form.targetPort)
       if (!Number.isInteger(targetPort) || targetPort < 1 || targetPort > 65535) {
-        return '目标端口需为 1-65535 的整数'
+        return t('panel.tunnel.errTargetPortRange')
       }
     }
     return null
@@ -176,35 +177,35 @@ export function TunnelEditor({
   return (
     <Modal
       open={open}
-      title={initial ? '编辑隧道' : '新建隧道'}
+      title={initial ? t('panel.tunnel.editTitle') : t('panel.tunnel.newTitle')}
       onClose={onClose}
       footer={
         <>
           <button className="btn h-7 px-3 text-xs" onClick={onClose}>
-            取消
+            {t('panel.tunnel.cancel')}
           </button>
           <button
             className="btn btn-primary h-7 px-3.5 text-xs"
             disabled={saving}
             onClick={() => void submit()}
           >
-            {saving ? '保存中…' : '保存'}
+            {saving ? t('panel.tunnel.saving') : t('panel.tunnel.save')}
           </button>
         </>
       }
     >
       <div className="space-y-3.5">
-        <Field label="名称">
+        <Field label={t('panel.tunnel.fieldName')}>
           <input
             className="input selectable"
             value={form.name}
             onChange={(e) => set('name', e.target.value)}
-            placeholder="例如：设备 Web 界面"
+            placeholder={t('panel.tunnel.fieldNamePlaceholder')}
             autoFocus
           />
         </Field>
 
-        <Field label="转发类型">
+        <Field label={t('panel.tunnel.fieldType')}>
           <div className="flex gap-1.5">
             {TYPE_OPTIONS.map((opt) => (
               <button
@@ -218,23 +219,23 @@ export function TunnelEditor({
                     : 'border-edge bg-raised text-ink-3 hover:text-ink-2'
                 )}
               >
-                {opt.label}
+                {t(opt.labelKey)}
               </button>
             ))}
           </div>
           <div className="mt-1 text-2xs leading-relaxed text-ink-3">{typeHint}</div>
         </Field>
 
-        <Field label="关联连接" hint="启动时优先使用该连接的在线会话；留空则使用当前活动会话">
+        <Field label={t('panel.tunnel.fieldConn')} hint={t('panel.tunnel.fieldConnHint')}>
           <select
             className="input selectable"
             value={form.connectionId}
             onChange={(e) => set('connectionId', e.target.value)}
           >
-            <option value="">自动（当前活动会话）</option>
+            <option value="">{t('panel.tunnel.connAuto')}</option>
             {connections.map((c) => (
               <option key={c.id} value={c.id}>
-                {c.name}（{connectionTarget(c)}）
+                {t('panel.tunnel.connOption', { name: c.name, target: connectionTarget(c) })}
               </option>
             ))}
           </select>
@@ -268,7 +269,9 @@ export function TunnelEditor({
         <div className="grid grid-cols-2 gap-x-3 gap-y-3.5">
           <Field
             label={
-              form.type === 'remote' ? '远端监听地址' : '本机监听地址'
+              form.type === 'remote'
+                ? t('panel.tunnel.fieldRemoteBindHost')
+                : t('panel.tunnel.fieldLocalBindHost')
             }
           >
             <input
@@ -279,7 +282,11 @@ export function TunnelEditor({
             />
           </Field>
           <Field
-            label={form.type === 'remote' ? '远端监听端口（0=自动）' : '本机监听端口'}
+            label={
+              form.type === 'remote'
+                ? t('panel.tunnel.fieldRemoteBindPort')
+                : t('panel.tunnel.fieldLocalBindPort')
+            }
           >
             <input
               className="input selectable font-mono"
@@ -291,12 +298,12 @@ export function TunnelEditor({
         </div>
 
         {/*
-          局域网监听授权。
-          只在监听地址非回环时出现 —— 回环地址本来就不需要授权，
-          常显这个开关反而让人以为「默认就对外暴露」。
-          后端 saveTunnel 会再校验一次，这里提前给出可行动的解释，
-          而不是等保存失败才报错。
-        */}
+         * 局域网监听授权。
+         * 只在监听地址非回环时出现 —— 回环地址本来就不需要授权，
+         * 常显这个开关反而让人以为「默认就对外暴露」。
+         * 后端 saveTunnel 会再校验一次，这里提前给出可行动的解释，
+         * 而不是等保存失败才报错。
+         */}
         {needsLanGrant(form.bindHost) && (
           <div
             className={cn(
@@ -314,12 +321,12 @@ export function TunnelEditor({
                 onChange={(e) => set('allowLan', e.target.checked)}
               />
               <span>
-                允许局域网访问
+                {t('panel.tunnel.allowLan')}
                 <span className="block text-ink-3">
                   {isWildcardHost(form.bindHost)
-                    ? `当前监听 ${form.bindHost} 表示所有网卡。动态代理无认证，开启后同网段的任何机器都能借你的网络上外网。`
-                    : `当前监听 ${form.bindHost}，不在本机回环范围内。开启后同网段可访问该端口。`}
-                  {!form.allowLan && ' 不勾选将无法保存。'}
+                    ? t('panel.tunnel.lanWildcard', { host: form.bindHost })
+                    : t('panel.tunnel.lanNonLoopback', { host: form.bindHost })}
+                  {!form.allowLan && t('panel.tunnel.lanRequired')}
                 </span>
               </span>
             </label>
@@ -329,16 +336,20 @@ export function TunnelEditor({
         {form.type !== 'dynamic' && (
           <div className="grid grid-cols-2 gap-x-3 gap-y-3.5">
             <Field
-              label={form.type === 'local' ? '目标地址（从设备侧可达）' : '目标地址（本机）'}
+              label={
+                form.type === 'local'
+                  ? t('panel.tunnel.fieldTargetHostLocal')
+                  : t('panel.tunnel.fieldTargetHostRemote')
+              }
             >
               <input
                 className="input selectable"
                 value={form.targetHost}
                 onChange={(e) => set('targetHost', e.target.value)}
-                placeholder="127.0.0.1 或内网 IP"
+                placeholder={t('panel.tunnel.fieldTargetHostPlaceholder')}
               />
             </Field>
-            <Field label="目标端口">
+            <Field label={t('panel.tunnel.fieldTargetPort')}>
               <input
                 className="input selectable font-mono"
                 value={form.targetPort}
@@ -349,12 +360,12 @@ export function TunnelEditor({
           </div>
         )}
 
-        <Field label="备注">
+        <Field label={t('panel.tunnel.fieldRemark')}>
           <input
             className="input selectable"
             value={form.remark}
             onChange={(e) => set('remark', e.target.value)}
-            placeholder="可选"
+            placeholder={t('panel.tunnel.fieldRemarkPlaceholder')}
           />
         </Field>
 

@@ -7,6 +7,7 @@ import { call } from '@/lib/ipc'
 import { cn, remoteDirname, remoteJoin } from '@/lib/utils'
 import { normalizeRemoteDir, rememberUploadDir } from '@/lib/uploadDir'
 import { isImeComposing } from '@/lib/ime'
+import { tNow, useI18n } from '@/i18n'
 
 /**
  * 上传目标目录选择器。
@@ -39,6 +40,7 @@ export function UploadTargetDialog({
   /** force=true 表示不跳过「大小与修改时间都一致」的文件，整份重传 */
   onConfirm: (dir: string, force: boolean) => void
 }): React.JSX.Element | null {
+  const { t } = useI18n()
   const [dir, setDir] = useState(defaultDir)
   const [input, setInput] = useState(defaultDir)
   const [dirs, setDirs] = useState<RemoteFile[] | null>(null)
@@ -77,7 +79,7 @@ export function UploadTargetDialog({
         if (cancelled) return
         if (!list) {
           setDirs([])
-          setError('无法读取该目录，请检查路径或权限')
+          setError(tNow('files.ui.uploadDlg.errList'))
           return
         }
         setDirs(list.filter((f) => f.type === 'directory'))
@@ -104,7 +106,7 @@ export function UploadTargetDialog({
      */
     const target = normalizeRemoteDir(input)
     if (!target) {
-      setError('请先选择或填写目标目录')
+      setError(t('files.ui.uploadDlg.errEmpty'))
       return
     }
     rememberUploadDir(sessionId, target)
@@ -114,7 +116,7 @@ export function UploadTargetDialog({
   const goInput = (): void => {
     const next = normalizeRemoteDir(input)
     if (!next) {
-      setError('请先选择或填写目标目录')
+      setError(t('files.ui.uploadDlg.errEmpty'))
       return
     }
     setDir(next)
@@ -124,7 +126,7 @@ export function UploadTargetDialog({
     const home = await call(window.api.sftp.home(sessionId), { silent: true })
     const next = normalizeRemoteDir(home)
     if (next) setDir(next)
-    else setError('无法获取远端主目录')
+    else setError(t('files.ui.uploadDlg.errHome'))
   }
 
   const createDir = async (name: string): Promise<void> => {
@@ -133,7 +135,7 @@ export function UploadTargetDialog({
     const base = normalizeRemoteDir(input) || normalized || '/'
     const target = remoteJoin(base, name)
     const done = await call(window.api.sftp.mkdir(sessionId, target), {
-      errorTitle: '新建文件夹失败'
+      errorTitle: t('files.ui.err.mkdir')
     })
     if (done !== null) setDir(target)
   }
@@ -142,28 +144,32 @@ export function UploadTargetDialog({
     <>
       <Modal
         open={open}
-        title={kind === 'folder' ? '上传文件夹到远端目录' : '上传到远端目录'}
+        title={kind === 'folder' ? t('files.ui.uploadDlg.titleFolder') : t('files.ui.uploadDlg.titleFile')}
         onClose={onCancel}
         width="max-w-md"
         footer={
           <>
             <button className="btn" onClick={onCancel}>
-              取消
+              {t('files.ui.cancel')}
             </button>
             <button className="btn btn-primary" disabled={busy} onClick={submit}>
-              {busy ? '正在准备…' : kind === 'folder' ? '选择文件夹并上传' : '选择文件并上传'}
+              {busy
+                ? t('files.ui.uploadDlg.preparing')
+                : kind === 'folder'
+                  ? t('files.ui.uploadDlg.pickFolder')
+                  : t('files.ui.uploadDlg.pickFile')}
             </button>
           </>
         }
       >
         <div className="flex flex-col gap-3">
           <div>
-            <div className="field-label mb-1">目标目录</div>
+            <div className="field-label mb-1">{t('files.ui.uploadDlg.targetLabel')}</div>
             <div className="flex items-center gap-1.5">
               <input
                 className="input selectable min-w-0 flex-1 font-mono"
                 value={input}
-                placeholder="例如 /home/user 或 /tmp"
+                placeholder={t('files.ui.uploadDlg.targetPlaceholder')}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={(e) => {
                   if (isImeComposing(e)) return
@@ -172,7 +178,7 @@ export function UploadTargetDialog({
               />
               <button
                 className="btn-icon shrink-0"
-                title="上级目录"
+                title={t('files.ui.parentDir')}
                 disabled={!normalized}
                 onClick={() => setDir(remoteDirname(normalized || '/'))}
               >
@@ -180,14 +186,14 @@ export function UploadTargetDialog({
               </button>
               <button
                 className="btn-icon shrink-0"
-                title="回到主目录"
+                title={t('files.ui.uploadDlg.goHome')}
                 onClick={() => void gotoHome()}
               >
                 <Folder size={13} />
               </button>
               <button
                 className="btn-icon shrink-0"
-                title="在此新建文件夹"
+                title={t('files.ui.uploadDlg.mkdirHere')}
                 onClick={() => setMkdirOpen(true)}
               >
                 <FolderPlus size={13} />
@@ -205,9 +211,9 @@ export function UploadTargetDialog({
                 onChange={(e) => setForce(e.target.checked)}
               />
               <span>
-                强制全量重传
+                {t('files.ui.uploadDlg.forceAll')}
                 <span className="ml-1 text-3xs text-ink-3">
-                  （默认跳过远端已有且大小、修改时间都一致的文件）
+                  {t('files.ui.uploadDlg.forceAllHint')}
                 </span>
               </span>
             </label>
@@ -216,23 +222,23 @@ export function UploadTargetDialog({
           <div className="rounded-md border border-edge bg-app/60">
             <div className="flex h-7 items-center gap-1.5 border-b border-edge px-2">
               <span className="min-w-0 flex-1 truncate font-mono text-2xs text-ink-2" title={normalized}>
-                {normalized || '未选择目录'}
+                {normalized || t('files.ui.noDirSelected')}
               </span>
               {loading && <Loader2 size={11} className="animate-spin text-ink-3" />}
             </div>
             <div className="scroll-thin max-h-[38vh] min-h-[96px] overflow-y-auto py-1">
               {!normalized && (
                 <div className="px-2 py-2 text-2xs text-ink-3">
-                  还没有可靠的目标目录，请在上方填写或点主目录图标选择。
+                  {t('files.ui.uploadDlg.needTargetHint')}
                 </div>
               )}
               {normalized && dirs === null && loading && (
                 <div className="flex items-center gap-2 px-2 py-2 text-2xs text-ink-3">
-                  <Loader2 size={11} className="animate-spin" /> 读取中…
+                  <Loader2 size={11} className="animate-spin" /> {t('files.ui.reading')}
                 </div>
               )}
               {normalized && dirs?.length === 0 && !loading && (
-                <div className="px-2 py-2 text-2xs text-ink-3">该目录下没有子目录</div>
+                <div className="px-2 py-2 text-2xs text-ink-3">{t('files.ui.uploadDlg.noSubdirs')}</div>
               )}
               {dirs?.map((d) => (
                 <button
@@ -257,9 +263,9 @@ export function UploadTargetDialog({
 
       <PromptDialog
         open={open && mkdirOpen}
-        title="新建文件夹"
-        label="文件夹名称"
-        confirmText="创建"
+        title={t('files.ui.newFolder')}
+        label={t('files.ui.folderName')}
+        confirmText={t('files.ui.create')}
         onCancel={() => setMkdirOpen(false)}
         onConfirm={(value) => {
           setMkdirOpen(false)

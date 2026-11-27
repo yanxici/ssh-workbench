@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import type { TftpLogEvent, TftpServerState } from '@shared/types'
 import { call } from '@/lib/ipc'
+import { tNow } from '@/i18n/core'
 import { notifyTask } from '@/lib/taskNotify'
 
 /**
@@ -27,9 +28,9 @@ const MAX_LOGS = 200
  * 返回 null 表示这条日志与「结束」无关。
  */
 function completionOf(message: string): { ok: boolean; detail: string } | null {
-  if (message.startsWith('固件传输完成')) return { ok: true, detail: message }
+  if (message.startsWith('\u56fa\u4ef6\u4f20\u8f93\u5b8c\u6210')) return { ok: true, detail: message }
   // 失败收口：'传输结束：超时' / '传输出错' / '对端中止' / '新的请求到达，放弃旧传输'
-  const m = /^传输结束[:：](.+)$/.exec(message)
+  const m = /^\u4f20\u8f93\u7ed3\u675f[:\uff1a](.+)$/.exec(message)
   if (m) return { ok: false, detail: m[1] }
   return null
 }
@@ -63,7 +64,7 @@ export const useTftpStore = create<TftpState>((set, get) => ({
   start: async (filePath, port) => {
     set({ busy: true })
     const next = await call(window.api.tftp.start(filePath, port), {
-      errorTitle: '启动 TFTP 服务端失败'
+      errorTitle: tNow('term.tftp.startFailed')
     })
     set({ busy: false })
     if (!next) return false
@@ -73,7 +74,9 @@ export const useTftpStore = create<TftpState>((set, get) => ({
 
   stop: async () => {
     set({ busy: true })
-    const next = await call(window.api.tftp.stop(), { errorTitle: '停止 TFTP 服务端失败' })
+    const next = await call(window.api.tftp.stop(), {
+      errorTitle: tNow('term.tftp.stopFailed')
+    })
     set({ busy: false })
     if (next) set({ server: next })
   },
@@ -93,7 +96,7 @@ export const useTftpStore = create<TftpState>((set, get) => ({
       if (done) {
         void notifyTask({
           kind: 'tftp',
-          title: done.ok ? '固件传输完成' : '固件传输未完成',
+          title: done.ok ? tNow('term.tftp.done') : tNow('term.tftp.incomplete'),
           detail: done.detail
         })
       }

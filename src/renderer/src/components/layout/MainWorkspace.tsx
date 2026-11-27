@@ -52,6 +52,7 @@ function SplitDivider({
   ownerId: string
   containerRef: React.RefObject<HTMLDivElement | null>
 }): React.JSX.Element {
+  const { t } = useI18n()
   const row = divider.dir === 'row'
 
   const onPointerDown = (e: React.PointerEvent<HTMLDivElement>): void => {
@@ -93,7 +94,7 @@ function SplitDivider({
     <div
       role="separator"
       aria-orientation={row ? 'vertical' : 'horizontal'}
-      aria-label="调整分屏比例"
+      aria-label={t('common.workspace.splitDivider')}
       className={cn(
         'group/sd absolute z-20',
         row ? 'w-[6px] cursor-col-resize' : 'h-[6px] cursor-row-resize'
@@ -314,7 +315,9 @@ export function MainWorkspace({
         </div>
       )}
 
-      {/* ZMODEM 传输确认与进度（跟随当前活动会话） */}
+      {/*
+        * ZMODEM 传输确认与进度（跟随当前活动会话）
+        */}
       <ZmodemOverlay />
     </main>
   )

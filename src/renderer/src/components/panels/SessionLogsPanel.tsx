@@ -2,6 +2,7 @@ import type * as React from 'react'
 import { useEffect, useState } from 'react'
 import { Download, FolderOpen, Play, RefreshCw, ScrollText, Search, Trash2 } from 'lucide-react'
 import type { SessionLogFile } from '@shared/types'
+import { useI18n } from '@/i18n'
 import { call } from '@/lib/ipc'
 import { cn, formatBytes, formatTime } from '@/lib/utils'
 import { ConfirmDialog, EmptyState } from '@/components/ui'
@@ -22,6 +23,7 @@ function parseLogName(name: string): { title: string; time: string } {
  * 列出自动录制产生的 cast 文件，支持搜索、回放、导出、删除。
  */
 export function SessionLogsPanel(): React.JSX.Element {
+  const { t } = useI18n()
   const [logs, setLogs] = useState<SessionLogFile[]>([])
   const [loading, setLoading] = useState(false)
   const [keyword, setKeyword] = useState('')
@@ -43,9 +45,15 @@ export function SessionLogsPanel(): React.JSX.Element {
   const filtered = kw ? logs.filter((l) => l.name.toLowerCase().includes(kw)) : logs
 
   const exportLog = async (log: SessionLogFile): Promise<void> => {
-    const res = await call(window.api.logs.exportOne(log.path), { errorTitle: '导出失败' })
+    const res = await call(window.api.logs.exportOne(log.path), {
+      errorTitle: t('panel.logs.exportError')
+    })
     if (res && !res.canceled) {
-      useToastStore.getState().push({ kind: 'success', title: '已导出会话日志', detail: res.path })
+      useToastStore.getState().push({
+        kind: 'success',
+        title: t('panel.logs.exported'),
+        detail: res.path
+      })
     }
   }
 
@@ -53,17 +61,17 @@ export function SessionLogsPanel(): React.JSX.Element {
     <div className="flex h-full flex-col">
       <div className="panel-head">
         <ScrollText size={13} className="shrink-0 text-ink-3" />
-        <span className="panel-title">会话日志</span>
+        <span className="panel-title">{t('panel.logs.title')}</span>
         <span className="panel-count">{logs.length}</span>
         <span className="flex-1" />
         <button
           className="btn-icon h-6 w-6"
-          title="打开日志目录"
+          title={t('panel.logs.openDir')}
           onClick={() => void call(window.api.logs.openDir(), { silent: true })}
         >
           <FolderOpen size={13} />
         </button>
-        <button className="btn-icon h-6 w-6" title="刷新" onClick={() => void reload()}>
+        <button className="btn-icon h-6 w-6" title={t('panel.logs.refresh')} onClick={() => void reload()}>
           <RefreshCw size={13} className={cn(loading && 'animate-spin')} />
         </button>
       </div>
@@ -76,7 +84,7 @@ export function SessionLogsPanel(): React.JSX.Element {
           />
           <input
             className="input h-7 pl-7 text-xs"
-            placeholder="搜索会话名 / 日期…"
+            placeholder={t('panel.logs.searchPlaceholder')}
             value={keyword}
             onChange={(e) => setKeyword(e.target.value)}
           />
@@ -87,11 +95,11 @@ export function SessionLogsPanel(): React.JSX.Element {
         {filtered.length === 0 && (
           <EmptyState
             icon={<ScrollText size={24} />}
-            title={logs.length === 0 ? '还没有会话日志' : '没有匹配的日志'}
+            title={logs.length === 0 ? t('panel.logs.emptyTitle') : t('panel.logs.emptySearchTitle')}
             hint={
               logs.length === 0
-                ? '连接设备后会自动录制终端输入输出（设置中可关闭），录制文件可在此回放、导出'
-                : '换个关键字试试'
+                ? t('panel.logs.emptyHint')
+                : t('panel.logs.emptySearchHint')
             }
           />
         )}
@@ -109,10 +117,14 @@ export function SessionLogsPanel(): React.JSX.Element {
                     'h-1.5 w-1.5 shrink-0 rounded-full',
                     log.format === 'log' ? 'bg-ink-3/60' : 'bg-danger/70'
                   )}
-                  title={log.format === 'log' ? '纯文本日志' : '录制文件'}
+                  title={
+                    log.format === 'log' ? t('panel.logs.formatText') : t('panel.logs.formatCast')
+                  }
                 />
                 <span className="min-w-0 flex-1 truncate text-xs text-ink">{title}</span>
-                {/* 同名两份是常态，纯文本那份必须能被一眼认出 —— 否则用户每次都得靠后缀猜 */}
+                {/*
+                 * 同名两份是常态，纯文本那份必须能被一眼认出 —— 否则用户每次都得靠后缀猜
+                 */}
                 {log.format === 'log' && (
                   <span className="shrink-0 rounded border border-edge px-1 text-3xs text-ink-3">
                     txt
@@ -125,11 +137,13 @@ export function SessionLogsPanel(): React.JSX.Element {
               <div className="mt-0.5 flex items-center gap-1.5 pl-3 text-3xs text-ink-3">
                 <span>{time || formatTime(log.mtime)}</span>
                 <span className="flex-1" />
-                {/* 纯文本没有时间轴，回放没有意义；不给按钮而不是给个点了没反应的按钮 */}
+                {/*
+                 * 纯文本没有时间轴，回放没有意义；不给按钮而不是给个点了没反应的按钮
+                 */}
                 {log.format !== 'log' && (
                   <button
                     className="btn-icon h-5 w-5 opacity-0 group-hover:opacity-100"
-                    title="回放"
+                    title={t('panel.logs.replay')}
                     onClick={() => setPlaying(log)}
                   >
                     <Play size={11} />
@@ -139,8 +153,8 @@ export function SessionLogsPanel(): React.JSX.Element {
                   className="btn-icon h-5 w-5 opacity-0 group-hover:opacity-100"
                   title={
                     log.format === 'log'
-                      ? '导出纯文本（可直接 grep 或发给同事）'
-                      : '导出（可分享给他人或用 asciinema 播放）'
+                      ? t('panel.logs.exportTextTitle')
+                      : t('panel.logs.exportCastTitle')
                   }
                   onClick={() => void exportLog(log)}
                 >
@@ -148,7 +162,7 @@ export function SessionLogsPanel(): React.JSX.Element {
                 </button>
                 <button
                   className="btn-icon h-5 w-5 opacity-0 hover:text-danger group-hover:opacity-100"
-                  title="删除"
+                  title={t('panel.logs.delete')}
                   onClick={() => setPendingDelete(log)}
                 >
                   <Trash2 size={11} />
@@ -163,16 +177,18 @@ export function SessionLogsPanel(): React.JSX.Element {
 
       <ConfirmDialog
         open={pendingDelete !== null}
-        title="删除会话日志"
+        title={t('panel.logs.deleteTitle')}
         danger
-        confirmText="删除"
+        confirmText={t('panel.logs.deleteConfirm')}
         message={
           <>
-            确定删除日志
+            {t('panel.logs.deletePrefix')}
             <span className="font-medium text-ink">
-              「{pendingDelete ? parseLogName(pendingDelete.name).title : ''}」
+              {t('panel.logs.deleteQuoted', {
+                name: pendingDelete ? parseLogName(pendingDelete.name).title : ''
+              })}
             </span>
-            吗？该操作不可撤销。
+            {t('panel.logs.deleteSuffix')}
           </>
         }
         onCancel={() => setPendingDelete(null)}

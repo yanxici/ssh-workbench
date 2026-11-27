@@ -2,6 +2,7 @@ import { useEffect } from 'react'
 import type * as React from 'react'
 import { ArrowDownToLine, ArrowLeft, ArrowRight, FolderTree, X } from 'lucide-react'
 import { useOverlayEscape } from '@/lib/overlayKeys'
+import { useI18n } from '@/i18n'
 import { useSftpStore } from '@/stores/sftpStore'
 import { LocalPane } from './LocalPane'
 import { RemotePane } from './RemotePane'
@@ -14,6 +15,7 @@ import { UploadTargetDialog } from './UploadTargetDialog'
  * 传输进度统一由全局 TransferProgressDock 展示（不随面板开关消失）。
  */
 export function FileManagerPanel(): React.JSX.Element | null {
+  const { t } = useI18n()
   const open = useSftpStore((s) => s.open)
   const sessionTitle = useSftpStore((s) => s.sessionTitle)
   const close = useSftpStore((s) => s.close)
@@ -56,27 +58,29 @@ export function FileManagerPanel(): React.JSX.Element | null {
     <div className="panel-shell fixed inset-x-0 z-30 flex flex-col bg-app">
       <div className="flex h-9 shrink-0 items-center gap-2 border-b border-edge bg-panel px-3">
         <FolderTree size={14} className="text-accent" />
-        <span className="text-xs font-semibold">文件管理</span>
+        <span className="text-xs font-semibold">{t('files.ui.managerTitle')}</span>
         <span className="max-w-[280px] truncate text-2xs text-ink-3">{sessionTitle}</span>
         <ShellModeBadge sessionId={sessionId} />
         <span className="flex-1" />
         <span className="hidden truncate text-2xs text-ink-3 lg:block">
-          双击目录进入 · 双击远程文件编辑 · 拖拽两侧互相传输
+          {t('files.ui.manager.hint')}
         </span>
         {transfers.length > 0 && (
           <button
-            className="flex items-center gap-1 rounded border border-edge-soft px-1.5 py-0.5 text-2xs text-ink-3 transition-colors hover:bg-hover hover:text-ink"
-            title="打开传输进度浮层"
+            className="flex items-center gap-1 rounded-sm border border-edge-soft px-1.5 py-0.5 text-2xs text-ink-3 transition-colors hover:bg-hover hover:text-ink"
+            title={t('files.ui.manager.openDock')}
             onClick={showDock}
           >
             <ArrowDownToLine
               size={11}
               className={activeCount > 0 ? 'text-accent' : 'text-success'}
             />
-            {activeCount > 0 ? `${activeCount} 项传输中` : '传输记录'}
+            {activeCount > 0
+              ? t('files.ui.manager.activeCount', { count: activeCount })
+              : t('files.ui.manager.records')}
           </button>
         )}
-        <button className="btn-icon" title="关闭 (Esc)" onClick={close}>
+        <button className="btn-icon" title={t('files.ui.closeEsc')} onClick={close}>
           <X size={14} />
         </button>
       </div>
@@ -89,7 +93,7 @@ export function FileManagerPanel(): React.JSX.Element | null {
         <div className="flex w-[52px] shrink-0 flex-col items-center justify-center gap-3 border-x border-edge-soft bg-panel/50">
           <button
             className="btn-icon h-8 w-8"
-            title={`上传选中项（已选 ${localSel.length}，可改目标目录）`}
+            title={t('files.ui.manager.uploadSelTitle', { count: localSel.length })}
             disabled={localSel.length === 0}
             onClick={() => void requestUpload(sessionId, localSel)}
           >
@@ -97,7 +101,7 @@ export function FileManagerPanel(): React.JSX.Element | null {
           </button>
           <button
             className="btn-icon h-8 w-8"
-            title={`下载选中项到左侧目录（已选 ${remoteSel.length}）`}
+            title={t('files.ui.manager.downloadSelTitle', { count: remoteSel.length })}
             disabled={remoteSel.length === 0}
             onClick={() => void downloadPaths(sessionId, remoteSel)}
           >
@@ -110,14 +114,19 @@ export function FileManagerPanel(): React.JSX.Element | null {
         </div>
       </div>
 
-      {/* 上传目标目录确认（双栏里点上传 / 拖拽本地文件过来时都会先走这里） */}
+      {/*
+       * 上传目标目录确认（双栏里点上传 / 拖拽本地文件过来时都会先走这里）
+       */}
       <UploadTargetDialog
         open={uploadRequest !== null}
         sessionId={sessionId ?? ''}
         defaultDir={uploadRequest?.defaultDir ?? ''}
         hint={
           uploadRequest
-            ? `共 ${uploadRequest.localPaths.length} 项 · 右侧当前：${remoteDir || '未进入目录'}`
+            ? t('files.ui.manager.uploadHint', {
+                count: uploadRequest.localPaths.length,
+                dir: remoteDir || t('files.ui.manager.noDirYet')
+              })
             : undefined
         }
         onCancel={cancelUploadRequest}

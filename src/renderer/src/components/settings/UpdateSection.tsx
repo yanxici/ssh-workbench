@@ -105,7 +105,9 @@ export function UpdateSection(): React.JSX.Element {
           </div>
         </div>
 
-        {/* 操作按钮：按阶段只给「下一步该干的那件事」，不摆一排灰按钮 */}
+        {/*
+          * 操作按钮：按阶段只给「下一步该干的那件事」，不摆一排灰按钮
+          */}
         <div className="mt-2 flex flex-wrap items-center gap-1.5">
           {phase === 'available' && (
             <button className="btn h-6 gap-1 px-2 text-2xs" onClick={() => void download()}>
@@ -127,7 +129,9 @@ export function UpdateSection(): React.JSX.Element {
             <ExternalLink size={11} />
             {t('update.openRelease')}
           </button>
-          {/* GitHub 在国内经常连不上，给一条能真下到包的替代入口 */}
+          {/*
+            * GitHub 在国内经常连不上，给一条能真下到包的替代入口
+            */}
           <button
             className="btn-ghost h-6 gap-1 px-2 text-2xs"
             title={t('update.openGitee.title')}

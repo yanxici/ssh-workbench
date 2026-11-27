@@ -55,9 +55,9 @@ let total = 0
  * 把它算进来，每新增一个词表键都会让「硬编码」这个数字变大 —— 恰好惩罚了
  * 正确做法。判据的其余部分保持不变：组件里新增的中文照样会被抓。
  */
-const DICT_FILE = path.join(RENDERER, 'i18n', 'index.ts')
+const DICT_DIR = path.join(RENDERER, 'i18n') + path.sep
 for (const file of walk(RENDERER, [])) {
-  if (file === DICT_FILE) continue
+  if (file.startsWith(DICT_DIR)) continue
   const rel = path.relative(ROOT, file).replace(/\\/g, '/')
   let n = 0
   for (const line of fs.readFileSync(file, 'utf8').split(/\r?\n/)) {

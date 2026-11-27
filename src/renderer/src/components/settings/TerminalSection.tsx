@@ -86,7 +86,7 @@ export function TerminalSection(): React.JSX.Element {
   return (
     <>
       <div className="grid grid-cols-2 gap-2.5">
-        <Row label="字号">
+        <Row label={t('settings.ext.terminal.fontSize')}>
           <NumericField
             className="input w-16 text-center"
             min={8}
@@ -97,7 +97,7 @@ export function TerminalSection(): React.JSX.Element {
             onCommit={(next) => setTerminal({ fontSize: next })}
           />
         </Row>
-        <Row label="行高">
+        <Row label={t('settings.ext.terminal.lineHeight')}>
           <NumericField
             className="input w-16 text-center"
             min={1}
@@ -109,24 +109,27 @@ export function TerminalSection(): React.JSX.Element {
           />
         </Row>
       </div>
-      <Row label="光标样式">
+      <Row label={t('settings.ext.terminal.cursorStyle')}>
         <Segmented
           value={settings.terminal.cursorStyle}
           options={[
-            { value: 'block' as const, label: '方块' },
-            { value: 'underline' as const, label: '下划线' },
-            { value: 'bar' as const, label: '竖线' }
+            { value: 'block' as const, label: t('settings.ext.terminal.cursorBlock') },
+            { value: 'underline' as const, label: t('settings.ext.terminal.cursorUnderline') },
+            { value: 'bar' as const, label: t('settings.ext.terminal.cursorBar') }
           ]}
           onChange={(v) => setTerminal({ cursorStyle: v })}
         />
       </Row>
-      <Row label="光标闪烁">
+      <Row label={t('settings.ext.terminal.cursorBlink')}>
         <Toggle
           checked={settings.terminal.cursorBlink}
           onChange={(v) => setTerminal({ cursorBlink: v })}
         />
       </Row>
-      <Row label="回滚缓冲行数" hint="终端可向上滚动的历史行数">
+      <Row
+        label={t('settings.ext.terminal.scrollback')}
+        hint={t('settings.ext.terminal.scrollbackHint')}
+      >
         <NumericField
           className="input w-20 text-center"
           min={500}

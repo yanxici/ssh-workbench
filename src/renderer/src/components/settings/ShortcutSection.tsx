@@ -7,6 +7,7 @@ import { detectShortcutConflicts, checkSingleConflict } from '@/lib/shortcutConf
 import { useSettingsStore } from '@/stores/settingsStore'
 import { cn } from '@/lib/utils'
 import { Modal } from '@/components/ui'
+import { useI18n } from '@/i18n'
 
 /**
  * 设置 → 快捷键：点击后按下新组合键即可录制；Esc 取消、Backspace 清空。
@@ -15,6 +16,7 @@ import { Modal } from '@/components/ui'
  * 先弹窗告诉用户「被谁占了」，由他决定取消还是强制保存。
  */
 export function ShortcutSection(): React.JSX.Element {
+  const { t } = useI18n()
   const settings = useSettingsStore((s) => s.settings)
   const update = useSettingsStore((s) => s.update)
   const current = resolveShortcuts(settings.shortcuts)
@@ -105,11 +107,13 @@ export function ShortcutSection(): React.JSX.Element {
     }
     // 只接受「修饰键 + 单键」
     if (!e.ctrlKey && !e.metaKey && !e.altKey) {
-      if (e.key === 'Tab') return // Tab 需配合修饰键才有意义
+      // Tab 需配合修饰键才有意义
+      if (e.key === 'Tab') return
       return
     }
     const key = e.key.toLowerCase()
-    if (['control', 'shift', 'alt', 'meta'].includes(key)) return // 单独按修饰键不提交
+    // 单独按修饰键不提交
+    if (['control', 'shift', 'alt', 'meta'].includes(key)) return
     const combo = [
       e.ctrlKey || e.metaKey ? 'Ctrl' : '',
       e.altKey ? 'Alt' : '',
@@ -129,29 +133,33 @@ export function ShortcutSection(): React.JSX.Element {
      */
     <div className="space-y-1.5" onKeyDownCapture={onKeyDown}>
       <div className="mb-1 text-2xs leading-relaxed text-ink-3">
-        点击右侧键位进入录制，按下新组合键即保存；<kbd className="kbd">Esc</kbd> 取消、
-        <kbd className="kbd">Backspace</kbd> 清除该项。
+        {t('settings.ext.shortcuts.introBeforeEsc')}
+        <kbd className="kbd">Esc</kbd>
+        {t('settings.ext.shortcuts.introBetween')}
+        <kbd className="kbd">Backspace</kbd>
+        {t('settings.ext.shortcuts.introAfterBackspace')}
       </div>
 
       {conflicts.length > 0 && (
         <div className="mb-2 flex items-start gap-2 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2">
           <AlertTriangle size={14} className="mt-0.5 shrink-0 text-warning" />
           <div className="min-w-0 flex-1 text-2xs leading-relaxed text-ink-2">
-            检测到 {conflicts.length} 个快捷键冲突：
+            {t('settings.ext.shortcuts.conflictsFound', { count: conflicts.length })}
             {conflicts.map((c, i) => (
               <div key={i} className="mt-1">
-                <code className="text-warning">{c.combo}</code> 被分配给：
-                {c.actions.map((a) => a.label).join('、')}
+                <code className="text-warning">{c.combo}</code>
+                {t('settings.ext.shortcuts.assignedTo')}
+                {c.actions.map((a) => a.label).join(t('settings.ext.shortcuts.listSep'))}
               </div>
             ))}
           </div>
           <button
             className="btn shrink-0 whitespace-nowrap px-2 py-0.5 text-2xs"
-            title="把上面这些冲突项全部恢复默认（不影响其它已自定义的键）"
+            title={t('settings.ext.shortcuts.resetConflictsTitle')}
             onClick={resetConflicts}
           >
             <RotateCcw size={10} />
-            全部恢复默认
+            {t('settings.ext.shortcuts.resetAll')}
           </button>
         </div>
       )}
@@ -167,13 +175,17 @@ export function ShortcutSection(): React.JSX.Element {
           >
             <div className="min-w-0">
               <div className="text-xs text-ink-2">{action.label}</div>
-              {isDefault && <div className="text-3xs text-ink-3/70">使用默认值</div>}
+              {isDefault && (
+                <div className="text-3xs text-ink-3/70">
+                  {t('settings.ext.shortcuts.defaultBadge')}
+                </div>
+              )}
             </div>
             <div className="flex shrink-0 items-center gap-1.5">
               {!isDefault && (
                 <button
                   className="btn-icon h-6 w-6 hover:text-warning"
-                  title={`恢复默认：${action.default}`}
+                  title={t('settings.ext.shortcuts.resetOneTitle', { combo: action.default })}
                   onClick={() => commit(action.id, undefined)}
                 >
                   <RotateCcw size={11} />
@@ -189,21 +201,20 @@ export function ShortcutSection(): React.JSX.Element {
                 onClick={() => setRecording(isRecording ? null : action.id)}
               >
                 <Keyboard size={11} />
-                {isRecording ? '按下键…' : value}
+                {isRecording ? t('settings.ext.shortcuts.pressKey') : value}
               </button>
             </div>
           </div>
         )
       })}
       <div className="pt-1 text-3xs leading-relaxed text-ink-3/70">
-        提示：终端内「搜索 / 复制 / 粘贴」的组合键（Ctrl+F / Ctrl+C / Ctrl+V）在此配置后，
-        在终端聚焦时同样生效；避免与系统/浏览器快捷键冲突。
+        {t('settings.ext.shortcuts.terminalTip')}
       </div>
 
       {conflictWarning && (
         <Modal
           open
-          title="快捷键冲突"
+          title={t('settings.ext.shortcuts.conflictModalTitle')}
           onClose={() => {
             setConflictWarning(null)
             setPendingCombo('')
@@ -214,15 +225,17 @@ export function ShortcutSection(): React.JSX.Element {
             <div className="flex items-start gap-2 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2">
               <AlertTriangle size={16} className="mt-0.5 shrink-0 text-warning" />
               <div className="text-xs text-ink-2">
-                快捷键{' '}
-                <code className="rounded bg-raised px-1 py-0.5 font-mono text-warning">
+                {t('settings.ext.shortcuts.conflictUsedBefore')}
+                <code className="rounded-sm bg-raised px-1 py-0.5 font-mono text-warning">
                   {pendingCombo}
-                </code>{' '}
-                已被「{conflictWarning.conflict}」使用。
+                </code>
+                {t('settings.ext.shortcuts.conflictUsedAfter', {
+                  conflict: conflictWarning.conflict
+                })}
               </div>
             </div>
             <div className="text-2xs text-ink-3">
-              继续保存将覆盖原有快捷键，建议选择不同的组合键避免冲突。
+              {t('settings.ext.shortcuts.conflictModalHint')}
             </div>
             <div className="flex justify-end gap-2 pt-2">
               <button
@@ -233,10 +246,10 @@ export function ShortcutSection(): React.JSX.Element {
                   setRecording(null)
                 }}
               >
-                取消
+                {t('settings.ext.shortcuts.cancel')}
               </button>
               <button className="btn btn-danger" onClick={forceCommit}>
-                强制保存
+                {t('settings.ext.shortcuts.forceSave')}
               </button>
             </div>
           </div>

@@ -1,28 +1,33 @@
 import type * as React from 'react'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { Toggle } from '@/components/ui'
+import { useI18n } from '@/i18n'
 import { Row } from './sectionUi'
 
 /** 设置 → 行为（延迟探测 / 自动录像 / 重连 / 跟随终端 / 指纹校验 / 会话恢复） */
 export function BehaviorSection(): React.JSX.Element {
+  const { t } = useI18n()
   const settings = useSettingsStore((s) => s.settings)
   const update = useSettingsStore((s) => s.update)
 
   return (
     <>
-      <Row label="延迟探测" hint="每 5 秒向设备发送一次轻量探测，用于状态栏延迟显示">
+      <Row
+        label={t('settings.ext.behavior.latencyProbe')}
+        hint={t('settings.ext.behavior.latencyProbeHint')}
+      >
         <Toggle checked={settings.latencyProbe} onChange={(v) => void update({ latencyProbe: v })} />
       </Row>
       <Row
-        label="自动记录会话日志"
-        hint="连接后的终端输入输出自动录制为 cast 文件（单会话上限 50MB），可在侧栏「日志」中回放与导出"
+        label={t('settings.ext.behavior.autoLog')}
+        hint={t('settings.ext.behavior.autoLogHint')}
       >
         <Toggle checked={settings.autoLog} onChange={(v) => void update({ autoLog: v })} />
       </Row>
       {settings.autoLog && (
         <Row
-          label="同时写纯文本日志"
-          hint="除 cast 回放文件外，再写一份剥掉控制码的 .log，可直接 grep 或发给同事（同一次录制共用一个 50MB 上限）"
+          label={t('settings.ext.behavior.logPlainText')}
+          hint={t('settings.ext.behavior.logPlainTextHint')}
         >
           <Toggle
             checked={settings.logPlainText !== false}
@@ -32,8 +37,8 @@ export function BehaviorSection(): React.JSX.Element {
       )}
       {settings.autoLog && settings.logPlainText !== false && (
         <Row
-          label="纯文本带时间戳"
-          hint="每行前缀墙上时间 HH:MM:SS.mmm，便于与设备日志、抓包对表；关掉则只有终端内容"
+          label={t('settings.ext.behavior.logTimestamp')}
+          hint={t('settings.ext.behavior.logTimestampHint')}
         >
           <Toggle
             checked={settings.logTimestamp !== false}
@@ -42,8 +47,8 @@ export function BehaviorSection(): React.JSX.Element {
         </Row>
       )}
       <Row
-        label="断线自动重连"
-        hint="网络抖动断开后在后台按 1/2/4/8/16 秒退避重试，标签上显示进度；用户主动关闭标签则不重连"
+        label={t('settings.ext.behavior.autoReconnect')}
+        hint={t('settings.ext.behavior.autoReconnectHint')}
       >
         <Toggle
           checked={settings.autoReconnect !== false}
@@ -51,7 +56,10 @@ export function BehaviorSection(): React.JSX.Element {
         />
       </Row>
       {settings.autoReconnect !== false && (
-        <Row label="最多重试次数" hint="用尽后停止并提示，可手动重连（1~20 次）">
+        <Row
+          label={t('settings.ext.behavior.autoReconnectMax')}
+          hint={t('settings.ext.behavior.autoReconnectMaxHint')}
+        >
           <input
             type="number"
             min={1}
@@ -66,8 +74,8 @@ export function BehaviorSection(): React.JSX.Element {
         </Row>
       )}
       <Row
-        label="跟随终端目录"
-        hint="在终端里 cd 到某个目录时，侧栏「文件」面板自动跳到该位置；面板标题栏的链状图标也能一键开关"
+        label={t('settings.ext.behavior.followCwd')}
+        hint={t('settings.ext.behavior.followCwdHint')}
       >
         <Toggle
           checked={settings.filesFollowTerminalCwd !== false}
@@ -75,23 +83,28 @@ export function BehaviorSection(): React.JSX.Element {
         />
       </Row>
       <Row
-        label="严格主机指纹校验"
-        hint="首次连接记录指纹；指纹变化（如重装系统/换固件）时拒绝连接并告警"
+        label={t('settings.ext.behavior.strictHostKey')}
+        hint={t('settings.ext.behavior.strictHostKeyHint')}
       >
         <Toggle
           checked={settings.strictHostKey}
           onChange={(v) => void update({ strictHostKey: v })}
         />
       </Row>
-      <Row label="会话恢复" hint="启动时自动恢复上次退出时打开的连接（最多 10 个）">
+      <Row
+        label={t('settings.ext.behavior.restoreSessions')}
+        hint={t('settings.ext.behavior.restoreSessionsHint')}
+      >
         <Toggle
           checked={settings.restoreSessions ?? false}
           onChange={(v) => void update({ restoreSessions: v })}
         />
       </Row>
-      {/* 原来这里有个「常用命令面板位置：右侧栏 / 底部横条」的开关。
-          新外壳把命令面板收进侧栏，位置由活动栏决定，那个开关点了没有
-          任何效果 —— 一个点了没反应的开关比没有这个开关更糟，所以删掉。 */}
+      {/*
+        * 原来这里有个「常用命令面板位置：右侧栏 / 底部横条」的开关。
+        * 新外壳把命令面板收进侧栏，位置由活动栏决定，那个开关点了没有
+        * 任何效果 —— 一个点了没反应的开关比没有这个开关更糟，所以删掉。
+        */}
     </>
   )
 }

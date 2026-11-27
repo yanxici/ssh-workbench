@@ -4,6 +4,7 @@ import { useConnectionStore } from '@/stores/connectionStore'
 import { Toggle } from '@/components/ui'
 import { Row } from './sectionUi'
 import { normalizeNotifyPrefs } from '@/lib/notifyPlan'
+import { useI18n } from '@/i18n'
 
 /**
  * 设置 → 通知（v2.1.4）。
@@ -12,6 +13,7 @@ import { normalizeNotifyPrefs } from '@/lib/notifyPlan'
  * 启发式单独放最后并明确标"不确定"，因为它是唯一一个可能误报的项。
  */
 export function NotifySection(): React.JSX.Element {
+  const { t } = useI18n()
   const settings = useSettingsStore((s) => s.settings)
   const update = useSettingsStore((s) => s.update)
   const connections = useConnectionStore((s) => s.connections)
@@ -38,14 +40,14 @@ export function NotifySection(): React.JSX.Element {
   return (
     <>
       <Row
-        label="任务完成通知"
-        hint="批量执行、诊断巡检、固件升级、文件传输、设备扫描结束时提示；总开关关掉后不再有任何任务提示"
+        label={t('settings.ext.notify.enabled')}
+        hint={t('settings.ext.notify.enabledHint')}
       >
         <Toggle checked={prefs.enabled} onChange={(v) => patch({ enabled: v })} />
       </Row>
       <Row
-        label="窗口在后台时用系统通知"
-        hint="失焦时弹 Windows 通知（收进操作中心，点了能跳回对应标签）；窗口在前台时只显示应用内提示"
+        label={t('settings.ext.notify.system')}
+        hint={t('settings.ext.notify.systemHint')}
       >
         <Toggle
           checked={prefs.system}
@@ -53,7 +55,7 @@ export function NotifySection(): React.JSX.Element {
           onChange={(v) => patch({ system: v })}
         />
       </Row>
-      <Row label="提示音" hint="系统通知带声音；现场多人办公时建议关闭" >
+      <Row label={t('settings.ext.notify.sound')} hint={t('settings.ext.notify.soundHint')}>
         <Toggle
           checked={prefs.sound}
           disabled={!prefs.enabled || !prefs.system}
@@ -61,8 +63,8 @@ export function NotifySection(): React.JSX.Element {
         />
       </Row>
       <Row
-        label="疑似完成（启发式）"
-        hint="终端静默 1.5 秒以上且窗口在后台时提示「疑似完成」。靠「没动静了」来猜，可能误报，所以默认关闭"
+        label={t('settings.ext.notify.heuristic')}
+        hint={t('settings.ext.notify.heuristicHint')}
       >
         <Toggle
           checked={prefs.heuristic}
@@ -72,8 +74,8 @@ export function NotifySection(): React.JSX.Element {
       </Row>
       {mutedNames.length > 0 && (
         <Row
-          label="已静音的连接"
-          hint="在这台设备的标签上右键「本连接不弹通知」可随时取消"
+          label={t('settings.ext.notify.muted')}
+          hint={t('settings.ext.notify.mutedHint')}
         >
           <div className="flex max-w-[260px] flex-wrap justify-end gap-1">
             {mutedNames.map(({ id, name }) => (
@@ -81,7 +83,7 @@ export function NotifySection(): React.JSX.Element {
                 key={id}
                 type="button"
                 className="flex h-6 items-center gap-1 rounded-md border border-edge bg-raised px-2 text-2xs text-ink-3 hover:text-danger"
-                title="点击取消静音"
+                title={t('settings.ext.notify.unmuteTitle')}
                 onClick={() =>
                   patch({
                     mutedConnectionIds: (prefs.mutedConnectionIds ?? []).filter((x) => x !== id)

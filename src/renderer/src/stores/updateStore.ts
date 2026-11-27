@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import type { UpdateStatus } from '@shared/types'
+import { tNow } from '@/i18n/core'
 import { call } from '@/lib/ipc'
 
 /**
@@ -56,20 +57,20 @@ export const useUpdateStore = create<UpdateState>()((set) => ({
 
   check: async () => {
     const status = await call(window.api.update.check(true), {
-      errorTitle: '检查更新失败'
+      errorTitle: tNow('panel.update.checkError')
     })
     if (status) set({ status })
   },
 
   download: async () => {
     const status = await call(window.api.update.download(), {
-      errorTitle: '下载更新失败'
+      errorTitle: tNow('panel.update.downloadError')
     })
     if (status) set({ status })
   },
 
   install: async () => {
-    await call(window.api.update.install(), { errorTitle: '启动安装失败' })
+    await call(window.api.update.install(), { errorTitle: tNow('panel.update.installError') })
     // 成功时进程即将退出，不需要回写状态
   },
 
@@ -79,12 +80,14 @@ export const useUpdateStore = create<UpdateState>()((set) => ({
   },
 
   openRelease: async () => {
-    await call(window.api.update.openRelease(), { errorTitle: '打开发布页失败' })
+    await call(window.api.update.openRelease(), {
+      errorTitle: tNow('panel.update.openReleaseError')
+    })
     set({ panelOpen: false })
   },
 
   openMirror: async () => {
-    await call(window.api.update.openMirror(), { errorTitle: '打开镜像页失败' })
+    await call(window.api.update.openMirror(), { errorTitle: tNow('panel.update.openMirrorError') })
     set({ panelOpen: false })
   }
 }))
@@ -118,6 +121,6 @@ export function formatRemaining(
   if (!transferred || !total || !bytesPerSecond || bytesPerSecond <= 0) return null
   const seconds = Math.max(0, (total - transferred) / bytesPerSecond)
   if (!Number.isFinite(seconds) || seconds > 3600) return null
-  if (seconds < 60) return '不到 1 分钟'
-  return `约 ${Math.round(seconds / 60)} 分钟`
+  if (seconds < 60) return tNow('panel.update.lessThanMin')
+  return tNow('panel.update.approxMin', { minutes: Math.round(seconds / 60) })
 }

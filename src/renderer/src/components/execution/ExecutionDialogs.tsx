@@ -5,6 +5,7 @@ import { renderTemplate, useExecutionStore } from '@/stores/executionStore'
 import { Field } from '@/components/ui'
 import { isImeComposing } from '@/lib/ime'
 import { useOverlayEscape } from '@/lib/overlayKeys'
+import { useI18n } from '@/i18n'
 
 /**
  * 执行流水线配套弹窗：
@@ -13,6 +14,7 @@ import { useOverlayEscape } from '@/lib/overlayKeys'
  */
 
 export function VariablePromptDialog(): React.JSX.Element | null {
+  const { t } = useI18n()
   const pending = useExecutionStore((s) => s.pending)
   const values = useExecutionStore((s) => s.pendingValues)
   // 目标主机：填变量期间用户可能切了标签，必须让他看见命令到底发往哪台
@@ -41,10 +43,10 @@ export function VariablePromptDialog(): React.JSX.Element | null {
         <div className="modal-header">
           <div className="modal-title flex items-center gap-2">
             <Braces size={13} className="text-accent" />
-            填写变量 · {pending.name}
+            {t('cmd.varDialog.title', { name: pending.name })}
           </div>
           {targetLabel ? (
-            <div className="modal-subtitle truncate">目标终端：{targetLabel}</div>
+            <div className="modal-subtitle truncate">{t('cmd.varDialog.target', { target: targetLabel })}</div>
           ) : null}
         </div>
 
@@ -53,7 +55,7 @@ export function VariablePromptDialog(): React.JSX.Element | null {
             <Field
               key={v.name}
               label={v.label ?? v.name}
-              hint={v.required ? '必填' : undefined}
+              hint={v.required ? t('cmd.varDialog.required') : undefined}
             >
               {v.type === 'select' && v.options && v.options.length > 0 ? (
                 <select
@@ -61,7 +63,7 @@ export function VariablePromptDialog(): React.JSX.Element | null {
                   value={values[v.name] ?? ''}
                   onChange={(e) => setValue(v.name, e.target.value)}
                 >
-                  <option value="">请选择…</option>
+                  <option value="">{t('cmd.varDialog.selectPlaceholder')}</option>
                   {v.options.map((o) => (
                     <option key={o} value={o}>
                       {o}
@@ -72,7 +74,7 @@ export function VariablePromptDialog(): React.JSX.Element | null {
                 <input
                   autoFocus={i === 0}
                   className="input selectable font-mono text-xs"
-                  placeholder={v.placeholder ?? `输入 ${v.name}`}
+                  placeholder={v.placeholder ?? t('cmd.varDialog.inputPlaceholder', { name: v.name })}
                   value={values[v.name] ?? ''}
                   onChange={(e) => setValue(v.name, e.target.value)}
                   onKeyDown={(e) => {
@@ -85,7 +87,7 @@ export function VariablePromptDialog(): React.JSX.Element | null {
           ))}
 
           <div>
-            <div className="field-label">将发送</div>
+            <div className="field-label">{t('cmd.varDialog.preview')}</div>
             <div className="selectable rounded-md border border-edge-soft bg-app px-2.5 py-2 font-mono text-2xs leading-relaxed text-ink-2">
               {renderTemplate(pending.template, values)}
             </div>
@@ -94,11 +96,11 @@ export function VariablePromptDialog(): React.JSX.Element | null {
 
         <div className="modal-footer">
           <button className="btn" onClick={cancel}>
-            取消
+            {t('cmd.common.cancel')}
           </button>
           <button className="btn btn-primary" onClick={submit}>
             <Send size={12} />
-            发送到终端
+            {t('cmd.varDialog.send')}
           </button>
         </div>
       </div>
@@ -107,6 +109,7 @@ export function VariablePromptDialog(): React.JSX.Element | null {
 }
 
 export function DangerConfirmDialog(): React.JSX.Element | null {
+  const { t } = useI18n()
   const danger = useExecutionStore((s) => s.danger)
   const confirm = useExecutionStore((s) => s.confirmDanger)
   const cancel = useExecutionStore((s) => s.cancelDanger)
@@ -138,17 +141,17 @@ export function DangerConfirmDialog(): React.JSX.Element | null {
         <div className="modal-header border-warning/25">
           <div className="modal-title flex items-center gap-2 text-warning">
             <AlertTriangle size={14} />
-            危险操作二次确认
+            {t('cmd.dangerDialog.title')}
           </div>
         </div>
 
         <div className="modal-body space-y-3">
           <div className="text-xs leading-relaxed text-ink-2">
-            即将在
+            {t('cmd.dangerDialog.willRunPrefix')}
             <span className="mx-1 font-medium text-ink">
-              {session ? session.title : '当前终端'}
+              {session ? session.title : t('cmd.dangerDialog.currentTerminal')}
             </span>
-            执行以下命令：
+            {t('cmd.dangerDialog.willRunSuffix')}
           </div>
 
           <div className="selectable rounded-md border border-warning/30 bg-warning/5 px-3 py-2.5 font-mono text-xs leading-relaxed text-warning">
@@ -156,19 +159,19 @@ export function DangerConfirmDialog(): React.JSX.Element | null {
           </div>
 
           <div className="text-2xs leading-relaxed text-ink-3">
-            该命令可能不可逆地改变设备状态。请再次确认目标设备、路径与参数无误后再执行。
+            {t('cmd.dangerDialog.warning')}
           </div>
         </div>
 
         <div className="modal-footer">
           <button className="btn" onClick={cancel}>
-            取消
+            {t('cmd.common.cancel')}
           </button>
           <button
             className="btn border-transparent bg-warning text-black hover:bg-warning/90 hover:text-black"
             onClick={confirm}
           >
-            确认执行
+            {t('cmd.dangerDialog.confirm')}
           </button>
         </div>
       </div>

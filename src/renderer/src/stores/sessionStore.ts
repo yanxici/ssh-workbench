@@ -6,6 +6,7 @@ import type { Terminal } from '@xterm/xterm'
 import type { FitAddon } from '@xterm/addon-fit'
 import type { SearchAddon } from '@xterm/addon-search'
 import { uid } from '@/lib/utils'
+import { tNow } from '@/i18n/core'
 import { isNestedPane, paneOwnerOf } from '@/lib/paneRegistry'
 import { useToastStore } from './toastStore'
 import { forgetCwd } from './cwdStore'
@@ -204,7 +205,7 @@ export const useSessionStore = create<SessionState>()((set, get) => ({
           get().updateStatus(id, 'error', res.error)
           useToastStore.getState().push({
             kind: 'error',
-            title: `连接失败：${conn.name}`,
+            title: tNow('term.session.connectFailed', { name: conn.name }),
             detail: res.error
           })
         }
@@ -217,7 +218,9 @@ export const useSessionStore = create<SessionState>()((set, get) => ({
     const s = get().sessions.find((x) => x.id === id)
     if (!s || s.status === 'connecting' || s.status === 'connected') return
     get().updateStatus(id, 'connecting')
-    terminalRegistry.get(id)?.term.write('\r\n\x1b[90m—— 正在重新连接 ——\x1b[0m\r\n')
+    terminalRegistry
+      .get(id)
+      ?.term.write(`\r\n\x1b[90m${tNow('term.session.reconnectingBanner')}\x1b[0m\r\n`)
     // 复用同一 sessionId：xterm 实例、滚动内容、文件树都保留
     void window.api.session
       .open({ sessionId: id, connectionId: s.connectionId, cols: s.cols, rows: s.rows })
@@ -226,7 +229,7 @@ export const useSessionStore = create<SessionState>()((set, get) => ({
           get().updateStatus(id, 'error', res.error)
           useToastStore.getState().push({
             kind: 'error',
-            title: `重连失败：${s.connectionName}`,
+            title: tNow('term.session.reconnectFailed', { name: s.connectionName }),
             detail: res.error
           })
         }
@@ -241,8 +244,8 @@ export const useSessionStore = create<SessionState>()((set, get) => ({
     if (host.status !== 'connected') {
       useToastStore.getState().push({
         kind: 'warning',
-        title: '当前会话未连接',
-        detail: '请先重新连接，再新建终端'
+        title: tNow('term.session.notConnectedTitle'),
+        detail: tNow('term.session.notConnectedDetail')
       })
       return null
     }
@@ -254,7 +257,7 @@ export const useSessionStore = create<SessionState>()((set, get) => ({
     if (host.kind === 'serial') {
       useToastStore.getState().push({
         kind: 'warning',
-        title: '串口会话不支持多开终端，请直接在当前标签里操作'
+        title: tNow('term.session.serialNoMulti')
       })
       return null
     }
@@ -292,7 +295,7 @@ export const useSessionStore = create<SessionState>()((set, get) => ({
           get().updateStatus(id, 'error', res.error)
           useToastStore.getState().push({
             kind: 'error',
-            title: '新建终端失败',
+            title: tNow('term.session.newTerminalFailed'),
             detail: res.error
           })
         }

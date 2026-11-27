@@ -8,6 +8,7 @@ import { HistoryPanel } from '@/components/panels/HistoryPanel'
 import { SessionLogsPanel } from '@/components/panels/SessionLogsPanel'
 import { TunnelPanel } from '@/components/panels/TunnelPanel'
 import { FileExplorer } from '@/components/files/FileExplorer'
+import { useI18n } from '@/i18n'
 
 /**
  * 左侧导航面板（默认 280px，可折叠、可拖拽改宽）。
@@ -46,6 +47,7 @@ export function SideNav({
   const sidebarVisible = useLayoutStore((s) => s.sidebarVisible)
   const activityView = useLayoutStore((s) => s.activityView)
   const setActivityView = useLayoutStore((s) => s.setActivityView)
+  const { t } = useI18n()
 
   const activeId = useSessionStore((s) => s.activeId)
   const activeSession = useSessionById(activeId)
@@ -77,7 +79,7 @@ export function SideNav({
 
   return (
     <aside
-      aria-label="侧边栏"
+      aria-label={t('common.layout.paneSidebar')}
       style={{ width }}
       className="flex min-w-0 shrink-0 flex-col overflow-hidden border-r border-edge bg-panel"
     >

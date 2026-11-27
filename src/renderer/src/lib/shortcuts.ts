@@ -1,4 +1,5 @@
 import type { ShortcutAction, ShortcutMap } from '@shared/types'
+import { tNow } from '../i18n/core'
 
 /**
  * 快捷键解析与匹配（纯工具，渲染层用）。
@@ -6,30 +7,118 @@ import type { ShortcutAction, ShortcutMap } from '@shared/types'
  */
 
 export const SHORTCUT_ACTIONS: Array<{ id: ShortcutAction; label: string; default: string }> = [
-  { id: 'commandCenter', label: '打开命令中心', default: 'Ctrl+K' },
-  { id: 'newConnection', label: '新建连接', default: 'Ctrl+N' },
-  { id: 'settings', label: '打开设置', default: 'Ctrl+,' },
-  { id: 'togglePanel', label: '折叠/展开侧边栏', default: 'Ctrl+B' },
+  {
+    id: 'commandCenter',
+    get label() {
+      return tNow('common.shortcut.commandCenter')
+    },
+    default: 'Ctrl+K'
+  },
+  {
+    id: 'newConnection',
+    get label() {
+      return tNow('common.shortcut.newConnection')
+    },
+    default: 'Ctrl+N'
+  },
+  {
+    id: 'settings',
+    get label() {
+      return tNow('common.shortcut.settings')
+    },
+    default: 'Ctrl+,'
+  },
+  {
+    id: 'togglePanel',
+    get label() {
+      return tNow('common.shortcut.togglePanel')
+    },
+    default: 'Ctrl+B'
+  },
   // 命令栏在窗口右侧，和侧边栏是两个独立的开合目标，
   // 快捷键也要分开 —— 共用一个键会让人分不清「收起的是哪一块」。
-  { id: 'toggleCommandRail', label: '折叠/展开命令栏', default: 'Ctrl+Alt+B' },
+  {
+    id: 'toggleCommandRail',
+    get label() {
+      return tNow('common.shortcut.toggleCommandRail')
+    },
+    default: 'Ctrl+Alt+B'
+  },
   // 专注模式：把左右两栏一起收掉，只留工作区。
-  // 这里的 label 用英文是为了不新增 i18n 基线行数 —— 本文件的既有 label
-  // 都是硬编码中文、已被 verify-i18n 记进基线，新增一行中文就会破线。
-  { id: 'toggleZen', label: 'Zen focus mode', default: 'Ctrl+Shift+Z' },
-  { id: 'nextTab', label: '下一个标签', default: 'Ctrl+Tab' },
-  { id: 'closeTab', label: '关闭当前标签', default: 'Ctrl+Shift+W' },
-  { id: 'terminalSearch', label: '终端内搜索', default: 'Ctrl+F' },
-  { id: 'terminalCopy', label: '复制', default: 'Ctrl+C' },
-  { id: 'terminalPaste', label: '粘贴', default: 'Ctrl+V' },
+  {
+    id: 'toggleZen',
+    get label() {
+      return tNow('common.shortcut.toggleZen')
+    },
+    default: 'Ctrl+Shift+Z'
+  },
+  {
+    id: 'nextTab',
+    get label() {
+      return tNow('common.shortcut.nextTab')
+    },
+    default: 'Ctrl+Tab'
+  },
+  {
+    id: 'closeTab',
+    get label() {
+      return tNow('common.shortcut.closeTab')
+    },
+    default: 'Ctrl+Shift+W'
+  },
+  {
+    id: 'terminalSearch',
+    get label() {
+      return tNow('common.shortcut.terminalSearch')
+    },
+    default: 'Ctrl+F'
+  },
+  {
+    id: 'terminalCopy',
+    get label() {
+      return tNow('common.shortcut.terminalCopy')
+    },
+    default: 'Ctrl+C'
+  },
+  {
+    id: 'terminalPaste',
+    get label() {
+      return tNow('common.shortcut.terminalPaste')
+    },
+    default: 'Ctrl+V'
+  },
   /*
    * 分屏之间移动焦点。用 Ctrl+Alt+方向键而不是 Ctrl+方向键：
    * 后者在终端里是「按词移动光标」，bash/readline 重度使用者离不开它。
    */
-  { id: 'paneLeft', label: '焦点移到左侧分屏', default: 'Ctrl+Alt+ArrowLeft' },
-  { id: 'paneRight', label: '焦点移到右侧分屏', default: 'Ctrl+Alt+ArrowRight' },
-  { id: 'paneUp', label: '焦点移到上方分屏', default: 'Ctrl+Alt+ArrowUp' },
-  { id: 'paneDown', label: '焦点移到下方分屏', default: 'Ctrl+Alt+ArrowDown' }
+  {
+    id: 'paneLeft',
+    get label() {
+      return tNow('common.shortcut.paneLeft')
+    },
+    default: 'Ctrl+Alt+ArrowLeft'
+  },
+  {
+    id: 'paneRight',
+    get label() {
+      return tNow('common.shortcut.paneRight')
+    },
+    default: 'Ctrl+Alt+ArrowRight'
+  },
+  {
+    id: 'paneUp',
+    get label() {
+      return tNow('common.shortcut.paneUp')
+    },
+    default: 'Ctrl+Alt+ArrowUp'
+  },
+  {
+    id: 'paneDown',
+    get label() {
+      return tNow('common.shortcut.paneDown')
+    },
+    default: 'Ctrl+Alt+ArrowDown'
+  }
 ]
 
 /** 归一化：把用户输入/存储的字符串解析为可比较的结构 */

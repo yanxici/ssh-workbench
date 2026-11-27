@@ -38,7 +38,9 @@ const lib = fs.readFileSync(LIB, 'utf8').replace(/\r\n/g, '\n')
 console.log('\n=== 断言 ===')
 check(
   '每一行都有单条重置按钮（RotateCcw 在行渲染里被使用）',
-  /<RotateCcw\b/.test(src) && /title=\{`恢复默认：\$\{action\.default\}`\}/.test(src),
+  /<RotateCcw\b/.test(src) &&
+    (/title=\{`恢复默认：\$\{action\.default\}`\}/.test(src) ||
+      /title=\{t\('settings\.ext\.shortcuts\.resetOneTitle'/.test(src)),
   'ShortcutSection.tsx'
 )
 check(

@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import type { MetricsEvent, MetricsSample } from '@shared/types'
+import { tNow } from '@/i18n/core'
 import { call } from '@/lib/ipc'
 import { pickSshSession, useSessionStore } from './sessionStore'
 import { useToastStore } from './toastStore'
@@ -71,7 +72,7 @@ export const useMetricsStore = create<MetricsState>()((set, get) => ({
       order: s.order.includes(sessionId) ? s.order : [...s.order, sessionId]
     }))
     const ok = await call(window.api.metrics.start(sessionId), {
-      errorTitle: '无法开始监控'
+      errorTitle: tNow('panel.metrics.startError')
     })
     if (ok === null) {
       set((s) => {
@@ -137,7 +138,9 @@ export const useMetricsStore = create<MetricsState>()((set, get) => ({
       const title = useSessionStore.getState().sessions.find((x) => x.id === e.sessionId)?.title
       useToastStore.getState().push({
         kind: 'warning',
-        title: `${title ?? '设备'} 监控已停止`,
+        title: tNow('panel.metrics.stoppedWarn', {
+          title: title ?? tNow('panel.metrics.defaultDeviceName')
+        }),
         detail: e.error
       })
     }

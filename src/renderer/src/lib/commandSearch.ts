@@ -15,6 +15,8 @@
 
 import type { Command, ConnKind } from '@shared/types'
 import { appliesTo } from '@shared/commandEnv'
+import { tNow } from '../i18n/core'
+import { SYNONYMS } from '../i18n/synonyms'
 import { fuzzyMatch } from './fuzzy'
 
 export type ScopeKind = 'all' | 'recent' | 'frequent' | 'pinned' | 'group'
@@ -61,7 +63,7 @@ export function inScope(
     case 'pinned':
       return (opts.pinnedIds ?? []).includes(c.id)
     case 'group':
-      return (c.group || '默认') === scope.group
+      return (c.group || tNow('cmd.defaultGroup')) === scope.group
   }
 }
 
@@ -138,7 +140,7 @@ export function searchCommands({
       const nameM = pick(fuzzyMatch(c.name, term))
       const cmdM = pick(fuzzyMatch(c.command, term))
       const descM = pick(fuzzyMatch(c.description ?? '', term))
-      const groupM = pick(fuzzyMatch(c.group || '默认', term))
+      const groupM = pick(fuzzyMatch(c.group || tNow('cmd.defaultGroup'), term))
 
       // 字段权重：名字 > 命令原文 > 分组 > 描述
       const candidates: Array<{
@@ -264,7 +266,7 @@ export function buildScopes(
   const pool = env ? commands.filter((c) => appliesTo(c, env)) : commands
   const counts = new Map<string, number>()
   for (const c of pool) {
-    const key = c.group || '默认'
+    const key = c.group || tNow('cmd.defaultGroup')
     counts.set(key, (counts.get(key) ?? 0) + 1)
   }
   for (const g of extraGroups) if (g && !counts.has(g)) counts.set(g, 0)
@@ -274,10 +276,10 @@ export function buildScopes(
   const pinCount = pool.filter((c) => pinned.has(c.id)).length
 
   const entries: ScopeEntry[] = [
-    { scope: { kind: 'all' }, label: '全部命令', count: pool.length, depth: 0 },
-    { scope: { kind: 'recent' }, label: '最近使用', count: recent, depth: 0 },
-    { scope: { kind: 'frequent' }, label: '最常用', count: frequent, depth: 0 },
-    { scope: { kind: 'pinned' }, label: '已收藏', count: pinCount, depth: 0 }
+    { scope: { kind: 'all' }, label: tNow('cmd.scope.all'), count: pool.length, depth: 0 },
+    { scope: { kind: 'recent' }, label: tNow('cmd.scope.recent'), count: recent, depth: 0 },
+    { scope: { kind: 'frequent' }, label: tNow('cmd.scope.frequent'), count: frequent, depth: 0 },
+    { scope: { kind: 'pinned' }, label: tNow('cmd.scope.pinned'), count: pinCount, depth: 0 }
   ]
 
   const orderRank = new Map(groupOrder.map((g, i) => [g, i]))
@@ -316,31 +318,6 @@ export function sameScope(a: Scope, b: Scope): boolean {
  *  敲一次 串口 把 /dev/xxx 相关全捞一遍。宁可少扩展，也不要脏结果。
  *  短词（df / ps / ss）由用户直接输入就能命中，不需要当别名。
  * ------------------------------------------------------------------ */
-
-const SYNONYMS: Array<{ zh: string[]; en: string[] }> = [
-  { zh: ['磁盘', '硬盘', '空间'], en: ['disk', 'df', 'partition', 'storage'] },
-  { zh: ['挂载', '挂载点'], en: ['mount', 'fstab'] },
-  { zh: ['内存'], en: ['mem', 'memory', 'free', 'ram'] },
-  { zh: ['进程'], en: ['process', 'proc', 'pid'] },
-  { zh: ['负载', '压力'], en: ['load', 'loadavg', 'uptime'] },
-  { zh: ['网络', '网卡', '网口'], en: ['network', 'iface', 'interface', 'nic'] },
-  { zh: ['端口', '监听'], en: ['port', 'listen', 'netstat'] },
-  { zh: ['连通', '探测', '延迟'], en: ['ping', 'latency', 'probe'] },
-  { zh: ['日志', '报错'], en: ['log', 'journal', 'dmesg', 'syslog'] },
-  { zh: ['温度', '散热'], en: ['temp', 'thermal', 'sensor'] },
-  { zh: ['电源', '电压'], en: ['power', 'voltage', 'supply'] },
-  { zh: ['串口'], en: ['tty', 'serial', 'usb'] },
-  { zh: ['系统', '版本', '内核'], en: ['system', 'version', 'kernel', 'uname', 'release'] },
-  { zh: ['服务', '重启'], en: ['service', 'systemctl', 'restart'] },
-  { zh: ['文件', '目录'], en: ['file', 'dir', 'find'] },
-  { zh: ['权限', '所有者'], en: ['chmod', 'chown'] },
-  { zh: ['用户', '账号'], en: ['user', 'passwd', 'account'] },
-  { zh: ['定时', '计划', '任务'], en: ['cron', 'timer', 'schedule'] },
-  { zh: ['防火墙'], en: ['firewall', 'iptables'] },
-  { zh: ['容器'], en: ['docker', 'container'] },
-  { zh: ['固件', '升级'], en: ['firmware', 'flash', 'upgrade'] },
-  { zh: ['备份'], en: ['backup'] }
-]
 
 /** 把查询词扩展为「同义的另一半」：返回额外用于匹配的词（不含原词） */
 export function synonymsOf(query: string): string[] {

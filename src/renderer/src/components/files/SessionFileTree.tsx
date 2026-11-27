@@ -30,6 +30,7 @@ import { normalizeRemoteDir } from '@/lib/uploadDir'
 import { ShellModeBadge } from './ShellModeBadge'
 import { UploadTargetDialog } from './UploadTargetDialog'
 import { useUploadTarget } from './useUploadTarget'
+import { useI18n } from '@/i18n'
 import {
   ConfirmDialog,
   ContextMenu,
@@ -85,6 +86,7 @@ export function SessionFileTree({
   onClose: () => void
   onOpenTransfer: () => void
 }): React.JSX.Element {
+  const { t } = useI18n()
   const version = useSftpStore((s) => s.treeVersion)
   const bumpTree = useSftpStore((s) => s.bumpTree)
   const syncMode = useSftpStore((s) => s.syncMode)
@@ -165,7 +167,7 @@ export function SessionFileTree({
   const beginUpload = (preferred?: string): Promise<void> =>
     uploadTarget.request(
       preferred ?? selectedDir(),
-      preferred ? `目标来自所选条目：${preferred}` : undefined
+      preferred ? t('files.ui.explorer.targetFromSelection', { dir: preferred }) : undefined
     )
 
   const handleUpload = (): void => {
@@ -177,7 +179,9 @@ export function SessionFileTree({
     const dir = selectedDir()
     await uploadTarget.request(
       dir,
-      dir ? `目标来自所选条目：${dir}` : '选好目标目录后，再选本地要上传的文件夹',
+      dir
+        ? t('files.ui.explorer.targetFromSelection', { dir })
+        : t('files.ui.explorer.pickFolderHint'),
       'folder'
     )
   }
@@ -188,13 +192,13 @@ export function SessionFileTree({
     if (isUnsafeForTerminal(dir)) {
       useToastStore.getState().push({
         kind: 'error',
-        title: '未同步终端目录',
-        detail: '路径包含控制字符，为安全起见不自动 cd，请在终端手动进入'
+        title: t('files.ui.tree.cdBlocked'),
+        detail: t('files.ui.tree.cdBlockedDetail')
       })
       return
     }
     void call(window.api.session.write(sessionId, `cd ${shellQuote(dir)}\r`), {
-      errorTitle: '终端同步目录失败'
+      errorTitle: t('files.ui.tree.cdFailed')
     })
   }
 
@@ -206,7 +210,7 @@ export function SessionFileTree({
   return (
     <div className="flex h-full min-h-0 flex-col bg-panel">
       <div className="flex h-8 shrink-0 items-center gap-0.5 border-b border-edge-soft pl-2 pr-1">
-        <span className="shrink-0 text-2xs font-semibold text-ink-2">文件</span>
+        <span className="shrink-0 text-2xs font-semibold text-ink-2">{t('files.ui.title')}</span>
         <ShellModeBadge sessionId={sessionId} />
         <span className="min-w-0 flex-1 truncate pl-1 text-2xs text-ink-3" title={title}>
           {title}
@@ -215,8 +219,8 @@ export function SessionFileTree({
           className="btn-icon h-6 w-6"
           title={
             selected?.type === 'directory'
-              ? `上传文件到「${selected.name}」（可改目标目录）`
-              : '上传文件（选择目标目录）'
+              ? t('files.ui.tree.uploadFileTo', { name: selected.name })
+              : t('files.ui.explorer.uploadPickTitle')
           }
           onClick={handleUpload}
         >
@@ -226,8 +230,8 @@ export function SessionFileTree({
           className="btn-icon h-6 w-6"
           title={
             selected?.type === 'directory'
-              ? `上传文件夹到「${selected.name}」（远端保留同名目录）`
-              : '上传文件夹（选择目标目录）'
+              ? t('files.ui.tree.uploadFolderTo', { name: selected.name })
+              : t('files.ui.explorer.uploadFolderPickTitle')
           }
           onClick={() => void handleUploadFolder()}
         >
@@ -235,7 +239,11 @@ export function SessionFileTree({
         </button>
         <button
           className="btn-icon h-6 w-6"
-          title={selected ? `下载「${selected.name}」` : '先选中一个文件/目录'}
+          title={
+            selected
+              ? t('files.ui.tree.downloadItem', { name: selected.name })
+              : t('files.ui.tree.selectFirst')
+          }
           disabled={!selected}
           onClick={handleDownload}
         >
@@ -243,7 +251,7 @@ export function SessionFileTree({
         </button>
         <button
           className="btn-icon h-6 w-6"
-          title={loadingLevels > 0 ? '正在刷新…' : '刷新'}
+          title={loadingLevels > 0 ? t('files.ui.refreshing') : t('files.ui.refresh')}
           disabled={loadingLevels > 0}
           onClick={refresh}
         >
@@ -251,12 +259,12 @@ export function SessionFileTree({
         </button>
         <button
           className="btn-icon h-6 w-6"
-          title="双栏传输模式（本地 ↔ 远端，适合批量互传）"
+          title={t('files.ui.tree.dualPaneTitle')}
           onClick={onOpenTransfer}
         >
           <Columns2 size={12} />
         </button>
-        <button className="btn-icon h-6 w-6" title="关闭文件面板" onClick={onClose}>
+        <button className="btn-icon h-6 w-6" title={t('files.ui.tree.closePanel')} onClick={onClose}>
           <X size={12} />
         </button>
       </div>
@@ -266,7 +274,9 @@ export function SessionFileTree({
         title={currentDir ?? ''}
       >
         <Folder size={11} className="shrink-0 text-accent/70" />
-        {/* rtl + bdi：路径过长时省略号出现在左侧，保留末级目录可见 */}
+        {/*
+         * rtl + bdi：路径过长时省略号出现在左侧，保留末级目录可见
+         */}
         <span className="selectable min-w-0 flex-1 truncate text-left font-mono text-3xs" dir="rtl">
           <bdi>{currentDir ?? '—'}</bdi>
         </span>
@@ -276,12 +286,14 @@ export function SessionFileTree({
         {sessionStatus === 'connecting' ? (
           <div className="flex items-center justify-center gap-2 py-6 text-2xs text-ink-3">
             <Loader2 size={12} className="animate-spin" />
-            等待会话连接…
+            {t('files.ui.tree.waitingConnect')}
           </div>
         ) : sessionStatus === 'error' || sessionStatus === 'disconnected' ? (
           <div className="px-3 py-4 text-2xs leading-relaxed text-ink-3">
-            会话{sessionStatus === 'error' ? '连接失败' : '已断开'}。
-            <div className="mt-1 text-ink-3/70">重新建立连接后，文件树会自动加载。</div>
+            {sessionStatus === 'error'
+              ? t('files.ui.tree.sessionFailed')
+              : t('files.ui.tree.sessionDisconnected')}
+            <div className="mt-1 text-ink-3/70">{t('files.ui.tree.reconnectHint')}</div>
           </div>
         ) : error ? (
           <div className="flex flex-col items-start gap-2 px-3 py-4">
@@ -291,7 +303,7 @@ export function SessionFileTree({
               onClick={() => setAttempt((n) => n + 1)}
             >
               <RefreshCw size={11} />
-              重试
+              {t('files.ui.retry')}
             </button>
           </div>
         ) : ready ? (
@@ -313,12 +325,14 @@ export function SessionFileTree({
         ) : (
           <div className="flex items-center justify-center gap-2 py-6 text-2xs text-ink-3">
             <Loader2 size={12} className="animate-spin" />
-            加载中…
+            {t('files.ui.loading')}
           </div>
         )}
       </div>
 
-      {/* 上传目标目录确认（选完目录才弹本地文件选择框） */}
+      {/*
+       * 上传目标目录确认（选完目录才弹本地文件选择框）
+       */}
       <UploadTargetDialog {...uploadTarget.dialogProps} />
     </div>
   )
@@ -358,6 +372,7 @@ function TreeLevel({
   /** 打开上传目标目录确认框（dir 为该行的落点） */
   onUploadTo: (dir: string) => void
 }): React.JSX.Element {
+  const { t } = useI18n()
   const [files, setFiles] = useState<RemoteFile[] | null>(null)
   /** 大目录默认只渲染前 300 项，用户点「展开全部」后才铺满 */
   const [showAll, setShowAll] = useState(false)
@@ -467,7 +482,7 @@ function TreeLevel({
         ))}
         <div className="flex items-center gap-1 pl-0.5 pt-0.5 text-3xs text-ink-3">
           <Loader2 size={9} className="animate-spin" />
-          读取中…
+          {t('files.ui.reading')}
         </div>
       </div>
     )
@@ -526,18 +541,20 @@ function TreeLevel({
           style={{ paddingLeft: 10 + depth * 12 }}
           onClick={() => setShowAll(true)}
         >
-          还有 {hidden} 项，点击展开全部
+          {t('files.ui.expandMore', { count: hidden })}
         </button>
       )}
 
-      {/* 有缓存时后台静默刷新：不遮挡内容，只在末尾挂一个极轻的提示 */}
+      {/*
+       * 有缓存时后台静默刷新：不遮挡内容，只在末尾挂一个极轻的提示
+       */}
       {refreshing && files !== null && (
         <div
           className="flex items-center gap-1 py-0.5 text-3xs text-ink-3/70"
           style={{ paddingLeft: 10 + depth * 12 }}
         >
           <Loader2 size={8} className="animate-spin" />
-          同步中
+          {t('files.ui.syncing')}
         </div>
       )}
     </>
@@ -573,6 +590,7 @@ function TreeRow({
   onRefresh: () => void
   onUploadTo: (dir: string) => void
 }): React.JSX.Element {
+  const { t } = useI18n()
   const { menu, openMenu, closeMenu } = useContextMenu<string>()
   // 上传执行链路统一在 store 里，这一层只负责「点了 → 刷新这级目录」
   const downloadTo = useSftpStore((s) => s.downloadTo)
@@ -586,7 +604,7 @@ function TreeRow({
 
   const mkdirAt = async (value: string): Promise<void> => {
     const done = await call(window.api.sftp.mkdir(sessionId, remoteJoin(file.path, value)), {
-      errorTitle: '新建文件夹失败'
+      errorTitle: t('files.ui.err.mkdir')
     })
     if (done !== null) onRefresh()
   }
@@ -594,7 +612,7 @@ function TreeRow({
   const renameTo = async (value: string): Promise<void> => {
     const done = await call(
       window.api.sftp.rename(sessionId, file.path, remoteJoin(remoteDirname(file.path), value)),
-      { errorTitle: '重命名失败' }
+      { errorTitle: t('files.ui.err.rename') }
     )
     if (done !== null) onRefresh()
   }
@@ -603,24 +621,24 @@ function TreeRow({
     const mode = parseOctalMode(value)
     // 解析失败要出声：静默 return 会让人以为权限已经改了
     if (mode === null) {
-      useToastStore.getState().push({ kind: 'warning', title: '权限格式不正确，请填 0-7777 的八进制数' })
+      useToastStore.getState().push({ kind: 'warning', title: t('files.ui.chmodInvalid') })
       return
     }
     const done = await call(window.api.sftp.chmod(sessionId, file.path, mode), {
-      errorTitle: '修改权限失败'
+      errorTitle: t('files.ui.err.chmod')
     })
     if (done !== null) {
-      useToastStore.getState().push({ kind: 'success', title: `权限已更新为 ${value}` })
+      useToastStore.getState().push({ kind: 'success', title: t('files.ui.chmodUpdated', { mode: value }) })
       onRefresh()
     }
   }
 
   const removeThis = async (): Promise<void> => {
     const done = await call(window.api.sftp.remove(sessionId, file.path), {
-      errorTitle: '删除失败'
+      errorTitle: t('files.ui.err.delete')
     })
     if (done !== null) {
-      useToastStore.getState().push({ kind: 'success', title: `已删除「${file.name}」` })
+      useToastStore.getState().push({ kind: 'success', title: t('files.ui.toast.deletedItem', { name: file.name }) })
       onRefresh()
     }
   }
@@ -642,44 +660,44 @@ function TreeRow({
   const menuItems = (): MenuEntry[] => [
     ...(isDir
       ? [
-          { label: expanded ? '收起' : '展开', onClick: onToggle },
-          { label: '终端进入此目录', onClick: () => onEnterDir(file.path) },
+          { label: expanded ? t('files.ui.tree.collapse') : t('files.ui.tree.expand'), onClick: onToggle },
+          { label: t('files.ui.tree.cdHere'), onClick: () => onEnterDir(file.path) },
           {
-            label: '上传文件到此处',
+            label: t('files.ui.explorer.uploadFileHere'),
             icon: <Upload size={12} />,
             onClick: () => uploadHere()
           },
           {
-            label: '上传文件夹到此处',
+            label: t('files.ui.explorer.uploadFolderHere'),
             icon: <FolderUp size={12} />,
             onClick: () => void uploadFolderHere()
           },
           {
-            label: '新建文件夹',
+            label: t('files.ui.newFolder'),
             icon: <FolderPlus size={12} />,
             onClick: () => setDialog('mkdir')
           }
         ]
       : [
           {
-            label: '编辑',
+            label: t('files.ui.edit'),
             icon: <Pencil size={12} />,
             onClick: () => onOpenFile(file)
           }
         ]),
     {
-      label: isDir ? '下载此目录' : '下载',
+      label: isDir ? t('files.ui.explorer.downloadDir') : t('files.ui.explorer.download'),
       icon: <Download size={12} />,
       onClick: () => void downloadHere()
     },
-    { label: '重命名', onClick: () => setDialog('rename') },
+    { label: t('files.ui.rename'), onClick: () => setDialog('rename') },
     {
-      label: '修改权限',
+      label: t('files.ui.chmod'),
       icon: <ShieldCheck size={12} />,
       onClick: () => setDialog('chmod')
     },
     {
-      label: '删除',
+      label: t('files.ui.delete'),
       icon: <Trash2 size={12} />,
       danger: true,
       separatorBefore: true,
@@ -743,13 +761,19 @@ function TreeRow({
 
       <PromptDialog
         open={dialog !== null}
-        title={dialog === 'rename' ? '重命名' : dialog === 'chmod' ? '修改权限' : '新建文件夹'}
+        title={
+          dialog === 'rename'
+            ? t('files.ui.rename')
+            : dialog === 'chmod'
+              ? t('files.ui.chmod')
+              : t('files.ui.newFolder')
+        }
         label={
           dialog === 'chmod'
-            ? '权限（八进制，如 644 / 755 / 600）'
+            ? t('files.ui.chmodPrompt')
             : dialog === 'rename'
-              ? '新名称'
-              : '文件夹名称'
+              ? t('files.ui.newName')
+              : t('files.ui.folderName')
         }
         defaultValue={
           dialog === 'rename'
@@ -770,15 +794,17 @@ function TreeRow({
 
       <ConfirmDialog
         open={pendingDelete}
-        title="删除远程文件"
+        title={t('files.ui.deleteRemote.title')}
         danger
-        confirmText="删除"
+        confirmText={t('files.ui.delete')}
         message={
           <>
-            确定删除远端{isDir ? '目录' : '文件'}
-            <span className="font-medium text-ink">「{file.name}」</span>吗？
+            {t('files.ui.deleteRemote.prefix')}
+            {isDir ? t('files.ui.deleteRemote.kindDir') : t('files.ui.deleteRemote.kindFile')}
+            <span className="font-medium text-ink">「{file.name}」</span>
+            {t('files.ui.deleteRemote.suffix')}
             <div className="mt-2 selectable break-all font-mono text-2xs text-ink-3">{file.path}</div>
-            {isDir && <div className="mt-1 text-2xs text-danger">目录将被递归删除，不可恢复。</div>}
+            {isDir && <div className="mt-1 text-2xs text-danger">{t('files.ui.deleteRemote.dirWarn')}</div>}
           </>
         }
         onCancel={() => setPendingDelete(false)}

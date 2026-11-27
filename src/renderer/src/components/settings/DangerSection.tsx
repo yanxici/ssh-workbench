@@ -1,10 +1,12 @@
 import type * as React from 'react'
 import { useEffect, useRef, useState } from 'react'
 import { useSettingsStore } from '@/stores/settingsStore'
+import { useI18n } from '@/i18n'
 import { Row } from './sectionUi'
 
 /** 设置 → 危险命令关键词（每行一个；命中即二次确认） */
 export function DangerSection(): React.JSX.Element {
+  const { t } = useI18n()
   const settings = useSettingsStore((s) => s.settings)
   const update = useSettingsStore((s) => s.update)
 
@@ -44,9 +46,7 @@ export function DangerSection(): React.JSX.Element {
 
   return (
     <>
-      <div className="text-2xs leading-relaxed text-ink-3">
-        每行一个关键词；任何命令文本命中这些关键词都会触发二次确认（与命令自身的危险标记相互独立）。
-      </div>
+      <div className="text-2xs leading-relaxed text-ink-3">{t('settings.ext.danger.desc')}</div>
       <textarea
         className="input scroll-thin h-24 resize-none selectable py-2 font-mono text-xs leading-relaxed"
         value={draft}
@@ -60,7 +60,10 @@ export function DangerSection(): React.JSX.Element {
         }}
         spellCheck={false}
       />
-      <Row label="当前生效" hint={`${settings.dangerPatterns.length} 条关键词`}>
+      <Row
+        label={t('settings.ext.danger.active')}
+        hint={t('settings.ext.danger.countHint', { count: settings.dangerPatterns.length })}
+      >
         <span className="text-2xs text-ink-3">{settings.dangerPatterns.length}</span>
       </Row>
     </>

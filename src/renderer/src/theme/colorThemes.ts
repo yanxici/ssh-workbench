@@ -11,6 +11,7 @@
 
 import type { ColorThemeId } from '@shared/types'
 import type { ITheme } from '@xterm/xterm'
+import { tNow } from '../i18n/core'
 
 /** 界面外壳的语义色变量（R G B 三通道） */
 export interface ThemeVars {
@@ -68,7 +69,9 @@ export interface ColorThemeDef {
 
 const VSCODE: ColorThemeDef = {
   id: 'vscode',
-  name: 'Portix 默认',
+  get name() {
+    return tNow('common.theme.vscode')
+  },
   swatch: ['#ffffff', '#047857', '#000000'],
   tagline: 'Pure black & white with emerald accents',
   light: {
@@ -371,7 +374,9 @@ const SOLARIZED: ColorThemeDef = {
 
 const MONO: ColorThemeDef = {
   id: 'mono',
-  name: '极简黑白',
+  get name() {
+    return tNow('common.theme.mono')
+  },
   swatch: ['#000000', '#111111', '#ffffff'],
   tagline: 'Pure monochrome black & white',
   dark: {

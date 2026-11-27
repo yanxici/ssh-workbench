@@ -107,7 +107,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
     lineHeight: 1.35,
     cursorStyle: 'block',
     cursorBlink: true,
-    scrollback: 5000,
+    scrollback: 3000,
     copyOnSelect: false,
     rightClickPaste: false,
     // 拖文件进终端默认走 SFTP 直传当前目录：这条路不要求远端装 trzsz，

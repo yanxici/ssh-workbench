@@ -1,4 +1,5 @@
 import type * as React from 'react'
+import { useI18n } from '@/i18n'
 
 /**
  * 功能面板的加载骨架。
@@ -14,13 +15,16 @@ import type * as React from 'react'
  * 这也是「净」的要求：骨架的存在感应当尽可能低。
  */
 export function PanelSkeleton({ title }: { title?: string }): React.JSX.Element {
+  const { t } = useI18n()
   return (
     <div className="panel-shell fixed inset-x-0 z-30 flex flex-col bg-app" aria-busy="true">
       <div className="panel-head">
-        <span className="panel-title">{title ?? '加载中…'}</span>
+        <span className="panel-title">{title ?? t('panel.skeleton.loading')}</span>
       </div>
       <div className="flex min-h-0 flex-1">
-        {/* 左轨：与 rail-w 同宽，避免内容区左右跳 */}
+        {/*
+         * 左轨：与 rail-w 同宽，避免内容区左右跳
+         */}
         <div className="rail-w shrink-0 border-r border-edge bg-panel" />
         <div className="flex min-w-0 flex-1 flex-col gap-2 p-3">
           {[0, 1, 2, 3, 4, 5].map((i) => (

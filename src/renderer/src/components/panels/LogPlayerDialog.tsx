@@ -4,6 +4,8 @@ import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { Pause, Play, RotateCcw, ScrollText } from 'lucide-react'
 import type { SessionLogFile } from '@shared/types'
+import { useI18n } from '@/i18n'
+import { tNow } from '@/i18n/core'
 import { call } from '@/lib/ipc'
 import { resolveDark, useSettingsStore } from '@/stores/settingsStore'
 import { getXtermTheme } from '@/theme/colorThemes'
@@ -32,6 +34,7 @@ export function LogPlayerDialog({
   log: SessionLogFile
   onClose: () => void
 }): React.JSX.Element {
+  const { t } = useI18n()
   const containerRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<Terminal | null>(null)
   const eventsRef = useRef<CastEvent[]>([])
@@ -102,14 +105,17 @@ export function LogPlayerDialog({
     ro.observe(el)
 
     void (async () => {
-      const content = await call(window.api.logs.read(log.path), { errorTitle: '读取日志失败' })
+      const content = await call(window.api.logs.read(log.path), {
+        errorTitle: tNow('panel.logPlayer.readError')
+      })
       if (!content) return
       try {
         const lines = content.split('\n').filter((l) => l.trim())
         const events: CastEvent[] = []
         let maxT = 0
         for (let i = 0; i < lines.length; i += 1) {
-          if (i === 0) continue // 头部行（version/width/height/title）
+          // 头部行（version/width/height/title）
+          if (i === 0) continue
           const row = JSON.parse(lines[i]) as unknown
           // 上面的 typeof 已经收窄成 number/string，无需再断言
           if (Array.isArray(row) && typeof row[0] === 'number' && typeof row[2] === 'string') {
@@ -126,7 +132,7 @@ export function LogPlayerDialog({
         setDuration(Math.max(maxT, 0.1))
         setReady(true)
       } catch {
-        setError('日志格式无法解析，文件可能损坏')
+        setError(tNow('panel.logPlayer.parseError'))
       }
     })()
 
@@ -225,12 +231,12 @@ export function LogPlayerDialog({
         </div>
 
         <div className="modal-footer">
-          <button className="btn" title="从头重播" onClick={restart}>
+          <button className="btn" title={t('panel.logPlayer.restart')} onClick={restart}>
             <RotateCcw size={13} />
           </button>
           <button className="btn btn-primary" onClick={togglePlay} disabled={!ready}>
             {playing ? <Pause size={13} /> : <Play size={13} />}
-            {playing ? '暂停' : '播放'}
+            {playing ? t('panel.logPlayer.pause') : t('panel.logPlayer.play')}
           </button>
 
           <div className="mx-2 h-1 min-w-0 flex-1 overflow-hidden rounded-full bg-raised">
@@ -247,12 +253,12 @@ export function LogPlayerDialog({
           >
             {[1, 2, 4, 8].map((s) => (
               <option key={s} value={s}>
-                {s}x 速度
+                {t('panel.logPlayer.speed', { speed: s })}
               </option>
             ))}
           </select>
           <button className="btn" onClick={onClose}>
-            关闭
+            {t('panel.logPlayer.close')}
           </button>
         </div>
 

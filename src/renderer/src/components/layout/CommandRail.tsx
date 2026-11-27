@@ -2,6 +2,7 @@ import type * as React from 'react'
 import type { Command } from '@shared/types'
 import { CommandPanel } from '@/components/commands/CommandPanel'
 import { useLayoutStore } from '@/stores/layoutStore'
+import { useI18n } from '@/i18n'
 
 /**
  * 右侧常驻命令栏。
@@ -27,20 +28,21 @@ export function CommandRail({
 }): React.JSX.Element | null {
   const visible = useLayoutStore((s) => s.commandRailVisible)
   const toggleCommandRail = useLayoutStore((s) => s.toggleCommandRail)
+  const { t } = useI18n()
 
   if (!visible) return null
 
   return (
     <section
-      aria-label="常用命令栏"
+      aria-label={t('common.activity.commandRail')}
       style={{ width }}
       className="flex min-w-0 shrink-0 flex-col overflow-hidden border-l border-edge bg-panel"
     >
       {/*
-        复用 CommandPanel 本体，只把「折叠」按钮接到命令栏的开合上 ——
-        两个入口（面板头部的 ×、活动栏底部的 Play）改的是同一个状态，
-        不存在「隐藏了却没法再打开」的死角。
-      */}
+        * 复用 CommandPanel 本体，只把「折叠」按钮接到命令栏的开合上 ——
+        * 两个入口（面板头部的 ×、活动栏底部的 Play）改的是同一个状态，
+        * 不存在「隐藏了却没法再打开」的死角。
+        */}
       <CommandPanel onEdit={onEdit} onCollapse={toggleCommandRail} />
     </section>
   )

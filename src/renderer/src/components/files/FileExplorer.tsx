@@ -39,6 +39,7 @@ import { useSettingsStore } from '@/stores/settingsStore'
 import { UploadTargetDialog } from './UploadTargetDialog'
 import { TransferTab } from './TransferTab'
 import { useUploadTarget } from './useUploadTarget'
+import { type I18nKey, tNow, useI18n } from '@/i18n'
 import {
   ConfirmDialog,
   ContextMenu,
@@ -74,13 +75,13 @@ const PREFETCH_DIRS = 6
  */
 const ROW_LIMIT = 300
 
-const WORKSPACE_SPOTS: Array<{ label: string; get: (home: string) => string; icon: React.JSX.Element }> =
+const WORKSPACE_SPOTS: Array<{ labelKey: I18nKey; get: (home: string) => string; icon: React.JSX.Element }> =
   [
-    { label: '主目录', get: (h) => h || '/', icon: <Home size={13} /> },
-    { label: '根目录', get: () => '/', icon: <HardDrive size={13} /> },
-    { label: '临时目录', get: () => '/tmp', icon: <Folder size={13} /> },
-    { label: '系统日志', get: () => '/var/log', icon: <FileText size={13} /> },
-    { label: '配置目录', get: () => '/etc', icon: <Folder size={13} /> }
+    { labelKey: 'files.ui.spot.home', get: (h) => h || '/', icon: <Home size={13} /> },
+    { labelKey: 'files.ui.spot.root', get: () => '/', icon: <HardDrive size={13} /> },
+    { labelKey: 'files.ui.spot.tmp', get: () => '/tmp', icon: <Folder size={13} /> },
+    { labelKey: 'files.ui.spot.varLog', get: () => '/var/log', icon: <FileText size={13} /> },
+    { labelKey: 'files.ui.spot.etc', get: () => '/etc', icon: <Folder size={13} /> }
   ]
 
 interface TreeNode {
@@ -98,6 +99,7 @@ export function FileExplorer({
   session: SessionUi | null
   onBrowseSessions: () => void
 }): React.JSX.Element {
+  const { t } = useI18n()
   const [tab, setTab] = useState<ExplorerTabKey>('workspace')
   const [home, setHome] = useState<string>('')
   const [currentDir, setCurrentDir] = useState<string>('')
@@ -150,7 +152,7 @@ export function FileExplorer({
   const updateSettings = useSettingsStore((s) => s.update)
   const follow = followPref !== false
   /* 跟随开关也留一份 ref：会话切换的 effect 只依赖 sessionId，
-     读 ref 才不会因为用户中途开关开关而重跑整段初始化 */
+   * 读 ref 才不会因为用户中途开关开关而重跑整段初始化 */
   const followRef = useRef(follow)
   followRef.current = follow
   /* 同理留一份 Tab 的 ref：换会话且没有已知 cwd 时，不该把用户选的 Tab 也重置 */
@@ -408,11 +410,11 @@ export function FileExplorer({
       .then((res) => {
         if (cancelled || sessionRef.current !== sessionId) return
         setRoots({ dir: currentDir, files: res.files[currentDir] ?? [] })
-        setRootError(res.errors[currentDir] ? '读取目录失败' : null)
+        setRootError(res.errors[currentDir] ? tNow('files.ui.readDirFailed') : null)
       })
       .catch(() => {
         if (cancelled || sessionRef.current !== sessionId) return
-        setRootError('读取目录失败')
+        setRootError(tNow('files.ui.readDirFailed'))
       })
       .finally(() => {
         if (!cancelled) setLoading(false)
@@ -611,7 +613,12 @@ export function FileExplorer({
   const uploadTarget = useUploadTarget(sessionId, bumpTree)
 
   const openUpload = (): Promise<void> =>
-    uploadTarget.request(currentDir, currentDir ? `当前浏览：${currentDir}` : '未进入目录，请手动指定上传位置')
+    uploadTarget.request(
+      currentDir,
+      currentDir
+        ? t('files.ui.explorer.currentBrowse', { dir: currentDir })
+        : t('files.ui.explorer.noDirHint')
+    )
 
   /**
    * 上传文件夹：同样先让用户确认**远端目标目录**（可以逐级进子目录），
@@ -621,7 +628,9 @@ export function FileExplorer({
   const openUploadFolder = async (dir?: string): Promise<void> => {
     await uploadTarget.request(
       dir ?? currentDir,
-      dir ? `目标来自所选条目：${dir}` : '选好目标目录后，再选本地要上传的文件夹',
+      dir
+        ? t('files.ui.explorer.targetFromSelection', { dir })
+        : t('files.ui.explorer.pickFolderHint'),
       'folder'
     )
   }
@@ -630,7 +639,7 @@ export function FileExplorer({
 
   /** 上传到指定目录（右键「上传文件到此处」与空白处右键共用） */
   const openUploadTo = (dir: string): Promise<void> =>
-    uploadTarget.request(dir, `目标来自所选条目：${dir}`)
+    uploadTarget.request(dir, t('files.ui.explorer.targetFromSelection', { dir }))
 
   /** 下载：执行链路在 sftpStore.downloadTo / downloadToDefault，这里只做转发 */
   const downloadTo = (paths: string[], localDir?: string): Promise<unknown> =>
@@ -641,7 +650,7 @@ export function FileExplorer({
   const mkdirAt = async (parent: string, name: string): Promise<void> => {
     if (!sessionId) return
     const done = await call(window.api.sftp.mkdir(sessionId, remoteJoin(parent, name)), {
-      errorTitle: '新建文件夹失败'
+      errorTitle: t('files.ui.err.mkdir')
     })
     if (done !== null) bumpTree()
   }
@@ -650,7 +659,7 @@ export function FileExplorer({
     if (!sessionId) return
     const done = await call(
       window.api.sftp.rename(sessionId, target.path, remoteJoin(remoteDirname(target.path), name)),
-      { errorTitle: '重命名失败' }
+      { errorTitle: t('files.ui.err.rename') }
     )
     if (done !== null) bumpTree()
   }
@@ -658,10 +667,13 @@ export function FileExplorer({
   const removeAt = async (target: RemoteFile): Promise<void> => {
     if (!sessionId) return
     const ok = await call(window.api.sftp.remove(sessionId, target.path), {
-      errorTitle: '删除失败'
+      errorTitle: t('files.ui.err.delete')
     })
     if (ok !== null) {
-      useToastStore.getState().push({ kind: 'success', title: `已删除「${target.name}」` })
+      useToastStore.getState().push({
+        kind: 'success',
+        title: t('files.ui.toast.deletedItem', { name: target.name })
+      })
       bumpTree()
     }
   }
@@ -681,48 +693,61 @@ export function FileExplorer({
       ...(target && target.type !== 'directory'
         ? [
             {
-              label: '编辑',
+              label: t('files.ui.edit'),
               icon: <Pencil size={12} />,
               onClick: () => void openEditor(sessionId, target.path)
             }
           ]
         : []),
       {
-        label: target ? (target.type === 'directory' ? '下载此目录' : '下载') : '下载当前目录',
+        label: target
+          ? target.type === 'directory'
+            ? t('files.ui.explorer.downloadDir')
+            : t('files.ui.explorer.download')
+          : t('files.ui.explorer.downloadCurrent'),
         icon: <Download size={12} />,
         disabled: !target && !currentDir,
         onClick: () => void downloadTo([target ? target.path : currentDir])
       },
       {
-        label: '下载到「下载」文件夹',
+        label: t('files.ui.explorer.downloadDefault'),
         icon: <Download size={12} />,
         disabled: !target && !currentDir,
         onClick: () => void downloadToDefault([target ? target.path : currentDir])
       },
       {
-        label: target?.type === 'directory' ? '上传文件到此处' : '上传文件到此目录',
+        label:
+          target?.type === 'directory'
+            ? t('files.ui.explorer.uploadFileHere')
+            : t('files.ui.explorer.uploadFileDir'),
         icon: <Upload size={12} />,
         separatorBefore: true,
         disabled: !dir,
         onClick: () => void openUploadTo(dir)
       },
       {
-        label: target?.type === 'directory' ? '上传文件夹到此处' : '上传文件夹到此目录',
+        label:
+          target?.type === 'directory'
+            ? t('files.ui.explorer.uploadFolderHere')
+            : t('files.ui.explorer.uploadFolderDir'),
         icon: <FolderUp size={12} />,
         disabled: !dir,
         onClick: () => void openUploadFolder(dir)
       },
       {
-        label: '新建文件夹',
+        label: t('files.ui.newFolder'),
         icon: <FolderPlus size={12} />,
         disabled: !dir,
         onClick: () => setDialog('mkdir')
       },
       ...(target
         ? [
-            { label: '重命名', separatorBefore: true, onClick: () => setDialog('rename') },
+            { label: t('files.ui.rename'), separatorBefore: true, onClick: () => setDialog('rename') },
             {
-              label: target.type === 'directory' ? '删除目录' : '删除',
+              label:
+                target.type === 'directory'
+                  ? t('files.ui.explorer.deleteDir')
+                  : t('files.ui.delete'),
               danger: true,
               onClick: () => setPendingDelete(target)
             }
@@ -755,26 +780,28 @@ export function FileExplorer({
       <div className="flex h-full flex-col">
         <div className="panel-head">
           <FolderTree size={13} className="shrink-0 text-ink-3" />
-          <span className="panel-title">文件</span>
+          <span className="panel-title">{t('files.ui.title')}</span>
           <span className="flex-1" />
         </div>
         <ExplorerTabs tab={tab} onChange={setTab} />
-        {/* 传输记录不依赖会话：没连设备时照样能查上一批文件落在哪儿 */}
+        {/*
+         * 传输记录不依赖会话：没连设备时照样能查上一批文件落在哪儿
+         */}
         {tab === 'transfer' && <TransferTab />}
         {tab !== 'transfer' && (
         <div className="flex flex-1 flex-col items-center justify-center gap-2 px-5 text-center">
           <FolderOpen size={26} className="text-ink-3/60" />
           <div className="text-xs font-medium text-ink-2">
-            {serialOnly ? '串口会话不提供文件浏览' : '还没有连接任何设备'}
+            {serialOnly ? t('files.ui.explorer.serialTitle') : t('files.ui.explorer.noSessionTitle')}
           </div>
           <div className="text-2xs leading-relaxed text-ink-3">
             {serialOnly
-              ? '文件浏览依赖 SFTP，只能用于 SSH 连接。串口会话是 Console 救急通道，请直接在终端里敲命令。'
-              : '文件浏览器需要先建立 SSH 连接；连上之后这里会自动显示远端目录。'}
+              ? t('files.ui.explorer.serialDesc')
+              : t('files.ui.explorer.noSessionDesc')}
           </div>
           <button className="btn btn-primary mt-1 h-7 px-3 text-2xs" onClick={onBrowseSessions}>
             <Terminal size={12} />
-            {serialOnly ? '切换到 SSH 会话' : '去连接设备'}
+            {serialOnly ? t('files.ui.explorer.switchSsh') : t('files.ui.explorer.connectDevice')}
           </button>
         </div>
         )}
@@ -784,13 +811,15 @@ export function FileExplorer({
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      {/* 头部：与其它 5 个侧栏面板共用 panel-head。
-          原来这里是「Tab 行 + 工具栏」两行自造头，比 HistoryPanel /
-          CommandPanel 等高出 4px，切面板时内容整体上下跳 —— 现在统一成
-          panel-head(32) + panel-toolbar，剩下的横向空间还给了会话名。 */}
+      {/*
+       * 头部：与其它 5 个侧栏面板共用 panel-head。
+       * 原来这里是「Tab 行 + 工具栏」两行自造头，比 HistoryPanel /
+       * CommandPanel 等高出 4px，切面板时内容整体上下跳 —— 现在统一成
+       * panel-head(32) + panel-toolbar，剩下的横向空间还给了会话名。
+       */}
       <div className="panel-head">
         <FolderTree size={13} className="shrink-0 text-ink-3" />
-        <span className="panel-title">文件</span>
+        <span className="panel-title">{t('files.ui.title')}</span>
         <ShellModeBadge sessionId={sessionId} />
         <span
           className="min-w-0 flex-1 truncate text-right font-mono text-3xs text-ink-3"
@@ -798,17 +827,19 @@ export function FileExplorer({
         >
           {session.title}
         </span>
-        {/* 文件操作按钮组只在「工作区 / 文件系统」两栏出现：
-            「传输」栏里没有当前目录可刷新、可上传，摆着一排点了会作用到
-            上一个目录的按钮比没有更糟。 */}
+        {/*
+         * 文件操作按钮组只在「工作区 / 文件系统」两栏出现：
+         * 「传输」栏里没有当前目录可刷新、可上传，摆着一排点了会作用到
+         * 上一个目录的按钮比没有更糟。
+         */}
         {tab !== 'transfer' && (
           <>
         <button
           className="btn-icon h-6 w-6"
           title={
             follow
-              ? '已跟随终端：在终端里 cd 会自动跳到此目录（点击关闭跟随）'
-              : '跟随终端已关闭：点击后在终端里 cd 会自动跳到该目录'
+              ? t('files.ui.explorer.followOn')
+              : t('files.ui.explorer.followOff')
           }
           onClick={() => void updateSettings({ filesFollowTerminalCwd: !follow })}
         >
@@ -820,7 +851,7 @@ export function FileExplorer({
         </button>
         <button
           className="btn-icon h-6 w-6"
-          title={loading ? '正在刷新…' : '刷新当前目录'}
+          title={loading ? t('files.ui.refreshing') : t('files.ui.refreshDir')}
           disabled={loading}
           onClick={() => bumpTree()}
         >
@@ -828,7 +859,11 @@ export function FileExplorer({
         </button>
         <button
           className="btn-icon h-6 w-6"
-          title={currentDir ? `上传文件到 ${currentDir}（可改目标目录）` : '上传文件（选择目标目录）'}
+          title={
+            currentDir
+              ? t('files.ui.explorer.uploadToTitle', { dir: currentDir })
+              : t('files.ui.explorer.uploadPickTitle')
+          }
           onClick={() => void openUpload()}
         >
           <Upload size={13} />
@@ -837,8 +872,8 @@ export function FileExplorer({
           className="btn-icon h-6 w-6"
           title={
             currentDir
-              ? `上传文件夹到 ${currentDir}（远端保留同名目录）`
-              : '上传文件夹（选择目标目录）'
+              ? t('files.ui.explorer.uploadFolderToTitle', { dir: currentDir })
+              : t('files.ui.explorer.uploadFolderPickTitle')
           }
           onClick={() => void openUploadFolder()}
         >
@@ -846,13 +881,16 @@ export function FileExplorer({
         </button>
         <button
           className="btn-icon h-6 w-6"
-          title={currentDir ? '在当前目录新建文件夹' : '请先进入一个目录'}
+          title={currentDir ? t('files.ui.explorer.mkdirHereTitle') : t('files.ui.explorer.mkdirNeedDir')}
           disabled={!currentDir}
           onClick={() => {
             if (!currentDir) return
-            void call(window.api.sftp.mkdir(sessionId!, remoteJoin(currentDir, '新建文件夹')), {
-              silent: true
-            }).then(() => bumpTree())
+            void call(
+              window.api.sftp.mkdir(sessionId!, remoteJoin(currentDir, t('files.ui.mkdirDefaultName'))),
+              {
+                silent: true
+              }
+            ).then(() => bumpTree())
           }}
         >
           <Plus size={14} />
@@ -861,7 +899,9 @@ export function FileExplorer({
         )}
       </div>
 
-      {/* Tab 行：跟命令面板的「全部/收藏/最近」用同一套分段控件外观 */}
+      {/*
+       * Tab 行：跟命令面板的「全部/收藏/最近」用同一套分段控件外观
+       */}
       <ExplorerTabs tab={tab} onChange={setTab} />
 
       {/*
@@ -871,8 +911,10 @@ export function FileExplorer({
        */}
       {tab === 'transfer' && <TransferTab />}
 
-      {/* 面包屑：只在「文件系统」Tab 出现 —— 工作区是快捷位置列表，
-          顶上再放一条路径等于同一信息重复两次 */}
+      {/*
+       * 面包屑：只在「文件系统」Tab 出现 —— 工作区是快捷位置列表，
+       * 顶上再放一条路径等于同一信息重复两次
+       */}
       {tab === 'fs' && (
         <div className="scroll-thin flex h-7 shrink-0 items-center gap-0.5 overflow-x-auto border-b border-edge px-1.5">
           {crumbs.map((c, i) => (
@@ -895,14 +937,14 @@ export function FileExplorer({
       {tab === 'workspace' && (
         <div className="shrink-0 border-b border-edge px-1.5 py-1.5">
           <div className="mb-1 px-1 text-3xs font-semibold uppercase tracking-wider text-ink-3/80">
-            常用位置
+            {t('files.ui.explorer.spotsTitle')}
           </div>
           {WORKSPACE_SPOTS.map((spot) => {
             const path = spot.get(home)
             const active = currentDir === path
             return (
               <button
-                key={spot.label}
+                key={spot.labelKey}
                 className={cn(
                   'flex w-full cursor-default items-center gap-2 rounded px-1.5 py-1 text-left text-xs transition-colors duration-150',
                   active ? 'bg-select text-ink' : 'text-ink-2 hover:bg-hover'
@@ -910,7 +952,7 @@ export function FileExplorer({
                 onClick={() => goto(path)}
               >
                 <span className={active ? 'text-accent' : 'text-ink-3'}>{spot.icon}</span>
-                <span className="min-w-0 flex-1 truncate">{spot.label}</span>
+                <span className="min-w-0 flex-1 truncate">{t(spot.labelKey)}</span>
                 <span className="max-w-[120px] shrink-0 truncate font-mono text-3xs text-ink-3/80">
                   {path}
                 </span>
@@ -920,7 +962,9 @@ export function FileExplorer({
         </div>
       )}
 
-      {/* 目录树：空白处右键也出菜单（目标=当前目录），这样侧栏任何位置都能直接下载整目录 */}
+      {/*
+       * 目录树：空白处右键也出菜单（目标=当前目录），这样侧栏任何位置都能直接下载整目录
+       */}
       <div
         className={cn(
           'scroll-thin min-h-0 flex-1 overflow-auto py-1',
@@ -936,14 +980,14 @@ export function FileExplorer({
         {loading && rows === null ? (
           <div className="flex items-center justify-center gap-2 py-6 text-2xs text-ink-3">
             <Loader2 size={12} className="animate-spin" />
-            加载中…
+            {t('files.ui.loading')}
           </div>
         ) : error ? (
           <div className="px-3 py-4 text-2xs leading-relaxed text-ink-3">{error}</div>
         ) : rows && rows.length === 0 ? (
           <div className="flex flex-col items-center gap-1 px-4 py-8 text-center">
             <LayoutGrid size={18} className="text-ink-3/50" />
-            <div className="text-2xs text-ink-3">这个目录是空的</div>
+            <div className="text-2xs text-ink-3">{t('files.ui.emptyDir')}</div>
           </div>
         ) : (
           <>
@@ -958,7 +1002,9 @@ export function FileExplorer({
                   style={{ paddingLeft: 6 + depth * 12 }}
                   title={rowError}
                 >
-                  <span className="min-w-0 flex-1 truncate">读取失败：{rowError}</span>
+                  <span className="min-w-0 flex-1 truncate">
+                    {t('files.ui.readRowFailed', { error: rowError })}
+                  </span>
                 </div>
               )
             }
@@ -1058,20 +1104,24 @@ export function FileExplorer({
             )
               }
             )}
-            {/* 超出行数上限时给一个显式展开入口，与会话树的交互一致 */}
+            {/*
+             * 超出行数上限时给一个显式展开入口，与会话树的交互一致
+             */}
             {!showAllRows && (rows?.length ?? 0) > ROW_LIMIT && (
               <button
                 className="w-full py-1 pl-2 text-left text-2xs text-ink-3 hover:text-ink"
                 onClick={() => setShowAllRows(true)}
               >
-                还有 {(rows?.length ?? 0) - ROW_LIMIT} 项，点击展开全部
+                {t('files.ui.expandMore', { count: (rows?.length ?? 0) - ROW_LIMIT })}
               </button>
             )}
           </>
         )}
       </div>
 
-      {/* 底：当前目录 + 上级 */}
+      {/*
+       * 底：当前目录 + 上级
+       */}
       <div
         className={cn(
           'flex h-7 shrink-0 items-center gap-1 border-t border-edge px-1.5 text-2xs text-ink-3',
@@ -1079,27 +1129,29 @@ export function FileExplorer({
         )}
       >
         <span className="min-w-0 flex-1 truncate font-mono" title={currentDir || undefined}>
-          {currentDir || '未选择目录'}
+          {currentDir || t('files.ui.noDirSelected')}
         </span>
         {currentDir && currentDir !== '/' && (
           <button
             className="rounded px-1 py-0.5 transition-colors duration-150 hover:bg-hover hover:text-ink-2"
             onClick={() => goto(remoteDirname(currentDir) || '/')}
           >
-            上级
+            {t('files.ui.parentShort')}
           </button>
         )}
       </div>
 
-      {/* 右键菜单：行 → 该文件/目录；空白 → 当前目录 */}
+      {/*
+       * 右键菜单：行 → 该文件/目录；空白 → 当前目录
+       */}
       {menu && (
         <ContextMenu x={menu.x} y={menu.y} items={menuItems(menu.target)} onClose={closeMenu} />
       )}
 
       <PromptDialog
         open={dialog !== null}
-        title={dialog === 'rename' ? '重命名' : '新建文件夹'}
-        label={dialog === 'rename' ? '新名称' : '文件夹名称'}
+        title={dialog === 'rename' ? t('files.ui.rename') : t('files.ui.newFolder')}
+        label={dialog === 'rename' ? t('files.ui.newName') : t('files.ui.folderName')}
         defaultValue={dialog === 'rename' ? (menuTarget?.name ?? '') : ''}
         onCancel={() => setDialog(null)}
         onConfirm={(value) => {
@@ -1121,20 +1173,23 @@ export function FileExplorer({
 
       <ConfirmDialog
         open={pendingDelete !== null}
-        title="删除远程文件"
+        title={t('files.ui.deleteRemote.title')}
         danger
-        confirmText="删除"
+        confirmText={t('files.ui.delete')}
         message={
           pendingDelete ? (
             <>
-              确定删除远端
-              {pendingDelete.type === 'directory' ? '目录' : '文件'}
-              <span className="font-medium text-ink">「{pendingDelete.name}」</span>吗？
+              {t('files.ui.deleteRemote.prefix')}
+              {pendingDelete.type === 'directory'
+                ? t('files.ui.deleteRemote.kindDir')
+                : t('files.ui.deleteRemote.kindFile')}
+              <span className="font-medium text-ink">「{pendingDelete.name}」</span>
+              {t('files.ui.deleteRemote.suffix')}
               <div className="mt-2 selectable break-all font-mono text-2xs text-ink-3">
                 {pendingDelete.path}
               </div>
               {pendingDelete.type === 'directory' && (
-                <div className="mt-1 text-2xs text-danger">目录将被递归删除，不可恢复。</div>
+                <div className="mt-1 text-2xs text-danger">{t('files.ui.deleteRemote.dirWarn')}</div>
               )}
             </>
           ) : (
@@ -1149,7 +1204,9 @@ export function FileExplorer({
         }}
       />
 
-      {/* 上传目标目录（选完目录才弹本地文件选择框） */}
+      {/*
+       * 上传目标目录（选完目录才弹本地文件选择框）
+       */}
       <UploadTargetDialog {...uploadTarget.dialogProps} />
     </div>
   )
@@ -1168,10 +1225,11 @@ function ExplorerTabs({
   tab: ExplorerTabKey
   onChange: (t: ExplorerTabKey) => void
 }): React.JSX.Element {
+  const { t } = useI18n()
   const items: Array<{ key: ExplorerTabKey; label: string }> = [
-    { key: 'workspace', label: '工作区' },
-    { key: 'fs', label: '文件系统' },
-    { key: 'transfer', label: '传输' }
+    { key: 'workspace', label: t('files.ui.explorer.tabWorkspace') },
+    { key: 'fs', label: t('files.ui.explorer.tabFs') },
+    { key: 'transfer', label: t('files.ui.explorer.tabTransfer') }
   ]
   return (
     <div className="flex shrink-0 items-center gap-1 px-2 pb-1.5 pt-1.5">

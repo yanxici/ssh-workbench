@@ -34,6 +34,7 @@ import { useSessionStore } from '@/stores/sessionStore'
 import { useToastStore } from '@/stores/toastStore'
 import { cn, formatBytes } from '@/lib/utils'
 import { closePanelsExcept } from '@/lib/panels'
+import { tNow, useI18n } from '@/i18n'
 
 /** 超过该大小或持续该时长，才认为值得弹出进度浮层（避免小文件一闪而过） */
 const LONG_TASK_BYTES = 8 * 1024 * 1024
@@ -69,8 +70,8 @@ async function revealTask(task: TransferTask): Promise<void> {
   if (!session) {
     useToastStore.getState().push({
       kind: 'warning',
-      title: '该连接当前未建立',
-      detail: '先连上这台设备，才能在远端打开这个目录'
+      title: tNow('files.ui.transfer.disconnected'),
+      detail: tNow('files.ui.transfer.reconnectToOpenRemote')
     })
     return
   }
@@ -91,23 +92,34 @@ function etaText(task: TransferTask): string | null {
   if (task.total <= 0 || task.transferred >= task.total) return null
   const seconds = (task.total - task.transferred) / task.speedBps
   if (!Number.isFinite(seconds) || seconds <= 0) return null
-  if (seconds < 60) return `剩余 ${Math.max(1, Math.round(seconds))} 秒`
-  if (seconds < 3600) return `剩余 ${Math.floor(seconds / 60)} 分 ${Math.round(seconds % 60)} 秒`
-  return `剩余 ${Math.floor(seconds / 3600)} 小时 ${Math.round((seconds % 3600) / 60)} 分`
+  if (seconds < 60) return tNow('files.ui.dock.etaSec', { s: Math.max(1, Math.round(seconds)) })
+  if (seconds < 3600) {
+    return tNow('files.ui.dock.etaMinSec', {
+      m: Math.floor(seconds / 60),
+      s: Math.round(seconds % 60)
+    })
+  }
+  return tNow('files.ui.dock.etaHourMin', {
+    h: Math.floor(seconds / 3600),
+    m: Math.round((seconds % 3600) / 60)
+  })
 }
 
 /** 传输量文案：字节任务与目录任务（文件数）分开表达 */
 function amountText(task: TransferTask): { left: string; right: string } {
   if (task.unit === 'files') {
     return {
-      left: `${Math.min(task.transferred, task.total)} / ${task.total} 个文件`,
+      left: tNow('files.ui.transfer.filesCount', {
+        done: Math.min(task.transferred, task.total),
+        total: task.total
+      }),
       right: task.status === 'running' ? etaText(task) ?? '' : ''
     }
   }
   if (task.total <= 0) {
     return {
-      left: task.transferred > 0 ? formatBytes(task.transferred) : '等待开始',
-      right: task.status === 'running' ? '计算中…' : ''
+      left: task.transferred > 0 ? formatBytes(task.transferred) : tNow('files.ui.dock.waitingStart'),
+      right: task.status === 'running' ? tNow('files.ui.dock.calculating') : ''
     }
   }
   return {
@@ -118,18 +130,18 @@ function amountText(task: TransferTask): { left: string; right: string } {
             .filter(Boolean)
             .join(' · ')
         : task.status === 'paused'
-          ? '已暂停，可继续'
+          ? tNow('files.ui.dock.pausedResumeHint')
           : ''
   }
 }
 
 function statusText(task: TransferTask): string {
-  if (task.status === 'pending') return '排队中'
+  if (task.status === 'pending') return tNow('files.ui.transfer.status.pending')
   if (task.status === 'running') return `${taskPercent(task)}%`
-  if (task.status === 'paused') return '已暂停'
-  if (task.status === 'done') return '完成'
-  if (task.status === 'canceled') return '已取消'
-  return '失败'
+  if (task.status === 'paused') return tNow('files.ui.transfer.status.paused')
+  if (task.status === 'done') return tNow('files.ui.transfer.status.done')
+  if (task.status === 'canceled') return tNow('files.ui.transfer.status.canceled')
+  return tNow('files.ui.transfer.status.error')
 }
 
 /*
@@ -140,6 +152,7 @@ function statusText(task: TransferTask): string {
 const MAX_TRANSFERS = 200
 
 export function TransferProgressDock(): React.JSX.Element | null {
+  const { t } = useI18n()
   const transfers = useSftpStore((s) => s.transfers)
   const collapsed = useSftpStore((s) => s.dockCollapsed)
   const closed = useSftpStore((s) => s.dockClosed)
@@ -222,11 +235,13 @@ export function TransferProgressDock(): React.JSX.Element | null {
       )}
     >
       <div className="overflow-hidden rounded-lg border border-edge bg-panel shadow-pop">
-        {/* 标题栏：点击折叠 / 展开 */}
+        {/*
+         * 标题栏：点击折叠 / 展开
+         */}
         <div className="flex items-center gap-2 px-2.5 py-1.5">
           <button
             className="flex min-w-0 flex-1 items-center gap-2 text-left"
-            title={collapsed ? '展开传输进度' : '折叠传输进度'}
+            title={collapsed ? t('files.ui.dock.expand') : t('files.ui.dock.collapse')}
             onClick={() => setCollapsed(!collapsed)}
           >
             {active.length > 0 ? (
@@ -245,22 +260,23 @@ export function TransferProgressDock(): React.JSX.Element | null {
             <span className="shrink-0 text-xs font-semibold">
               {active.length > 0
                 ? pausedCount === active.length
-                  ? '已暂停'
-                  : '传输中'
+                  ? t('files.ui.transfer.status.paused')
+                  : t('files.ui.dock.transferring')
                 : failed.length > 0
-                  ? '传输失败'
-                  : '传输完成'}
+                  ? t('files.ui.dock.failedTitle')
+                  : t('files.ui.dock.doneTitle')}
             </span>
             {active.length > 0 ? (
               <span className="truncate text-2xs text-ink-3">
-                {active.length} 项 · {overall}%
+                {t('files.ui.dock.activeSummary', { count: active.length, pct: overall })}
                 {pausedCount > 0 && pausedCount < active.length
-                  ? ` · ${pausedCount} 项暂停`
+                  ? t('files.ui.dock.pausedSuffix', { count: pausedCount })
                   : ''}
               </span>
             ) : (
               <span className="truncate text-2xs text-ink-3">
-                {done.length} 个完成{failed.length > 0 ? ` · ${failed.length} 个失败` : ''}
+                {t('files.ui.dock.doneSummary', { count: done.length })}
+                {failed.length > 0 ? t('files.ui.dock.failedSuffix', { count: failed.length }) : ''}
               </span>
             )}
             <span className="flex-1" />
@@ -272,14 +288,16 @@ export function TransferProgressDock(): React.JSX.Element | null {
           </button>
           <button
             className="btn-icon h-5 w-5 shrink-0"
-            title={active.length > 0 ? '隐藏浮层（传输继续，可在状态栏重新打开）' : '关闭'}
+            title={active.length > 0 ? t('files.ui.dock.hideHint') : t('files.ui.close')}
             onClick={closeDock}
           >
             <X size={12} />
           </button>
         </div>
 
-        {/* 总进度：折叠时也保留，保证任何状态下都能看到长文件进度 */}
+        {/*
+         * 总进度：折叠时也保留，保证任何状态下都能看到长文件进度
+         */}
         {active.length > 0 && (
           <div className="h-1.5 bg-raised">
             <div
@@ -302,12 +320,12 @@ export function TransferProgressDock(): React.JSX.Element | null {
 
         {!collapsed && finished && (
           <div className="flex items-center gap-2 border-t border-edge-soft px-2.5 py-1">
-            <span className="flex-1 text-2xs text-ink-3">传输队列已结束</span>
+            <span className="flex-1 text-2xs text-ink-3">{t('files.ui.dock.queueFinished')}</span>
             <button
               className="text-2xs text-ink-3 transition-colors hover:text-ink"
               onClick={clearFinished}
             >
-              清除记录
+              {t('files.ui.dock.clearFinished')}
             </button>
           </div>
         )}
@@ -323,6 +341,7 @@ function TransferRow({
   task: TransferTask
   onDismiss: () => void
 }): React.JSX.Element {
+  const { t } = useI18n()
   const pauseTask = useSftpStore((s) => s.pauseTask)
   const resumeTask = useSftpStore((s) => s.resumeTask)
   const cancelTask = useSftpStore((s) => s.cancelTask)
@@ -358,7 +377,7 @@ function TransferRow({
         )}
         <span
           className="min-w-0 flex-1 truncate text-2xs text-ink-2"
-          title={`${task.direction === 'upload' ? '上传' : '下载'}\n${task.localPath} ⇄ ${task.remotePath}${
+          title={`${task.direction === 'upload' ? t('files.ui.dock.dirUpload') : t('files.ui.dock.dirDownload')}\n${task.localPath} ⇄ ${task.remotePath}${
             task.error ? `\n${task.error}` : ''
           }${task.note ? `\n${task.note}` : ''}`}
         >
@@ -379,11 +398,13 @@ function TransferRow({
           {statusText(task)}
         </span>
 
-        {/* 传输控制：暂停 / 继续 / 终止 */}
+        {/*
+         * 传输控制：暂停 / 继续 / 终止
+         */}
         {canResume && (
           <button
-            className="flex h-4 w-4 shrink-0 items-center justify-center rounded text-ink-3 transition-colors hover:bg-hover hover:text-accent"
-            title="继续传输"
+            className="flex h-4 w-4 shrink-0 items-center justify-center rounded-sm text-ink-3 transition-colors hover:bg-hover hover:text-accent"
+            title={t('files.ui.dock.resume')}
             onClick={() => void resumeTask(task.id)}
           >
             <Play size={10} />
@@ -391,8 +412,8 @@ function TransferRow({
         )}
         {canPause && (
           <button
-            className="flex h-4 w-4 shrink-0 items-center justify-center rounded text-ink-3 transition-colors hover:bg-hover hover:text-accent"
-            title="暂停传输"
+            className="flex h-4 w-4 shrink-0 items-center justify-center rounded-sm text-ink-3 transition-colors hover:bg-hover hover:text-accent"
+            title={t('files.ui.dock.pause')}
             onClick={() => void pauseTask(task.id)}
           >
             <Pause size={10} />
@@ -400,8 +421,8 @@ function TransferRow({
         )}
         {canCancel && (
           <button
-            className="flex h-4 w-4 shrink-0 items-center justify-center rounded text-ink-3 transition-colors hover:bg-hover hover:text-danger"
-            title="终止传输（已传输的部分会丢弃）"
+            className="flex h-4 w-4 shrink-0 items-center justify-center rounded-sm text-ink-3 transition-colors hover:bg-hover hover:text-danger"
+            title={t('files.ui.dock.cancel')}
             onClick={() => void cancelTask(task.id)}
           >
             <Ban size={10} />
@@ -414,8 +435,8 @@ function TransferRow({
          */}
         {!isLive(task) && (
           <button
-            className="flex h-4 w-4 shrink-0 items-center justify-center rounded text-ink-3 opacity-0 transition-opacity hover:bg-hover hover:text-accent group-hover:opacity-100"
-            title={task.direction === 'download' ? '在文件管理器中显示' : '在远端目录中打开'}
+            className="flex h-4 w-4 shrink-0 items-center justify-center rounded-sm text-ink-3 opacity-0 transition-opacity hover:bg-hover hover:text-accent group-hover:opacity-100"
+            title={task.direction === 'download' ? t('files.ui.dock.revealLocal') : t('files.ui.dock.openRemote')}
             onClick={() => void revealTask(task)}
           >
             <FolderOpen size={10} />
@@ -427,7 +448,7 @@ function TransferRow({
             'shrink-0 text-ink-3 opacity-0 transition-opacity hover:text-ink group-hover:opacity-100',
             isLive(task) ? 'invisible' : ''
           )}
-          title="从列表移除"
+          title={t('files.ui.dock.dismiss')}
           onClick={onDismiss}
         >
           <X size={10} />
@@ -449,7 +470,7 @@ function TransferRow({
 
       <div className="mt-0.5 flex items-center gap-2 font-mono text-3xs leading-3 text-ink-3">
         <span className="min-w-0 flex-1 truncate">
-          {failed ? task.error ?? '传输失败' : amount.left}
+          {failed ? task.error ?? t('files.ui.dock.failedTitle') : amount.left}
         </span>
         {!failed && amount.right && (
           <span className="shrink-0 whitespace-nowrap">{amount.right}</span>

@@ -5,21 +5,15 @@ import type {
   TunnelInput,
   TunnelRuntimeInfo
 } from '@shared/types'
-import { translate, type I18nKey } from '@/i18n'
+import { tNow } from '@/i18n/core'
 import { call } from '@/lib/ipc'
 import { useSessionStore, type SessionUi } from './sessionStore'
-import { useSettingsStore } from './settingsStore'
 import { useToastStore } from './toastStore'
 
 /**
  * 端口转发 / 隧道面板状态。
  * 配置持久化在主进程（tunnels.json），运行状态由主进程事件推送。
  */
-
-/** store 里没有 hook 上下文，词条只能按当前设置的语言直接取 */
-function t(key: I18nKey, vars?: Record<string, string | number>): string {
-  return translate(key, useSettingsStore.getState().settings.language ?? 'zh-CN', vars)
-}
 
 interface TunnelState {
   tunnels: TunnelConfig[]
@@ -79,7 +73,9 @@ export const useTunnelStore = create<TunnelState>()((set, get) => ({
   discoveringSessionId: null,
 
   load: async () => {
-    const list = await call(window.api.tunnel.list(), { errorTitle: '加载隧道列表失败' })
+    const list = await call(window.api.tunnel.list(), {
+      errorTitle: tNow('panel.tunnel.loadError')
+    })
     const states = await call(window.api.tunnel.states(), { silent: true })
     const runtimes: Record<string, TunnelRuntimeInfo> = {}
     for (const s of states ?? []) runtimes[s.tunnelId] = s
@@ -87,19 +83,23 @@ export const useTunnelStore = create<TunnelState>()((set, get) => ({
   },
 
   save: async (input) => {
-    const saved = await call(window.api.tunnel.save(input), { errorTitle: '保存隧道失败' })
+    const saved = await call(window.api.tunnel.save(input), {
+      errorTitle: tNow('panel.tunnel.saveError')
+    })
     if (saved) {
       await get().load()
       useToastStore.getState().push({
         kind: 'success',
-        title: input.id ? '隧道已更新' : '隧道已创建'
+        title: input.id ? tNow('panel.tunnel.updated') : tNow('panel.tunnel.created')
       })
     }
     return saved
   },
 
   remove: async (id) => {
-    const ok = await call(window.api.tunnel.remove(id), { errorTitle: '删除隧道失败' })
+    const ok = await call(window.api.tunnel.remove(id), {
+      errorTitle: tNow('panel.tunnel.removeError')
+    })
     if (ok !== null) {
       set((s) => {
         const runtimes = { ...s.runtimes }
@@ -116,10 +116,10 @@ export const useTunnelStore = create<TunnelState>()((set, get) => ({
     if (!session) {
       useToastStore.getState().push({
         kind: 'warning',
-        title: '没有可用的 SSH 会话',
+        title: tNow('panel.tunnel.noSessionTitle'),
         detail: tunnel.connectionId
-          ? '请先打开该连接的会话（隧道需要挂在一条在线连接上）'
-          : '请先打开一个 SSH 连接'
+          ? tNow('panel.tunnel.noSessionConn')
+          : tNow('panel.tunnel.noSessionAny')
       })
       return
     }
@@ -132,20 +132,20 @@ export const useTunnelStore = create<TunnelState>()((set, get) => ({
     }))
 
     const info = await call(window.api.tunnel.start(id, session.id), {
-      errorTitle: '启动隧道失败'
+      errorTitle: tNow('panel.tunnel.startError')
     })
     if (info) {
       get().applyRuntime(info)
       if (info.status === 'active') {
         useToastStore.getState().push({
           kind: 'success',
-          title: `隧道「${tunnel.name}」已启动`,
+          title: tNow('panel.tunnel.started', { name: tunnel.name }),
           detail: describeEndpoint(tunnel, info)
         })
       } else if (info.status === 'error') {
         useToastStore.getState().push({
           kind: 'error',
-          title: '隧道启动失败',
+          title: tNow('panel.tunnel.startFailed'),
           detail: info.error
         })
       }
@@ -161,7 +161,7 @@ export const useTunnelStore = create<TunnelState>()((set, get) => ({
   },
 
   stop: async (id) => {
-    await call(window.api.tunnel.stop(id), { errorTitle: '停止隧道失败' })
+    await call(window.api.tunnel.stop(id), { errorTitle: tNow('panel.tunnel.stopError') })
   },
 
   // 主进程用 removed 通知「这条运行时已经消失」（临时转发被回收 / 持久隧道被删除），
@@ -185,12 +185,12 @@ export const useTunnelStore = create<TunnelState>()((set, get) => ({
       .getState()
       .sessions.some((s) => s.id === sessionId && s.status === 'connected')
     if (!alive) {
-      useToastStore.getState().push({ kind: 'warning', title: t('tunnel.discoverFailed') })
+      useToastStore.getState().push({ kind: 'warning', title: tNow('tunnel.discoverFailed') })
       return
     }
     set({ discoveringSessionId: sessionId })
     const list = await call(window.api.tunnel.discoverPorts(sessionId), {
-      errorTitle: t('tunnel.discoverFailed')
+      errorTitle: tNow('tunnel.discoverFailed')
     })
     set((s) => ({
       discoveringSessionId: s.discoveringSessionId === sessionId ? null : s.discoveringSessionId,
@@ -221,7 +221,7 @@ export const useTunnelStore = create<TunnelState>()((set, get) => ({
         targetPort: port,
         process: found?.process
       }),
-      { errorTitle: t('tunnel.quickFailed') }
+      { errorTitle: tNow('tunnel.quickFailed') }
     )
     if (!info) return null
     get().applyRuntime(info)
@@ -230,21 +230,21 @@ export const useTunnelStore = create<TunnelState>()((set, get) => ({
 
   promote: async (ephemeralId, name) => {
     const res = await call(window.api.tunnel.promote(ephemeralId, name), {
-      errorTitle: t('tunnel.promoteFailed')
+      errorTitle: tNow('tunnel.promoteFailed')
     })
     if (!res) return null
     get().applyRuntime(res.runtime)
     await get().load()
     useToastStore.getState().push({
       kind: 'success',
-      title: t('tunnel.promoted', { name: res.config.name })
+      title: tNow('tunnel.promoted', { name: res.config.name })
     })
     return res.config
   },
 
   openLocal: async (port, protocol) => {
     await call(window.api.tunnel.openLocal(protocol, port), {
-      errorTitle: t('tunnel.openFailed')
+      errorTitle: tNow('tunnel.openFailed')
     })
   },
 
@@ -269,17 +269,20 @@ export const useTunnelStore = create<TunnelState>()((set, get) => ({
 export function describeEndpoint(tunnel: TunnelConfig, info?: TunnelRuntimeInfo): string {
   const port = info?.actualPort ?? tunnel.bindPort
   if (tunnel.type === 'local') {
-    return `本机 ${tunnel.bindHost}:${port} → ${tunnel.targetHost}:${tunnel.targetPort}`
+    return tNow('panel.tunnel.endpointLocal', {
+      bindHost: tunnel.bindHost,
+      port,
+      targetHost: tunnel.targetHost ?? '',
+      targetPort: tunnel.targetPort ?? ''
+    })
   }
   if (tunnel.type === 'remote') {
-    return `远端 ${tunnel.bindHost}:${port} → 本机 ${tunnel.targetHost}:${tunnel.targetPort}`
+    return tNow('panel.tunnel.endpointRemote', {
+      bindHost: tunnel.bindHost,
+      port,
+      targetHost: tunnel.targetHost ?? '',
+      targetPort: tunnel.targetPort ?? ''
+    })
   }
-  return `SOCKS5 代理 ${tunnel.bindHost}:${port}`
-}
-
-/** 类型短标签 */
-export const TUNNEL_TYPE_LABEL: Record<TunnelConfig['type'], string> = {
-  local: '本地 -L',
-  remote: '远程 -R',
-  dynamic: '动态 -D'
+  return tNow('panel.tunnel.endpointDynamic', { bindHost: tunnel.bindHost, port })
 }

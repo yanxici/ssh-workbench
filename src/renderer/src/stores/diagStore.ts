@@ -8,6 +8,7 @@ import type {
   DiagSectionResult,
   DiagSectionStatus
 } from '@shared/types'
+import { tNow } from '@/i18n/core'
 import { call } from '@/lib/ipc'
 import { uid } from '@/lib/utils'
 import { notifyTask } from '@/lib/taskNotify'
@@ -85,7 +86,9 @@ export const useDiagStore = create<DiagState>()((set, get) => ({
   setTab: (tab) => set({ tab }),
 
   loadSections: async () => {
-    const list = await call(window.api.diag.sections(), { errorTitle: '加载诊断项失败' })
+    const list = await call(window.api.diag.sections(), {
+      errorTitle: tNow('panel.diag.loadSectionsError')
+    })
     if (!list) return
     set((s) => {
       // 首次加载默认全选内置项；后续保持用户选择
@@ -97,19 +100,23 @@ export const useDiagStore = create<DiagState>()((set, get) => ({
   },
 
   saveSection: async (input) => {
-    const saved = await call(window.api.diag.saveSection(input), { errorTitle: '保存诊断项失败' })
+    const saved = await call(window.api.diag.saveSection(input), {
+      errorTitle: tNow('panel.diag.saveSectionError')
+    })
     if (saved) {
       await get().loadSections()
       useToastStore.getState().push({
         kind: 'success',
-        title: input.id ? '诊断项已更新' : '自定义诊断项已创建'
+        title: input.id ? tNow('panel.diag.sectionUpdated') : tNow('panel.diag.sectionCreated')
       })
     }
     return saved
   },
 
   removeSection: async (id) => {
-    const ok = await call(window.api.diag.removeSection(id), { errorTitle: '删除诊断项失败' })
+    const ok = await call(window.api.diag.removeSection(id), {
+      errorTitle: tNow('panel.diag.removeSectionError')
+    })
     if (ok !== null) {
       set((s) => ({
         selected: s.selected.filter((x) => x !== id),
@@ -144,7 +151,7 @@ export const useDiagStore = create<DiagState>()((set, get) => ({
     const { selected, running } = get()
     if (running) return
     if (selected.length === 0) {
-      useToastStore.getState().push({ kind: 'warning', title: '请先选择要执行的诊断项' })
+      useToastStore.getState().push({ kind: 'warning', title: tNow('panel.diag.selectAtLeastOne') })
       return
     }
 
@@ -153,8 +160,8 @@ export const useDiagStore = create<DiagState>()((set, get) => ({
     if (!session) {
       useToastStore.getState().push({
         kind: 'warning',
-        title: '没有已连接的会话',
-        detail: '诊断需要在一台在线设备上执行，请先打开 SSH 连接'
+        title: tNow('panel.diag.noConnectedTitle'),
+        detail: tNow('panel.diag.noConnectedDetail')
       })
       return
     }
@@ -174,7 +181,7 @@ export const useDiagStore = create<DiagState>()((set, get) => ({
     })
 
     const report = await call(window.api.diag.run(runId, session.id, selected), {
-      errorTitle: '诊断执行失败'
+      errorTitle: tNow('panel.diag.runError')
     })
     // 同 discoveryStore：进度事件一到 done 就能开下一轮，旧轮的收尾不能清掉新轮状态
     if (get().runId !== runId) return
@@ -184,8 +191,11 @@ export const useDiagStore = create<DiagState>()((set, get) => ({
       // 巡检 31 项串行跑，十几秒起步；同样走通知（失焦时升级为系统通知）
       void notifyTask({
         kind: 'diag',
-        title: `诊断完成：${report.okCount}/${report.sectionCount} 项正常`,
-        detail: '报告已自动保存，可导出 Markdown / HTML',
+        title: tNow('panel.diag.notifyTitle', {
+          ok: report.okCount,
+          total: report.sectionCount
+        }),
+        detail: tNow('panel.diag.notifyDetail'),
         connectionId: session.connectionId,
         sessionId: session.id
       })
@@ -217,7 +227,9 @@ export const useDiagStore = create<DiagState>()((set, get) => ({
   },
 
   viewReport: async (id) => {
-    const report = await call(window.api.diag.readReport(id), { errorTitle: '读取报告失败' })
+    const report = await call(window.api.diag.readReport(id), {
+      errorTitle: tNow('panel.diag.readReportError')
+    })
     if (report) set({ viewing: report, tab: 'reports' })
   },
 
@@ -225,12 +237,13 @@ export const useDiagStore = create<DiagState>()((set, get) => ({
 
   exportReport: async (id, format) => {
     const res = await call(window.api.diag.exportReport(id, format), {
-      errorTitle: '导出报告失败'
+      errorTitle: tNow('panel.diag.exportReportError')
     })
     if (res && !res.canceled) {
       useToastStore.getState().push({
         kind: 'success',
-        title: format === 'html' ? '已导出 HTML 报告' : '已导出 Markdown 报告',
+        title:
+          format === 'html' ? tNow('panel.diag.exportedHtml') : tNow('panel.diag.exportedMd'),
         detail: res.path
       })
     }
@@ -238,12 +251,14 @@ export const useDiagStore = create<DiagState>()((set, get) => ({
 
   copyMarkdown: async (id) => {
     const text = await call(window.api.diag.reportText(id, 'md'), {
-      errorTitle: '生成报告文本失败'
+      errorTitle: tNow('panel.diag.reportTextError')
     })
     if (text === null) return
-    const ok = await call(window.api.clip.write(text), { errorTitle: '复制失败' })
+    const ok = await call(window.api.clip.write(text), {
+      errorTitle: tNow('panel.diag.copyError')
+    })
     if (ok !== null) {
-      useToastStore.getState().push({ kind: 'success', title: '已复制 Markdown 报告到剪贴板' })
+      useToastStore.getState().push({ kind: 'success', title: tNow('panel.diag.copiedMd') })
     }
   }
 }))

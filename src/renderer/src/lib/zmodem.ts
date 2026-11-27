@@ -53,6 +53,7 @@ import {
 // 这个文件跑无头回归，那里只配了 @shared 一个别名，@/ 会直接解析失败
 import { uid } from './utils'
 import { reportZmodemRecord } from './zmodemRecord'
+import { tNow } from '../i18n/core'
 
 /** 传输方向：send = 本机发给远端（对端 rz）；receive = 远端发给本机（对端 sz） */
 export type ZmodemDirection = 'send' | 'receive'
@@ -316,9 +317,11 @@ const SEND_KEEPALIVE_MS = 5000
 /* eslint-disable no-control-regex -- 见下一行注释 */
 /* ZDLE(0x18)/DLE(0x10) 是控制字符，写进正则才能认协议帧，有意为之 */
 const RESIDUE_PATTERNS: RegExp[] = [
-  /\*\*[\x18\x10]?B[0-9A-Fa-f]{2}/, // ZMODEM 头魔数 **\x18B01 等
+  // ZMODEM 头魔数 **\x18B01 等
+  /\*\*[\x18\x10]?B[0-9A-Fa-f]{2}/,
   /\*\*\x18?[0-9A-Fa-f]{2}/,
-  /^\s*[\x18\x10]+$/, // 纯控制字符（ZDLE 残留）
+  // 纯控制字符（ZDLE 残留）
+  /^\s*[\x18\x10]+$/,
   /\b(?:Sending|Receiving|Waiting|Baud|Retry|Zsending|Zreceiving)\b/i,
   /^(?:rz|sz)\s+(?:waiting|ready)/i
 ]
@@ -531,7 +534,9 @@ function errText(err: unknown): string {
 }
 
 function formatAbortMessage(reason: string, savedBytes = 0): string {
-  return savedBytes > 0 ? `传输中断：${reason}（已保留前 ${savedBytes} 字节）` : `传输中断：${reason}`
+  return savedBytes > 0
+    ? tNow('term.zmodem.abortWithSaved', { reason, bytes: savedBytes })
+    : tNow('term.zmodem.abortReason', { reason })
 }
 
 export type SendBytesOutcome = { ok: boolean; reason?: string }
@@ -830,7 +835,7 @@ async function handleDetect(
       direction,
       bytesDone: 0,
       bytesTotal: 0,
-      message: '已取消'
+      message: tNow('term.zmodem.canceled')
     })
     return
   }
@@ -867,7 +872,7 @@ async function handleDetect(
         direction,
         bytesDone: 0,
         bytesTotal: 0,
-        message: '未选择保存文件夹，已取消'
+        message: tNow('term.zmodem.noDirCanceled')
       })
       return
     }
@@ -907,7 +912,7 @@ function startSession(
       direction,
       bytesDone: 0,
       bytesTotal: 0,
-      message: '等待远端重发起始帧…'
+      message: tNow('term.zmodem.waitResendHeader')
     })
     return
   }
@@ -987,10 +992,10 @@ function startSession(
         const singleSkip = savedCount === 0 && skippedCount === 1
         const msg =
           savedCount > 0
-            ? `接收完成（下载 ${savedCount} 个，跳过 ${skippedCount} 个已存在）`
+            ? tNow('term.zmodem.receiveSummary', { saved: savedCount, skipped: skippedCount })
             : skippedCount > 1
-              ? `全部已跳过（${skippedCount} 个文件均已存在）`
-              : `已跳过（已存在：${lastSkippedPath || lastSkippedName}）`
+              ? tNow('term.zmodem.allSkipped', { count: skippedCount })
+              : tNow('term.zmodem.singleSkipped', { path: lastSkippedPath || lastSkippedName })
         emit(sessionId, {
           phase: 'done',
           direction: 'receive',
@@ -1073,7 +1078,7 @@ function armAutoTimer(sessionId: string, state: SessionState): void {
       direction,
       bytesDone: 0,
       bytesTotal: 0,
-      message: `远端已停止等待（超时），请重新执行 ${direction === 'send' ? 'rz' : 'sz'}`
+      message: tNow('term.zmodem.autoTimeout', { cmd: direction === 'send' ? 'rz' : 'sz' })
     })
   }, receiveWatchdog.autoConfirmMs)
 }
@@ -1123,7 +1128,10 @@ function armStallTimer(
       state.startupStalls += 1
       const snap = lastProgress.get(sessionId)
       const waitedSec = Math.max(1, Math.round((receiveWatchdog.idleMs * state.startupStalls) / 1000))
-      const msg = state.startupStalls === 1 ? '已等待 15 秒仍未收到数据，远端可能没在发送 —— 可按「中断」退出或重新执行 sz' : `远端始终没有开始发送（已等待 ${waitedSec} 秒）`
+      const msg =
+        state.startupStalls === 1
+          ? tNow('term.zmodem.startupStall1')
+          : tNow('term.zmodem.startupStallN', { sec: waitedSec })
       if (state.startupStalls === 1) {
         state.startupNoticed = true
         emit(sessionId, {
@@ -1156,14 +1164,14 @@ function armStallTimer(
       return
     }
 
-    const STALL_REASONS = { max: `连续 ${IDLE_RESUME_MAX} 次续传都没有新进展，对端疑似已退出`, noResume: '传输停滞且无法续传' }
     const snap = lastProgress.get(sessionId)
     const offset = state.fileOffset
     if (state.idleResumes >= IDLE_RESUME_MAX) {
+      const reason = tNow('term.zmodem.idleExhausted', { max: IDLE_RESUME_MAX })
       const abortFn = state.abortOffer
       recoverFromError(state)
       if (abortFn) {
-        abortFn('error', STALL_REASONS.max)
+        abortFn('error', reason)
       } else {
         emit(sessionId, {
           phase: 'error',
@@ -1173,7 +1181,7 @@ function armStallTimer(
           bytesTotal: snap?.bytesTotal ?? offset,
           fileIndex: snap?.fileIndex,
           fileCount: snap?.fileCount,
-          message: formatAbortMessage(STALL_REASONS.max, offset)
+          message: formatAbortMessage(reason, offset)
         })
       }
       return
@@ -1183,16 +1191,21 @@ function armStallTimer(
     const resumed = resumeFromOffset(
       sessionId,
       state,
-      `已 ${Math.round(receiveWatchdog.idleMs / 1000)} 秒没有进展，正在请求对端从 ${offset} 字节处续传（第 ${state.idleResumes} 次）`
+      tNow('term.zmodem.idleResuming', {
+        sec: Math.round(receiveWatchdog.idleMs / 1000),
+        offset,
+        count: state.idleResumes
+      })
     )
     if (resumed) {
       armStallTimer(sessionId, state, fileName, offerGen)
       return
     }
+    const failReason = tNow('term.zmodem.stallFailed')
     const abortFn = state.abortOffer
     recoverFromError(state)
     if (abortFn) {
-      abortFn('error', STALL_REASONS.noResume)
+      abortFn('error', failReason)
     } else {
       emit(sessionId, {
         phase: 'error',
@@ -1202,7 +1215,7 @@ function armStallTimer(
         bytesTotal: snap?.bytesTotal ?? offset,
         fileIndex: snap?.fileIndex,
         fileCount: snap?.fileCount,
-        message: formatAbortMessage(STALL_REASONS.noResume, offset)
+        message: formatAbortMessage(failReason, offset)
       })
     }
   }, receiveWatchdog.idleMs)
@@ -1262,7 +1275,7 @@ export async function chooseZmodemSaveDir(sessionId: string): Promise<boolean> {
     fileName: snap?.fileName,
     bytesDone: snap?.bytesDone ?? 0,
     bytesTotal: snap?.bytesTotal ?? 0,
-    message: `保存到：${picked.dir}`
+    message: tNow('term.zmodem.savingTo', { dir: picked.dir })
   })
   return true
 }
@@ -1320,7 +1333,7 @@ async function beginSave(
         }
       }
       lastError = res.error || lastError
-      if (!/已失效/.test(lastError)) return { ok: false, canceled: false, reason: lastError }
+      if (!/\u5df2\u5931\u6548/.test(lastError)) return { ok: false, canceled: false, reason: lastError }
     } catch (err) {
       return { ok: false, canceled: false, reason: errText(err) }
     }
@@ -1354,7 +1367,7 @@ async function runReceive(
       direction: 'receive',
       bytesDone: 0,
       bytesTotal: 0,
-      message: `ZMODEM 接收启动失败：${errText(err)}`
+      message: tNow('term.zmodem.receiveStartFailed', { err: errText(err) })
     })
     abortSessionCleanly(state, session)
   }
@@ -1437,7 +1450,7 @@ async function handleOffer(
         bytesDone: 0,
         bytesTotal: total,
         ...batchMeta,
-        message: '未选择保存位置，已跳过'
+        message: tNow('term.zmodem.noSavePathSkipped')
       })
       return
     }
@@ -1475,7 +1488,10 @@ async function handleOffer(
       bytesTotal: Math.max(total, saveRes.size),
       ...batchMeta,
       localPath: saveRes.path,
-      message: myFileCount > 1 ? `(${myFileIndex}/${myFileCount}) 已跳过（已存在）` : '已跳过（已存在）'
+      message:
+        myFileCount > 1
+          ? tNow('term.zmodem.fileSkippedBatch', { index: myFileIndex, total: myFileCount })
+          : tNow('term.zmodem.fileSkippedSingle')
     })
     const raw = state.active as unknown as RawReceiveSession | null
     if (raw) raw._current_transfer = null
@@ -1628,7 +1644,11 @@ async function handleOffer(
             state.gapResyncOffset = cursor
             state.resyncAttempts += 1
             state.lastResyncAt = now
-            resumeFromOffset(sessionId, state, `收到偏移 ${start}，当前进度 ${cursor}，请求补包`)
+            resumeFromOffset(
+              sessionId,
+              state,
+              tNow('term.zmodem.gapResync', { start, cursor })
+            )
           }
           return
         }
@@ -1756,7 +1776,8 @@ async function handleOffer(
       return
     }
     state.batchSaved += 1
-    const skipSuffix = state.batchSkipped > 0 ? `（已跳过 ${state.batchSkipped} 个）` : ''
+    const skipSuffix =
+      state.batchSkipped > 0 ? tNow('term.zmodem.skipSuffix', { count: state.batchSkipped }) : ''
     emit(sessionId, {
       phase: 'done',
       direction: 'receive',
@@ -1768,8 +1789,13 @@ async function handleOffer(
       localPath: fin.data.path,
       message:
         myFileCount > 1
-          ? `(${myFileIndex}/${myFileCount}) 已保存到 ${fin.data.path}${skipSuffix}`
-          : `已保存到 ${fin.data.path}`
+          ? tNow('term.zmodem.savedBatch', {
+              index: myFileIndex,
+              total: myFileCount,
+              path: fin.data.path,
+              skipSuffix
+            })
+          : tNow('term.zmodem.savedSingle', { path: fin.data.path })
     })
     flushPendingZrinit(state, myGen)
   } catch (err) {
@@ -1956,7 +1982,10 @@ async function awaitSendStep<T>(
     timer = setTimeout(() => {
       resolve({
         ok: false,
-        message: `${what}：远端 ${Math.round(SEND_RESPONSE_TIMEOUT_MS / 1000)} 秒无回应`
+        message: tNow('term.zmodem.sendStepTimeout', {
+          what,
+          sec: Math.round(SEND_RESPONSE_TIMEOUT_MS / 1000)
+        })
       })
     }, SEND_RESPONSE_TIMEOUT_MS)
   })
@@ -2019,7 +2048,7 @@ async function runSend(
       direction: 'send',
       bytesDone: 0,
       bytesTotal: 0,
-      message: pickedRes.ok ? '未选择文件' : pickedRes.error
+      message: pickedRes.ok ? tNow('term.zmodem.noFileSelected') : pickedRes.error
     })
     return
   }
@@ -2076,11 +2105,11 @@ async function runSend(
       // 对端没在跑 rz、或者已经放弃退出时，这个 promise 永远不兑现 —— 必须带超时
       const step = await awaitSendStep(
         session.send_offer({ name: file.name, size: file.size, mtime: new Date() }),
-        `等待远端接受 ${file.name}`
+        tNow('term.zmodem.waitAccept', { name: file.name })
       )
       if (!step.ok) {
         // 超时多半是对端已经跳过这个文件（rz 目标已存在），批量时不能整批失败
-        if (picked.files.length > 1 && /无回应|超时|timeout/i.test(step.message)) {
+        if (picked.files.length > 1 && /\u65e0\u56de\u5e94|\u8d85\u65f6|timeout/i.test(step.message)) {
           skipped.push(file.name)
           continue
         }
@@ -2129,7 +2158,10 @@ async function runSend(
       }
 
       // ZEOF 之后对端要回 ZRINIT 才算这个文件落地，这里同样不能无限等
-      const endStep = await awaitSendStep(transfer.end(), `等待远端确认 ${file.name}`)
+      const endStep = await awaitSendStep(
+        transfer.end(),
+        tNow('term.zmodem.waitConfirmFile', { name: file.name })
+      )
       if (state.active !== session) return
       if (!endStep.ok) {
         fail(endStep.message)
@@ -2159,7 +2191,10 @@ async function runSend(
   // 所以这里失败只在完成事件里附一句提示，不能反过来否定传输结果。
   let closeNote: string | undefined
   try {
-    const step = await awaitSendStep(Promise.resolve(session.close()), '结束会话')
+    const step = await awaitSendStep(
+      Promise.resolve(session.close()),
+      tNow('term.zmodem.closingSession')
+    )
     if (!step.ok) closeNote = step.message
   } catch (err) {
     closeNote = errText(err)
@@ -2175,17 +2210,23 @@ async function runSend(
     emit(sessionId, {
       phase: 'canceled',
       direction: 'send',
-      fileName: skipped.length === 1 ? skipped[0] : `${skipped.length} 个文件`,
+      fileName:
+        skipped.length === 1
+          ? skipped[0]
+          : tNow('term.zmodem.fileCount', { count: skipped.length }),
       bytesDone: 0,
       bytesTotal: total,
-      message: closeNote ?? '远端已存在同名文件，全部跳过'
+      message: closeNote ?? tNow('term.zmodem.allRemoteSkipped')
     })
     return
   }
 
   const skipNote =
     skipped.length > 0
-      ? `（${skipped.length} 个同名文件已存在，被跳过${closeNote ? '；' + closeNote : ''}）`
+      ? tNow('term.zmodem.someRemoteSkipped', {
+          count: skipped.length,
+          closeNote: closeNote ? tNow('term.zmodem.semicolonNote', { note: closeNote }) : ''
+        })
       : closeNote
 
   if (picked.files.length === 1) {
@@ -2201,7 +2242,7 @@ async function runSend(
     emit(sessionId, {
       phase: 'done',
       direction: 'send',
-      fileName: `${picked.files.length} 个文件`,
+      fileName: tNow('term.zmodem.fileCount', { count: picked.files.length }),
       bytesDone: sent,
       bytesTotal: total,
       transferId: undefined,
@@ -2495,7 +2536,10 @@ function resyncReceive(sessionId: string, state: SessionState, err: unknown): bo
   return resumeFromOffset(
     sessionId,
     state,
-    `链路抖动，已请求对端从 ${state.fileOffset} 字节处续传（第 ${state.resyncAttempts} 次）`
+    tNow('term.zmodem.jitterResync', {
+      offset: state.fileOffset,
+      count: state.resyncAttempts
+    })
   )
 }
 
@@ -2706,7 +2750,7 @@ export function abortZmodem(sessionId: string): void {
       fileCount: snap?.fileCount,
       transferId: prevTransferId,
       localPath: prevLocalPath,
-      message: '已中断传输'
+      message: tNow('term.zmodem.abortedTransfer')
     })
   }
 }

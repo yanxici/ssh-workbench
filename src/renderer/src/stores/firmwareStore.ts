@@ -5,6 +5,7 @@ import type {
   FirmwareUpgradeResult,
   FirmwareVerifyResult
 } from '@shared/types'
+import { tNow } from '@/i18n/core'
 import { call } from '@/lib/ipc'
 import { uid } from '@/lib/utils'
 import { pickSshSession, useSessionStore } from './sessionStore'
@@ -136,7 +137,9 @@ export const useFirmwareStore = create<FirmwareState>()((set, get) => ({
   setRemoteDir: (remoteDir) => set({ remoteDir }),
 
   pickFile: async () => {
-    const res = await call(window.api.firmware.pickFile(), { errorTitle: '选择固件失败' })
+    const res = await call(window.api.firmware.pickFile(), {
+      errorTitle: tNow('panel.firmware.pickError')
+    })
     if (res && !res.canceled && res.file) {
       set({
         file: res.file,
@@ -153,15 +156,15 @@ export const useFirmwareStore = create<FirmwareState>()((set, get) => ({
     const { sessionId, file, remoteDir, uploading } = get()
     if (uploading) return
     if (!sessionId) {
-      useToastStore.getState().push({ kind: 'warning', title: '请先选择目标设备' })
+      useToastStore.getState().push({ kind: 'warning', title: tNow('panel.firmware.needDevice') })
       return
     }
     if (!file) {
-      useToastStore.getState().push({ kind: 'warning', title: '请先选择固件文件' })
+      useToastStore.getState().push({ kind: 'warning', title: tNow('panel.firmware.needFile') })
       return
     }
     if (!remoteDir.trim()) {
-      useToastStore.getState().push({ kind: 'warning', title: '请填写设备上的上传目录' })
+      useToastStore.getState().push({ kind: 'warning', title: tNow('panel.firmware.needRemoteDir') })
       return
     }
 
@@ -182,14 +185,14 @@ export const useFirmwareStore = create<FirmwareState>()((set, get) => ({
       upgradeLog: ''
     })
     const res = await call(window.api.firmware.upload(sessionId, file.path, remoteDir.trim()), {
-      errorTitle: '上传失败'
+      errorTitle: tNow('panel.firmware.uploadErrorTitle')
     })
     set({ uploading: false })
     if (res) {
       set({ uploadTaskId: res.taskId })
       useToastStore.getState().push({
         kind: 'info',
-        title: '已加入上传队列',
+        title: tNow('panel.firmware.queued'),
         detail: res.remotePath
       })
     }
@@ -202,15 +205,19 @@ export const useFirmwareStore = create<FirmwareState>()((set, get) => ({
     if (!sessionId || !file || !uploadedPath) return
     set({ verifying: true, verify: null })
     const res = await call(window.api.firmware.verify(sessionId, file.path, uploadedPath), {
-      errorTitle: '校验失败'
+      errorTitle: tNow('panel.firmware.verifyErrorTitle')
     })
     set({ verifying: false })
     if (res) {
       set({ verify: res })
       useToastStore.getState().push(
         res.match
-          ? { kind: 'success', title: '校验一致，固件完整' }
-          : { kind: 'error', title: '校验不一致，请勿升级', detail: '请重新上传' }
+          ? { kind: 'success', title: tNow('panel.firmware.verifyOkToast') }
+          : {
+              kind: 'error',
+              title: tNow('panel.firmware.verifyFailToast'),
+              detail: tNow('panel.firmware.reuploadHint')
+            }
       )
     }
   },
@@ -228,7 +235,7 @@ export const useFirmwareStore = create<FirmwareState>()((set, get) => ({
     if (upgrading) return
     if (!sessionId) return
     if (!upgradeCommand.trim()) {
-      useToastStore.getState().push({ kind: 'warning', title: '请填写升级命令' })
+      useToastStore.getState().push({ kind: 'warning', title: tNow('panel.firmware.needUpgradeCmd') })
       return
     }
 
@@ -238,7 +245,7 @@ export const useFirmwareStore = create<FirmwareState>()((set, get) => ({
 
     const result = await call(
       window.api.firmware.upgrade(runId, sessionId, command, upgradeTimeoutMs),
-      { errorTitle: '升级执行失败' }
+      { errorTitle: tNow('panel.firmware.upgradeExecError') }
     )
     set({ upgrading: false, upgradeRunId: null })
     if (result) {
@@ -253,23 +260,25 @@ export const useFirmwareStore = create<FirmwareState>()((set, get) => ({
       if (result.status === 'done' && result.exitCode === 0) {
         void notifyTask({
           kind: 'firmware',
-          title: '升级命令执行成功（退出码 0）',
+          title: tNow('panel.firmware.upgradeOk'),
           connectionId: connId,
           sessionId
         })
       } else if (result.status === 'cancelled') {
         void notifyTask({
           kind: 'firmware',
-          title: '升级命令已取消',
+          title: tNow('panel.firmware.upgradeCancelled'),
           connectionId: connId,
           sessionId
         })
       } else {
         void notifyTask({
           kind: 'firmware',
-          title: '升级命令执行结束（请核对输出）',
+          title: tNow('panel.firmware.notifyEnded'),
           detail:
-            result.exitCode === null ? '连接中断，升级脚本可能已重启设备' : `退出码 ${result.exitCode}`,
+            result.exitCode === null
+              ? tNow('panel.firmware.notifyDisconnected')
+              : tNow('panel.firmware.notifyExitCode', { code: result.exitCode }),
           connectionId: connId,
           sessionId
         })
@@ -309,15 +318,15 @@ export const useFirmwareStore = create<FirmwareState>()((set, get) => ({
     if (res === null) {
       useToastStore.getState().push({
         kind: 'warning',
-        title: '重启命令发送失败',
-        detail: '连接可能已断开，请确认设备状态后重试'
+        title: tNow('panel.firmware.rebootFailTitle'),
+        detail: tNow('panel.firmware.rebootFailDetail')
       })
       return
     }
     useToastStore.getState().push({
       kind: 'info',
-      title: '重启命令已发送，设备将断开连接',
-      detail: '可在下方等待它重新上线'
+      title: tNow('panel.firmware.rebootSentTitle'),
+      detail: tNow('panel.firmware.rebootSentDetail')
     })
   },
 
@@ -330,7 +339,7 @@ export const useFirmwareStore = create<FirmwareState>()((set, get) => ({
     const { sessionId } = get()
     const session = useSessionStore.getState().sessions.find((s) => s.id === sessionId)
     if (!session) {
-      useToastStore.getState().push({ kind: 'warning', title: '找不到目标设备会话' })
+      useToastStore.getState().push({ kind: 'warning', title: tNow('panel.firmware.sessionNotFound') })
       return
     }
     const host = session.host
@@ -360,8 +369,11 @@ export const useFirmwareStore = create<FirmwareState>()((set, get) => ({
         })
         useToastStore.getState().push({
           kind: 'success',
-          title: `${session.title} 已重新上线`,
-          detail: `端口 ${get().waitPort} 可达 ${res.latencyMs}ms`
+          title: tNow('panel.firmware.backOnlineTitle', { title: session.title }),
+          detail: tNow('panel.firmware.backOnlineDetail', {
+            port: get().waitPort,
+            latency: res.latencyMs ?? 0
+          })
         })
         return
       }
@@ -375,8 +387,8 @@ export const useFirmwareStore = create<FirmwareState>()((set, get) => ({
         set({ wait: { waiting: false, online: false, attempts } })
         useToastStore.getState().push({
           kind: 'warning',
-          title: '等待设备上线超时（约 5 分钟）',
-          detail: '请确认设备已正常启动'
+          title: tNow('panel.firmware.waitTimeoutTitle'),
+          detail: tNow('panel.firmware.waitTimeoutDetail')
         })
         return
       }
@@ -408,8 +420,8 @@ export const useFirmwareStore = create<FirmwareState>()((set, get) => ({
     if (!session) {
       useToastStore.getState().push({
         kind: 'warning',
-        title: '没有已连接的会话',
-        detail: '请先重新连接设备，再抓取启动日志'
+        title: tNow('panel.firmware.noConnectedBootTitle'),
+        detail: tNow('panel.firmware.noConnectedBootDetail')
       })
       return
     }
@@ -420,11 +432,11 @@ export const useFirmwareStore = create<FirmwareState>()((set, get) => ({
         "dmesg 2>/dev/null | tail -n 150; echo '--- uptime(sec) ---'; cat /proc/uptime 2>/dev/null; echo '--- kernel warnings ---'; dmesg 2>/dev/null | grep -iE 'error|fail|warn|panic|oops' | tail -20",
         25000
       ),
-      { errorTitle: '抓取启动日志失败' }
+      { errorTitle: tNow('panel.firmware.fetchBootError') }
     )
     set({
       bootLoading: false,
-      bootLog: res ? res.stdout || res.stderr || '（无输出）' : null
+      bootLog: res ? res.stdout || res.stderr || tNow('panel.firmware.noOutput') : null
     })
   }
 }))

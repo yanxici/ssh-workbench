@@ -39,6 +39,7 @@ import { ConfirmDialog, ContextMenu, useContextMenu, type MenuEntry } from '@/co
 import { Highlight } from './Highlight'
 import { isImeComposing } from '@/lib/ime'
 import { useOverlayEscape } from '@/lib/overlayKeys'
+import { translate, useI18n } from '@/i18n'
 
 /**
  * 按钮墙的列数。
@@ -71,6 +72,7 @@ export function CommandCenter({
 }: {
   onEdit: (initial: Command | null, presetGroup?: string) => void
 }): React.JSX.Element | null {
+  const { lang, t } = useI18n()
   const open = useUiStore((s) => s.commandCenterOpen)
   const presetQuery = useUiStore((s) => s.commandCenterQuery)
   const close = useUiStore((s) => s.closeCommandCenter)
@@ -112,10 +114,10 @@ export function CommandCenter({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, presetQuery])
 
-  const scopes = useMemo(
-    () => buildScopes(commands, { groupOrder, extraGroups, pinnedIds, env }),
-    [commands, groupOrder, extraGroups, pinnedIds, env]
-  )
+  const scopes = useMemo(() => {
+    void lang
+    return buildScopes(commands, { groupOrder, extraGroups, pinnedIds, env })
+  }, [commands, groupOrder, extraGroups, pinnedIds, env, lang])
 
   const results = useMemo(
     () => searchCommands({ commands, query, scope, sort, pinnedIds, env }),
@@ -132,10 +134,11 @@ export function CommandCenter({
   const wallMode = query.trim().length === 0
   const wall = useMemo(() => {
     if (!wallMode) return []
+    const defaultGroup = translate('cmd.defaultGroup', lang)
     const order: string[] = []
     const map = new Map<string, typeof results>()
     for (const r of results) {
-      const g = r.command.group || '默认'
+      const g = r.command.group || defaultGroup
       if (!map.has(g)) {
         map.set(g, [])
         order.push(g)
@@ -143,7 +146,7 @@ export function CommandCenter({
       map.get(g)!.push(r)
     }
     return order.map((group) => ({ group, items: map.get(group) ?? [] }))
-  }, [wallMode, results])
+  }, [wallMode, results, lang])
 
   /** id → 结果索引，按钮墙上点/悬停都要用，避免每块都 findIndex */
   /**
@@ -286,22 +289,22 @@ export function CommandCenter({
 
   const menuItems = (c: Command): MenuEntry[] => [
     {
-      label: '执行',
+      label: t('cmd.action.run'),
       icon: <Play size={12} />,
       onClick: () => {
         runCommand(c)
         close()
       }
     },
-    { label: '编辑', icon: <Pencil size={12} />, onClick: () => onEdit(c) },
+    { label: t('cmd.action.edit'), icon: <Pencil size={12} />, onClick: () => onEdit(c) },
     {
-      label: pinnedIds.includes(c.id) ? '取消收藏' : '收藏置顶',
+      label: pinnedIds.includes(c.id) ? t('cmd.card.unpin') : t('cmd.card.pin'),
       icon: <Pin size={12} />,
       onClick: () => void togglePin(c.id)
     },
-    { label: '新建同类命令', icon: <Plus size={12} />, onClick: () => onEdit(null, c.group) },
+    { label: t('cmd.action.newSameGroup'), icon: <Plus size={12} />, onClick: () => onEdit(null, c.group) },
     {
-      label: '删除',
+      label: t('cmd.action.delete'),
       icon: <Trash2 size={12} />,
       danger: true,
       separatorBefore: true,
@@ -340,7 +343,7 @@ export function CommandCenter({
             <input
               ref={inputRef}
               className="h-7 min-w-0 flex-1 selectable bg-transparent text-sm text-ink outline-none placeholder:text-ink-3"
-              placeholder="搜索命令、命令文本、描述或分组…"
+              placeholder={t('cmd.center.searchPlaceholder')}
               value={query}
               onChange={(e) => {
                 setQuery(e.target.value)
@@ -350,7 +353,7 @@ export function CommandCenter({
             {query && (
               <button
                 className="btn-icon h-6 w-6 shrink-0"
-                title="清空搜索"
+                title={t('cmd.center.clearSearch')}
                 onClick={() => {
                   setQuery('')
                   inputRef.current?.focus()
@@ -362,19 +365,19 @@ export function CommandCenter({
             <div className="flex shrink-0 items-center gap-0.5 rounded-md border border-edge-soft p-0.5">
               <SortChip
                 active={sort === 'smart'}
-                label="智能"
+                label={t('cmd.sort.smart')}
                 icon={<Sparkles size={11} />}
                 onClick={() => pickSort('smart')}
               />
               <SortChip
                 active={sort === 'recent'}
-                label="最近"
+                label={t('cmd.sort.recent')}
                 icon={<Clock3 size={11} />}
                 onClick={() => pickSort('recent')}
               />
               <SortChip
                 active={sort === 'frequent'}
-                label="常用"
+                label={t('cmd.sort.frequent')}
                 icon={<ArrowDownUp size={11} />}
                 onClick={() => pickSort('frequent')}
               />
@@ -382,7 +385,9 @@ export function CommandCenter({
           </div>
 
           <div className="flex min-h-0 flex-1">
-            {/* ---------- 左：范围索引 ---------- */}
+            {/*
+             * ---------- 左：范围索引 ----------
+             */}
             <div className="scroll-thin flex w-[184px] shrink-0 flex-col gap-0.5 overflow-y-auto border-r border-edge bg-app p-1.5">
               {scopes.map((entry, i) => {
                 const virtual = entry.scope.kind !== 'group'
@@ -405,7 +410,9 @@ export function CommandCenter({
                         setCursor(0)
                       }}
                     >
-                      {/* 选中项左侧一道 2px 品牌绿，比整块蓝底更克制 */}
+                      {/*
+                       * 选中项左侧一道 2px 品牌绿，比整块蓝底更克制
+                       */}
                       {selected && (
                         <span className="absolute inset-y-1 left-0 w-0.5 rounded-r bg-brand" />
                       )}
@@ -436,12 +443,14 @@ export function CommandCenter({
                   }}
                 >
                   <Plus size={11} />
-                  新建命令
+                  {t('cmd.center.newCommand')}
                 </button>
               </div>
             </div>
 
-            {/* ---------- 右：结果 ---------- */}
+            {/*
+             * ---------- 右：结果 ----------
+             */}
             <div
               ref={listRef}
               data-testid="command-center-list"
@@ -451,10 +460,10 @@ export function CommandCenter({
                 <div className="flex h-full flex-col items-center justify-center gap-1.5 px-6 py-10 text-center">
                   <CommandIcon size={22} className="text-ink-3/60" />
                   <div className="text-xs font-medium text-ink-2">
-                    {query ? `没有匹配「${query}」的命令` : '这个范围里还没有命令'}
+                    {query ? t('cmd.center.noMatch', { query }) : t('cmd.center.emptyScope')}
                   </div>
                   <div className="text-2xs leading-relaxed text-ink-3">
-                    {query ? '试试更短的片段，或按 Tab 换一个范围' : '按 Tab 切换范围，或新建一条'}
+                    {query ? t('cmd.center.noMatchHint') : t('cmd.center.emptyScopeHint')}
                   </div>
                 </div>
               ) : wallMode ? (
@@ -508,7 +517,9 @@ export function CommandCenter({
                               }}
                               onContextMenu={(e) => menu.openMenu(e, c)}
                             >
-                              {/* w-full 同 CommandPanel：UA 的 align-items:flex-start 会让长命令名撑出卡片 */}
+                              {/*
+                               * w-full 同 CommandPanel：UA 的 align-items:flex-start 会让长命令名撑出卡片
+                               */}
                               <span className="flex w-full min-w-0 items-center gap-1.5">
                                 <span
                                   className={cn(
@@ -524,7 +535,9 @@ export function CommandCenter({
                                   {c.name}
                                 </span>
                               </span>
-                              {/* w-full 同 CommandPanel：UA 的 align-items:flex-start 会让长命令撑出卡片 */}
+                              {/*
+                               * w-full 同 CommandPanel：UA 的 align-items:flex-start 会让长命令撑出卡片
+                               */}
                               <span className="w-full min-w-0 truncate font-mono text-3xs leading-tight text-ink-3">
                                 {c.command}
                               </span>
@@ -549,7 +562,7 @@ export function CommandCenter({
                                       'flex h-[18px] w-[18px] items-center justify-center rounded text-ink-3 hover:text-warning',
                                       pinned && 'text-warning'
                                     )}
-                                    title={pinned ? '取消收藏' : '收藏置顶'}
+                                    title={pinned ? t('cmd.card.unpin') : t('cmd.card.pin')}
                                     onClick={(e) => {
                                       e.stopPropagation()
                                       void togglePin(c.id)
@@ -607,15 +620,15 @@ export function CommandCenter({
                           {pinned && <Pin size={10} className="shrink-0 text-warning" />}
                           {r.via && (
                             <span
-                              className="shrink-0 rounded border border-edge-soft px-1 text-3xs leading-4 text-ink-3"
-                              title={`按中英别名「${r.via}」命中`}
+                              className="shrink-0 rounded-sm border border-edge-soft px-1 text-3xs leading-4 text-ink-3"
+                              title={t('cmd.center.viaAlias', { via: r.via })}
                             >
                               ≈{r.via}
                             </span>
                           )}
                           {c.confirmRequired && (
-                            <span className="shrink-0 rounded border border-warning/40 px-1 text-3xs leading-4 text-warning/90">
-                              危险
+                            <span className="shrink-0 rounded-sm border border-warning/40 px-1 text-3xs leading-4 text-warning/90">
+                              {t('cmd.center.dangerBadge')}
                             </span>
                           )}
                         </div>
@@ -626,12 +639,12 @@ export function CommandCenter({
 
                       <div className="flex shrink-0 items-center gap-1.5">
                         <span className="hidden shrink-0 text-2xs text-ink-3 group-hover:inline">
-                          {c.group || '默认'}
+                          {c.group || t('cmd.defaultGroup')}
                         </span>
                         {c.useCount > 0 && (
                           <span
                             className="shrink-0 font-mono text-2xs text-ink-3"
-                            title={`用过 ${c.useCount} 次`}
+                            title={t('cmd.tip.usedCount', { count: c.useCount })}
                           >
                             ×{c.useCount}
                           </span>
@@ -646,7 +659,7 @@ export function CommandCenter({
                             'btn-icon h-6 w-6 shrink-0',
                             pinned ? 'opacity-100 text-warning' : 'opacity-0 group-hover:opacity-100'
                           )}
-                          title={pinned ? '取消收藏' : '收藏置顶'}
+                          title={pinned ? t('cmd.card.unpin') : t('cmd.card.pin')}
                           onClick={(e) => {
                             e.stopPropagation()
                             void togglePin(c.id)
@@ -668,15 +681,15 @@ export function CommandCenter({
           </div>
 
           <div className="flex shrink-0 items-center gap-3 border-t border-edge-soft bg-app/40 px-3 py-1.5 text-2xs text-ink-3">
-            <Hint keys={wallMode ? '↑ ↓ ← →' : '↑ ↓'} label="选择" />
-            <Hint keys="↵" label="执行" />
-            <Hint keys="Ctrl+↵" label="编辑" />
-            <Hint keys="Tab" label="切换范围" />
-            <Hint keys="Ctrl+D" label="收藏" />
+            <Hint keys={wallMode ? '↑ ↓ ← →' : '↑ ↓'} label={t('cmd.center.hintSelect')} />
+            <Hint keys="↵" label={t('cmd.center.hintRun')} />
+            <Hint keys="Ctrl+↵" label={t('cmd.center.hintEdit')} />
+            <Hint keys="Tab" label={t('cmd.center.hintScope')} />
+            <Hint keys="Ctrl+D" label={t('cmd.center.hintPin')} />
             <span className="ml-auto font-mono">
-              {activeScopeIdx >= 0 ? scopes[activeScopeIdx]?.label : '全部命令'} ·{' '}
+              {activeScopeIdx >= 0 ? scopes[activeScopeIdx]?.label : t('cmd.scope.all')} ·{' '}
               {displayList.length}
-              {wallMode && <span className="ml-1 text-ink-3/60">按钮墙</span>}
+              {wallMode && <span className="ml-1 text-ink-3/60">{t('cmd.center.wallBadge')}</span>}
             </span>
           </div>
         </div>
@@ -693,12 +706,12 @@ export function CommandCenter({
 
       <ConfirmDialog
         open={!!confirmDelete}
-        title="删除命令"
+        title={t('cmd.deleteDialog.title')}
         danger
-        confirmText="删除"
+        confirmText={t('cmd.action.delete')}
         message={
           <>
-            确定删除「{confirmDelete?.name}」？该操作不可撤销。
+            {t('cmd.deleteDialog.message', { name: confirmDelete?.name ?? '' })}
           </>
         }
         onCancel={() => setConfirmDelete(null)}
@@ -708,7 +721,10 @@ export function CommandCenter({
           if (!target) return
           void remove(target.id).then((ok) => {
             if (ok) {
-              useToastStore.getState().push({ kind: 'success', title: `已删除「${target.name}」` })
+              useToastStore.getState().push({
+                kind: 'success',
+                title: t('cmd.toast.deleted', { name: target.name })
+              })
             }
           })
         }}

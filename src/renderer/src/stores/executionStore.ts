@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import type { Command, CommandVariable } from '@shared/types'
 import { call } from '@/lib/ipc'
+import { tNow } from '@/i18n/core'
 import { useCommandStore } from './commandStore'
 import { useSessionStore } from './sessionStore'
 import { useSettingsStore } from './settingsStore'
@@ -85,22 +86,22 @@ export const useExecutionStore = create<ExecutionState>()((set, get) => {
     if (!session) {
       useToastStore.getState().push({
         kind: 'warning',
-        title: '没有活动终端',
-        detail: '请先从左侧打开一个 SSH 连接'
+        title: tNow('cmd.exec.noSession'),
+        detail: tNow('cmd.exec.noSessionHint')
       })
       return
     }
     if (session.status !== 'connected') {
       useToastStore.getState().push({
         kind: 'warning',
-        title: '当前终端尚未连接',
-        detail: `「${session.title}」状态：${session.status}`
+        title: tNow('cmd.exec.notConnected'),
+        detail: tNow('cmd.exec.sessionStatus', { title: session.title, status: session.status })
       })
       return
     }
 
     const written = await call(window.api.session.write(session.id, `${finalText}\r`), {
-      errorTitle: '发送命令失败'
+      errorTitle: tNow('cmd.exec.sendFailed')
     })
     if (written === null) return
 
@@ -153,8 +154,8 @@ export const useExecutionStore = create<ExecutionState>()((set, get) => {
       if (!session) {
         useToastStore.getState().push({
           kind: 'warning',
-          title: '没有活动终端',
-          detail: '请先从左侧双击一个连接，打开 SSH 会话'
+          title: tNow('cmd.exec.noSession'),
+          detail: tNow('cmd.exec.noSessionDblClickHint')
         })
         return
       }
@@ -193,7 +194,9 @@ export const useExecutionStore = create<ExecutionState>()((set, get) => {
       if (missing.length > 0) {
         useToastStore.getState().push({
           kind: 'warning',
-          title: `请填写：${missing.map((v) => v.label ?? v.name).join('、')}`
+          title: tNow('cmd.exec.missingVars', {
+            fields: missing.map((v) => v.label ?? v.name).join(tNow('cmd.exec.listSep'))
+          })
         })
         return
       }
@@ -210,8 +213,8 @@ export const useExecutionStore = create<ExecutionState>()((set, get) => {
         set({ pending: null, pendingValues: {}, pendingSessionId: null })
         useToastStore.getState().push({
           kind: 'warning',
-          title: '目标终端已关闭，命令未发送',
-          detail: '请重新选择终端后再执行'
+          title: tNow('cmd.exec.targetClosed'),
+          detail: tNow('cmd.exec.targetClosedHint')
         })
         return
       }
@@ -234,8 +237,8 @@ export const useExecutionStore = create<ExecutionState>()((set, get) => {
       if (!target || target.status !== 'connected') {
         useToastStore.getState().push({
           kind: 'warning',
-          title: '目标设备已断开，危险操作已取消',
-          detail: '请重新在目标终端上执行'
+          title: tNow('cmd.exec.targetDisconnected'),
+          detail: tNow('cmd.exec.targetDisconnectedHint')
         })
         return
       }

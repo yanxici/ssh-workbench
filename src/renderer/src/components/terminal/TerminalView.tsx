@@ -4,7 +4,6 @@ import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { SearchAddon } from '@xterm/addon-search'
 import { WebLinksAddon } from '@xterm/addon-web-links'
-import { WebglAddon } from '@xterm/addon-webgl'
 import {
   AlertCircle,
   ChevronDown,
@@ -92,14 +91,15 @@ function fitAndSyncSize(sessionId: string): void {
 }
 
 function ReconnectButton({ sessionId }: { sessionId: string }): React.JSX.Element {
+  const { t } = useI18n()
   return (
     <button
       className="btn btn-primary mt-1 h-7 px-3 text-xs"
       onClick={() => useSessionStore.getState().reconnect(sessionId)}
     >
       <RefreshCw size={12} />
-      重新连接
-      <span className="text-2xs opacity-70">（或按 Enter）</span>
+      {t('term.view.reconnect')}
+      <span className="text-2xs opacity-70">{t('term.view.reconnectHint')}</span>
     </button>
   )
 }
@@ -111,6 +111,7 @@ function ReconnectButton({ sessionId }: { sessionId: string }): React.JSX.Elemen
  * 现场太绕；这里直接把动作放在报错的正下方。
  */
 function UpdateHostKeyButton({ session }: { session: SessionUi }): React.JSX.Element | null {
+  const { t } = useI18n()
   const [busy, setBusy] = useState(false)
   const connection = useConnectionStore((s) =>
     s.connections.find((c) => c.id === session.connectionId)
@@ -120,25 +121,30 @@ function UpdateHostKeyButton({ session }: { session: SessionUi }): React.JSX.Ele
     <button
       className="btn mt-1 h-7 px-3 text-xs"
       disabled={busy}
-      title={`重新探测 ${connection.host}:${connection.port} 的指纹并写入本地记录`}
+      title={t('term.view.probeTitle', { host: connection.host, port: connection.port })}
       onClick={() => {
         void (async () => {
           setBusy(true)
           try {
             const probe = await call(
               window.api.knownHosts.probe(connection.host, connection.port),
-              { errorTitle: `无法获取 ${connection.host}:${connection.port} 的指纹` }
+              {
+                errorTitle: t('term.view.probeFailed', {
+                  host: connection.host,
+                  port: connection.port
+                })
+              }
             )
             if (!probe) return
             const saved = await call(
               window.api.knownHosts.refresh(connection.host, connection.port, probe.fingerprint),
-              { errorTitle: '更新主机指纹失败' }
+              { errorTitle: t('term.view.updateHostKeyFailed') }
             )
             if (!saved) return
             useToastStore.getState().push({
               kind: 'success',
-              title: '已更新主机指纹',
-              detail: '正在重新连接…'
+              title: t('term.view.hostKeyUpdated'),
+              detail: t('term.view.reconnecting')
             })
             useSessionStore.getState().reconnect(session.id)
           } finally {
@@ -148,7 +154,7 @@ function UpdateHostKeyButton({ session }: { session: SessionUi }): React.JSX.Ele
       }}
     >
       {busy ? <Loader2 size={12} className="animate-spin" /> : <Fingerprint size={12} />}
-      更新主机指纹并重连
+      {t('term.view.updateHostKeyAndReconnect')}
     </button>
   )
 }
@@ -162,7 +168,9 @@ function UpdateHostKeyButton({ session }: { session: SessionUi }): React.JSX.Ele
  */
 function needsLegacyAlgorithms(session: SessionUi): boolean {
   if (session.kind === 'serial') return false
-  return /算法协商失败|no matching|Unable to negotiate/i.test(session.error ?? '')
+  return /\u7b97\u6cd5\u534f\u5546\u5931\u8d25|no matching|Unable to negotiate/i.test(
+    session.error ?? ''
+  )
 }
 
 /**
@@ -267,6 +275,8 @@ export function TerminalView({
 }): React.JSX.Element {
   const sessionId = session.id
   const containerRef = useRef<HTMLDivElement>(null)
+  const termRef = useRef<Terminal | null>(null)
+  const webglRef = useRef<{ dispose(): void } | null>(null)
   const tempFontSizeRef = useRef<number | null>(null)
   const lastGlobalFontSizeRef = useRef<number>(
     useSettingsStore.getState().settings.terminal.fontSize
@@ -363,61 +373,7 @@ export function TerminalView({
       })
     )
     term.open(el)
-    /*
-     * 渲染后端：**默认 DOM，WebGL 改为可选**（settings.experimental.terminalRenderer）。
-     *
-     * 历史：v2.1.0 默认 WebGL 后，本机（Intel UHD + ANGLE D3D11）字形明显小于格子 ——
-     * 格子 32~33px 不变，但 `MWMWMWMW` 墨迹只有 27~34px，`i`/`l` 细笔只剩 5~7px。
-     * v2.1.1 先把默认翻回 DOM 绕开；v2.1.2 查清真因是 addon 拼 canvas font 时留下
-     * 前导空格，Chromium 不 trim 就静默退回 10px sans-serif（详见 lib/canvasFont.ts）。
-     * 现在字问题已修，默认仍保守留在 DOM；想用 WebGL 可在设置里切，挂载前会自检。
-     *
-     * 为什么必须 try/catch 而不是查能力位：addon 在构造/激活时会自己检测 WebGL2 上下文，
-     * 失败有两种表现 —— 构造抛错，或构造成功但上下文创建失败（此时 onContextLoss 才触发）。
-     * 只判 navigator.gpu 之类的前置条件必然漏掉后一种。
-     *
-     * 上下文丢失（驱动重置、远程桌面切换显卡）也要回落：webgl 的 canvas 一旦 loss，
-     * 终端就成了白板，必须 dispose 掉让 DOM 渲染器接管。
-     *
-     * 最后一道自检（isCanvasFontApplied）解决的是另一类「静默降级」：
-     * addon 拼字体串时非斜体分支会留下前导空格（" normal 15px ..."），
-     * Chromium 的 canvas font 解析器不 trim，整串被判非法后 setter 静默失败，
-     * 图集就按初始的 10px sans-serif 光栅化 —— 格子按配置算、字却只有 10px，
-     * 观感是「笔画细、字距变宽」。lib/canvasFont.ts 已经修掉这次的坑，
-     * 但字体族名、系统缺字体、将来 addon 换拼法都可能再次触发，
-     * 所以挂载前先实测一次：字形没按配置生效就干脆不挂 WebGL，用户永远看不到那块「小字」。
-     */
-    const renderer = settings.experimental?.terminalRenderer ?? 'dom'
-    /* 先做字体自检，再决定要不要挂 WebGL：自检不过就没必要让用户先看一眼小字 */
-    const canvasFontOk = isCanvasFontApplied(
-      settings.terminal.fontFamily,
-      settings.terminal.fontSize
-    )
-    let webglAttached = false
-    if (renderer !== 'dom' && canvasFontOk) {
-      try {
-        const webgl = new WebglAddon()
-        webgl.onContextLoss(() => {
-          /* 上下文丢失后立即卸载 addon：xterm 会自动回到 DOM 渲染器 */
-          try { webgl.dispose() } catch { /* 已释放 */ }
-        })
-        term.loadAddon(webgl)
-        webglAttached = true
-      } catch {
-        /* 无 WebGL2 / 软件渲染 / 驱动限制：静默回落 DOM，不打扰用户 */
-        webglAttached = false
-      }
-    }
-    if (!webglAttached) {
-      // DOM 渲染器无需额外 addon，xterm 默认即是；这里仅记录一次便于诊断
-      console.info(
-        renderer === 'dom'
-          ? '[terminal] 按设置使用 DOM 渲染器（默认）'
-          : canvasFontOk
-            ? '[terminal] WebGL 不可用，回落到 DOM 渲染'
-            : '[terminal] canvas 未应用终端字体，回落到 DOM 渲染'
-      )
-    }
+    termRef.current = term
 
     const doFit = (): void => {
       if (!containerRef.current || containerRef.current.clientWidth === 0) return
@@ -612,6 +568,15 @@ export function TerminalView({
     return () => {
       terminalRegistry.delete(sessionId)
       detachZmodem(sessionId)
+      if (webglRef.current) {
+        try {
+          webglRef.current.dispose()
+        } catch {
+          /* 已释放 */
+        }
+        webglRef.current = null
+      }
+      termRef.current = null
       if (copyTimer) clearTimeout(copyTimer)
       selectionDisposer.dispose()
       el.removeEventListener('wheel', onWheel, { capture: true })
@@ -631,8 +596,59 @@ export function TerminalView({
 
   /* ---------- 设置变化：字体 / 主题实时生效 ---------- */
   const terminalPrefs = useSettingsStore((s) => s.settings.terminal)
+  const terminalRenderer = useSettingsStore(
+    (s) => s.settings.experimental?.terminalRenderer ?? 'dom'
+  )
   const themeMode = useSettingsStore((s) => s.settings.theme)
   const colorTheme = useSettingsStore((s) => s.settings.colorTheme)
+
+  /* ---------- WebGL 按需动态加载 + 后台标签上下文释放 ---------- */
+  useEffect(() => {
+    const term = termRef.current
+    if (!term) return
+    if (!active || terminalRenderer === 'dom') {
+      if (webglRef.current) {
+        try {
+          webglRef.current.dispose()
+        } catch {
+          /* 已释放 */
+        }
+        webglRef.current = null
+      }
+      return
+    }
+    if (webglRef.current) return
+    if (!isCanvasFontApplied(terminalPrefs.fontFamily, terminalPrefs.fontSize)) {
+      console.info('[terminal] canvas font not applied, falling back to DOM renderer')
+      return
+    }
+    let cancelled = false
+    void import('@xterm/addon-webgl')
+      .then(({ WebglAddon }) => {
+        if (cancelled || termRef.current !== term) return
+        try {
+          const webgl = new WebglAddon()
+          webgl.onContextLoss(() => {
+            try {
+              webgl.dispose()
+            } catch {
+              /* 已释放 */
+            }
+            if (webglRef.current === webgl) webglRef.current = null
+          })
+          term.loadAddon(webgl)
+          webglRef.current = webgl
+        } catch {
+          /* 无 WebGL2 / 驱动限制：静默回落 DOM */
+        }
+      })
+      .catch(() => {
+        /* ignore */
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [active, sessionId, terminalRenderer, terminalPrefs.fontFamily, terminalPrefs.fontSize])
   useEffect(() => {
     const entry = terminalRegistry.get(sessionId)
     if (!entry) return
@@ -749,7 +765,7 @@ export function TerminalView({
     void call(
       paths ? window.api.trzsz.upload(sessionId, paths) : window.api.trzsz.upload(sessionId),
       {
-        errorTitle: 'trzsz 上传失败'
+        errorTitle: t('term.view.trzszUploadFailed')
       }
     )
   }
@@ -824,7 +840,7 @@ export function TerminalView({
   /* ---------- 右键菜单 ---------- */
   const menuItems: MenuEntry[] = [
     {
-      label: '复制',
+      label: t('term.view.menu.copy'),
       onClick: () => {
         const entry = terminalRegistry.get(sessionId)
         const selection = entry?.term.getSelection()
@@ -832,14 +848,17 @@ export function TerminalView({
       }
     },
     {
-      label: '粘贴',
+      label: t('term.view.menu.paste'),
       onClick: () => {
         void call(window.api.clip.read(), { silent: true }).then((text) => {
           if (text) requestPaste(text)
         })
       }
     },
-    { label: '全选', onClick: () => terminalRegistry.get(sessionId)?.term.selectAll() },
+    {
+      label: t('term.view.menu.selectAll'),
+      onClick: () => terminalRegistry.get(sessionId)?.term.selectAll()
+    },
     /*
      * 发送文件：trzsz 的本地发起方向。
      *
@@ -850,7 +869,7 @@ export function TerminalView({
     ...(canTrzsz
       ? [
           {
-            label: '发送文件…',
+            label: t('term.view.menu.sendFile'),
             separatorBefore: true,
             onClick: () => startUpload()
           } as MenuEntry
@@ -859,10 +878,12 @@ export function TerminalView({
     ...(trzsz?.active
       ? [
           {
-            label: '取消传输',
+            label: t('term.view.menu.cancelTransfer'),
             danger: true,
             onClick: () => {
-              void call(window.api.trzsz.cancel(sessionId), { errorTitle: '取消传输失败' })
+              void call(window.api.trzsz.cancel(sessionId), {
+                errorTitle: t('term.view.trzszCancelFailed')
+              })
             }
           } as MenuEntry
         ]
@@ -877,14 +898,14 @@ export function TerminalView({
      * 而终端右键菜单里多一个「关掉整个终端」既危险又多余（标签上有 ×）。
      */
     {
-      label: '向右分屏',
+      label: t('term.view.menu.splitRight'),
       icon: <Columns2 size={12} />,
       separatorBefore: true,
       disabled: !canSplit,
       onClick: () => splitPane(sessionId, 'row')
     },
     {
-      label: '向下分屏',
+      label: t('term.view.menu.splitDown'),
       icon: <Rows2 size={12} />,
       disabled: !canSplit,
       onClick: () => splitPane(sessionId, 'col')
@@ -892,7 +913,7 @@ export function TerminalView({
     ...(paneTotal > 1
       ? [
           {
-            label: '关闭此分屏',
+            label: t('term.view.menu.closePane'),
             icon: <XCircle size={12} />,
             onClick: () => closePane(sessionId)
           } as MenuEntry
@@ -931,7 +952,7 @@ export function TerminalView({
         })
       }
     },
-    { label: '清屏', onClick: () => terminalRegistry.get(sessionId)?.term.clear() }
+    { label: t('term.view.menu.clear'), onClick: () => terminalRegistry.get(sessionId)?.term.clear() }
   ]
 
   const handleContextMenu = (e: React.MouseEvent<HTMLDivElement>): void => {
@@ -961,10 +982,14 @@ export function TerminalView({
 
   return (
     <div className="relative flex h-full flex-col bg-app">
-      {/* 串口会话顶部的刷机引导条（SSH 会话不渲染） */}
+      {
+        /* 串口会话顶部的刷机引导条（SSH 会话不渲染） */
+      }
       {session.kind === 'serial' && <SerialBootBar session={session} />}
 
-      {/* 终端挂载点：外层留呼吸边距，内层容器不设 padding，保证 fit 计算的尺寸精确 */}
+      {
+        /* 终端挂载点：外层留呼吸边距，内层容器不设 padding，保证 fit 计算的尺寸精确 */
+      }
       <div className="min-h-0 flex-1 px-3.5 py-2.5">
         <div
           ref={containerRef}
@@ -1058,11 +1083,13 @@ export function TerminalView({
               if (e.key === 'Enter') runSearch(searchText, e.shiftKey)
               if (e.key === 'Escape') closeSearch()
             }}
-            placeholder="在终端中查找…"
+            placeholder={t('term.view.searchPlaceholder')}
             className="h-6 w-44 selectable border-none bg-transparent text-xs text-ink outline-none placeholder:text-ink-3"
           />
           <span className="min-w-[52px] text-center font-mono text-2xs text-ink-3">
-            {searchCount.count > 0 ? `${searchCount.index + 1}/${searchCount.count}` : '无结果'}
+            {searchCount.count > 0
+              ? `${searchCount.index + 1}/${searchCount.count}`
+              : t('term.view.searchNoResult')}
           </span>
           <button
             className="btn-icon h-5 w-5"
@@ -1093,25 +1120,25 @@ export function TerminalView({
           {session.status === 'connecting' && (
             <div className="flex items-center gap-2.5 rounded-lg border border-edge bg-panel px-5 py-3.5 text-xs text-ink-2 shadow-pop">
               <Loader2 size={15} className="animate-spin text-accent" />
-              正在连接 {session.target}…
+              {t('term.view.connecting', { target: session.target })}
             </div>
           )}
           {session.status === 'disconnected' && (
             <div className="flex max-w-[420px] flex-col items-center gap-2 rounded-lg border border-edge bg-panel px-6 py-5 text-center shadow-pop">
               <PlugZap size={22} className="text-ink-3" />
-              <div className="text-xs font-medium text-ink">连接已断开</div>
-              <div className="text-2xs text-ink-3">远端关闭了会话，或网络中断。</div>
+              <div className="text-xs font-medium text-ink">{t('term.view.disconnected')}</div>
+              <div className="text-2xs text-ink-3">{t('term.view.disconnectedHint')}</div>
               <ReconnectButton sessionId={sessionId} />
             </div>
           )}
           {session.status === 'error' && (
             <div className="flex max-w-[460px] flex-col items-center gap-2 rounded-lg border border-edge bg-panel px-6 py-5 text-center shadow-pop">
               <AlertCircle size={22} className="text-danger" />
-              <div className="text-xs font-medium text-ink">连接失败</div>
+              <div className="text-xs font-medium text-ink">{t('term.view.connectFailed')}</div>
               <div className="selectable whitespace-pre-line break-all text-2xs leading-relaxed text-ink-3">
-                {session.error ?? '未知错误'}
+                {session.error ?? t('term.view.unknownError')}
               </div>
-              {/指纹/.test(session.error ?? '') && <UpdateHostKeyButton session={session} />}
+              {/\u6307\u7eb9/.test(session.error ?? '') && <UpdateHostKeyButton session={session} />}
               {needsLegacyAlgorithms(session) && <EnableLegacyAlgoButton session={session} />}
               <ReconnectButton sessionId={sessionId} />
             </div>
@@ -1119,7 +1146,9 @@ export function TerminalView({
         </div>
       )}
 
-      {/* 多行粘贴确认框：挂在终端容器之外，免得成为 xterm 兄弟节点影响 fit */}
+      {
+        /* 多行粘贴确认框：挂在终端容器之外，免得成为 xterm 兄弟节点影响 fit */
+      }
       {pasteRequest && (
         <PasteConfirmDialog
           target={session.title || session.target}

@@ -183,7 +183,7 @@ export function SettingsPanel({
                   <Segmented<Lang>
                     value={lang}
                     options={[
-                      { value: 'zh-CN', label: '中文' },
+                      { value: 'zh-CN', label: t('settings.ext.lang.zh') },
                       { value: 'en', label: 'English' }
                     ]}
                     onChange={setLang}

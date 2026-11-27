@@ -30,7 +30,7 @@ import {
   useContextMenu,
   type MenuEntry
 } from '@/components/ui'
-import { TUNNEL_TYPE_LABEL, describeEndpoint, useTunnelStore } from '@/stores/tunnelStore'
+import { describeEndpoint, useTunnelStore } from '@/stores/tunnelStore'
 import { TunnelEditor } from './TunnelEditor'
 
 /**
@@ -169,26 +169,26 @@ export function TunnelPanel(): React.JSX.Element {
     return [
       running
         ? {
-            label: '停止',
+            label: tr('panel.tunnel.actionStop'),
             icon: <Square size={12} />,
             onClick: () => void useTunnelStore.getState().stop(t.id)
           }
         : {
-            label: '启动',
+            label: tr('panel.tunnel.actionStart'),
             icon: <Play size={12} />,
             onClick: () => void useTunnelStore.getState().start(t.id)
           },
       {
-        label: '编辑',
+        label: tr('panel.tunnel.actionEdit'),
         icon: <Pencil size={12} />,
         onClick: () => openEdit(t)
       },
       {
-        label: '复制一份',
+        label: tr('panel.tunnel.actionDuplicate'),
         icon: <Copy size={12} />,
         onClick: () =>
           void useTunnelStore.getState().save({
-            name: `${t.name} 副本`,
+            name: tr('panel.tunnel.copySuffix', { name: t.name }),
             type: t.type,
             bindHost: t.bindHost,
             bindPort: t.bindPort,
@@ -206,7 +206,7 @@ export function TunnelPanel(): React.JSX.Element {
           })
       },
       {
-        label: '删除',
+        label: tr('panel.tunnel.actionDelete'),
         icon: <Trash2 size={12} />,
         danger: true,
         separatorBefore: true,
@@ -219,17 +219,21 @@ export function TunnelPanel(): React.JSX.Element {
     <div className="flex h-full flex-col">
       <div className="panel-head">
         <Cable size={13} className="shrink-0 text-ink-3" />
-        <span className="panel-title">端口转发</span>
+        <span className="panel-title">{tr('panel.tunnel.title')}</span>
         <span className="panel-count">{tunnels.length}</span>
         <span className="flex-1" />
         <button
           className="btn-icon h-6 w-6"
-          title="刷新"
+          title={tr('panel.tunnel.refresh')}
           onClick={() => void useTunnelStore.getState().load()}
         >
           <RefreshCw size={13} />
         </button>
-        <button className="btn-icon h-6 w-6" title="新建隧道" onClick={openCreate}>
+        <button
+          className="btn-icon h-6 w-6"
+          title={tr('panel.tunnel.newTitle')}
+          onClick={openCreate}
+        >
           <Plus size={14} />
         </button>
       </div>
@@ -242,7 +246,7 @@ export function TunnelPanel(): React.JSX.Element {
           />
           <input
             className="input h-7 pl-7 text-xs"
-            placeholder="搜索名称 / 地址 / 端口…"
+            placeholder={tr('panel.tunnel.searchPlaceholder')}
             value={keyword}
             onChange={(e) => setKeyword(e.target.value)}
           />
@@ -429,17 +433,21 @@ export function TunnelPanel(): React.JSX.Element {
         {filtered.length === 0 && ephemeralActive.length === 0 && (
           <EmptyState
             icon={<Cable size={24} />}
-            title={tunnels.length === 0 ? '还没有隧道' : '没有匹配的隧道'}
+            title={
+              tunnels.length === 0
+                ? tr('panel.tunnel.emptyTitle')
+                : tr('panel.tunnel.emptySearchTitle')
+            }
             hint={
               tunnels.length === 0
-                ? '建立隧道可把设备内网的服务映射到本机（-L）、或把本机服务暴露给设备（-R），也能开 SOCKS5 代理（-D）'
-                : '换个关键字试试'
+                ? tr('panel.tunnel.emptyHint')
+                : tr('panel.tunnel.emptySearchHint')
             }
             action={
               tunnels.length === 0 ? (
                 <button className="btn btn-primary h-7 px-3 text-xs" onClick={openCreate}>
                   <Plus size={12} />
-                  新建隧道
+                  {tr('panel.tunnel.newTitle')}
                 </button>
               ) : undefined
             }
@@ -447,7 +455,7 @@ export function TunnelPanel(): React.JSX.Element {
         )}
 
         {!loaded && tunnels.length === 0 && (
-          <div className="py-4 text-center text-2xs text-ink-3">加载中…</div>
+          <div className="py-4 text-center text-2xs text-ink-3">{tr('panel.tunnel.loading')}</div>
         )}
 
         {filtered.map((t) => {
@@ -456,20 +464,28 @@ export function TunnelPanel(): React.JSX.Element {
             runtime?.status === 'active' ||
             runtime?.status === 'starting' ||
             runtime?.status === 'reconnecting'
+          const typeLabel =
+            t.type === 'local'
+              ? tr('panel.tunnel.type.local')
+              : t.type === 'remote'
+                ? tr('panel.tunnel.type.remote')
+                : tr('panel.tunnel.type.dynamic')
           return (
             <div
               key={t.id}
               className="group rounded-md px-2 py-1.5 transition-colors hover:bg-hover/60"
               onContextMenu={(e) => openMenu(e, t)}
             >
-              {/* 第一行：状态点 + 名称 + 类型 + 启停 */}
+              {/*
+               * 第一行：状态点 + 名称 + 类型 + 启停
+               */}
               <div className="flex items-center gap-1.5">
                 <StatusDot runtime={runtime} />
                 <span className="min-w-0 flex-1 truncate text-xs text-ink" title={t.name}>
                   {t.name}
                 </span>
-                <span className="shrink-0 rounded border border-edge-soft bg-raised px-1 py-px font-mono text-3xs text-ink-3">
-                  {TUNNEL_TYPE_LABEL[t.type]}
+                <span className="shrink-0 rounded-sm border border-edge-soft bg-raised px-1 py-px font-mono text-3xs text-ink-3">
+                  {typeLabel}
                 </span>
                 {t.autoStart === true && (
                   <span
@@ -482,7 +498,7 @@ export function TunnelPanel(): React.JSX.Element {
                 {running ? (
                   <button
                     className="btn-icon h-5 w-5 opacity-0 hover:text-warning group-hover:opacity-100"
-                    title="停止"
+                    title={tr('panel.tunnel.actionStop')}
                     onClick={() => void useTunnelStore.getState().stop(t.id)}
                   >
                     <Square size={11} />
@@ -490,7 +506,7 @@ export function TunnelPanel(): React.JSX.Element {
                 ) : (
                   <button
                     className="btn-icon h-5 w-5 opacity-0 hover:text-success group-hover:opacity-100"
-                    title="启动"
+                    title={tr('panel.tunnel.actionStart')}
                     onClick={() => void useTunnelStore.getState().start(t.id)}
                   >
                     <Play size={11} />
@@ -498,12 +514,16 @@ export function TunnelPanel(): React.JSX.Element {
                 )}
               </div>
 
-              {/* 第二行：端点 */}
+              {/*
+               * 第二行：端点
+               */}
               <div className="mt-0.5 truncate pl-3 font-mono text-3xs text-ink-3">
                 {describeEndpoint(t, runtime)}
               </div>
 
-              {/* 第三行：运行信息 / 错误 */}
+              {/*
+               * 第三行：运行信息 / 错误
+               */}
               {runtime?.status === 'error' && runtime.error && (
                 <div className="mt-0.5 pl-3 text-3xs leading-relaxed text-danger/90">
                   {runtime.error}
@@ -525,7 +545,9 @@ export function TunnelPanel(): React.JSX.Element {
                     </span>
                   )}
                   {runtime.connectionCount > 0 && (
-                    <span className="shrink-0">↑ 已转发 {runtime.connectionCount} 条连接</span>
+                    <span className="shrink-0">
+                      {tr('panel.tunnel.forwardedCount', { count: runtime.connectionCount })}
+                    </span>
                   )}
                 </div>
               )}
@@ -537,7 +559,7 @@ export function TunnelPanel(): React.JSX.Element {
       {tunnels.length > 0 && (
         <div className="shrink-0 border-t border-edge-soft px-2.5 py-1.5 text-3xs leading-relaxed text-ink-3">
           <Zap size={10} className="mr-1 inline-block" />
-          隧道挂在选中的 SSH 会话上，会话断开时自动停止。
+          {tr('panel.tunnel.footerHint')}
         </div>
       )}
 
@@ -549,15 +571,20 @@ export function TunnelPanel(): React.JSX.Element {
 
       <ConfirmDialog
         open={pendingDelete !== null}
-        title="删除隧道"
+        title={tr('panel.tunnel.deleteTitle')}
         danger
-        confirmText="删除"
+        confirmText={tr('panel.tunnel.deleteConfirm')}
         message={
           <>
-            确定删除隧道
-            <span className="font-medium text-ink">「{pendingDelete?.name}」</span>吗？
+            {tr('panel.tunnel.deletePrefix')}
+            <span className="font-medium text-ink">
+              {tr('panel.tunnel.deleteQuoted', { name: pendingDelete?.name ?? '' })}
+            </span>
+            {tr('panel.tunnel.deleteSuffix')}
             {pendingDelete && runtimes[pendingDelete.id]?.status === 'active' && (
-              <div className="mt-1 text-2xs text-warning">该隧道正在运行，删除前会先停止。</div>
+              <div className="mt-1 text-2xs text-warning">
+                {tr('panel.tunnel.deleteRunningWarn')}
+              </div>
             )}
           </>
         }
@@ -582,6 +609,7 @@ export function TunnelPanel(): React.JSX.Element {
 /* ------------------------------------------------------------------ */
 
 function StatusDot({ runtime }: { runtime?: TunnelRuntimeInfo }): React.JSX.Element {
+  const { t } = useI18n()
   const status = runtime?.status ?? 'stopped'
   return (
     <span
@@ -595,14 +623,14 @@ function StatusDot({ runtime }: { runtime?: TunnelRuntimeInfo }): React.JSX.Elem
       )}
       title={
         status === 'active'
-          ? '运行中'
+          ? t('panel.tunnel.statusActive')
           : status === 'starting'
-            ? '启动中'
+            ? t('panel.tunnel.statusStarting')
             : status === 'reconnecting'
-              ? '等待重连'
+              ? t('panel.tunnel.statusReconnecting')
               : status === 'error'
-                ? '错误'
-                : '未启动'
+                ? t('panel.tunnel.statusError')
+                : t('panel.tunnel.statusStopped')
       }
     />
   )

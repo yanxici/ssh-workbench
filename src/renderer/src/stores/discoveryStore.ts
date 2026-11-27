@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import type { DiscoverHost, DiscoverProgressEvent, MdnsService, NetInterfaceInfo } from '@shared/types'
+import { tNow } from '@/i18n/core'
 import { call } from '@/lib/ipc'
 import { uid } from '@/lib/utils'
 import { useToastStore } from './toastStore'
@@ -71,7 +72,9 @@ export const useDiscoveryStore = create<DiscoveryState>()((set, get) => ({
   setTab: (tab) => set({ tab }),
 
   loadIfaces: async () => {
-    const list = await call(window.api.discovery.interfaces(), { errorTitle: '读取网卡信息失败' })
+    const list = await call(window.api.discovery.interfaces(), {
+      errorTitle: tNow('panel.discovery.ifacesError')
+    })
     if (!list) return
     set((s) => ({
       ifaces: list,
@@ -92,11 +95,11 @@ export const useDiscoveryStore = create<DiscoveryState>()((set, get) => ({
       .map((x) => Number(x))
       .filter((n) => Number.isInteger(n) && n > 0 && n <= 65535)
     if (ports.length === 0) {
-      useToastStore.getState().push({ kind: 'warning', title: '请填写要探测的端口（如 22, 80）' })
+      useToastStore.getState().push({ kind: 'warning', title: tNow('panel.discovery.needPorts') })
       return
     }
     if (!cidr.trim()) {
-      useToastStore.getState().push({ kind: 'warning', title: '请填写要扫描的网段（如 192.168.1.0/24）' })
+      useToastStore.getState().push({ kind: 'warning', title: tNow('panel.discovery.needCidr') })
       return
     }
 
@@ -105,7 +108,7 @@ export const useDiscoveryStore = create<DiscoveryState>()((set, get) => ({
 
     const hosts = await call(
       window.api.discovery.scan(runId, cidr.trim(), ports, scanTimeoutMs),
-      { errorTitle: '扫描失败' }
+      { errorTitle: tNow('panel.discovery.scanError') }
     )
     /*
      * 只认自己这一轮的结果。
@@ -122,8 +125,11 @@ export const useDiscoveryStore = create<DiscoveryState>()((set, get) => ({
       // 网段扫描按 /24 逐 IP 探活，几百个探测点几十秒跑不完，同样属于"跑完要告诉我"
       void notifyTask({
         kind: 'discover',
-        title: hosts.length > 0 ? `发现 ${hosts.length} 台设备` : '扫描完成：没有发现开放目标端口的设备',
-        detail: hosts.length === 0 ? '可尝试增加端口（如 23/8080）或确认网段是否正确' : undefined
+        title:
+          hosts.length > 0
+            ? tNow('panel.discovery.foundHosts', { count: hosts.length })
+            : tNow('panel.discovery.scanDoneNone'),
+        detail: hosts.length === 0 ? tNow('panel.discovery.scanDoneNoneDetail') : undefined
       })
     }
   },
@@ -144,19 +150,21 @@ export const useDiscoveryStore = create<DiscoveryState>()((set, get) => ({
   runMdns: async () => {
     if (get().mdnsRunning) return
     set({ mdnsRunning: true, mdnsServices: [], mdnsDone: false })
-    const services = await call(window.api.discovery.mdns(6000), { errorTitle: 'mDNS 发现失败' })
+    const services = await call(window.api.discovery.mdns(6000), {
+      errorTitle: tNow('panel.discovery.mdnsError')
+    })
     set({ mdnsRunning: false, mdnsDone: true, mdnsServices: services ?? [] })
   },
 
   makeConnection: (host, port = 22) => {
     set({ panelOpen: false })
     useUiStore.getState().openConnEditor(null, {
-      name: `发现设备 ${host}`,
+      name: tNow('panel.discovery.newConnName', { host }),
       host,
       port,
       username: 'root',
-      group: '发现设备',
-      tags: ['自动发现']
+      group: tNow('panel.discovery.newConnGroup'),
+      tags: [tNow('panel.discovery.newConnTag')]
     })
   }
 }))

@@ -1,5 +1,6 @@
 import type { RemoteFile } from '@shared/types'
 import { call } from '@/lib/ipc'
+import { tNow } from '../i18n/core'
 
 /**
  * 目录批量读取器：把同一帧内的多个目录请求合并成一次 IPC。
@@ -68,7 +69,7 @@ async function flush(): Promise<void> {
      */
     out = files
       ? { dirs: { [batchDirs[0]]: files }, errors: {} }
-      : { dirs: {}, errors: { [batchDirs[0]]: '读取失败' } }
+      : { dirs: {}, errors: { [batchDirs[0]]: tNow('files.ui.readFailed') } }
   } else {
     const res = await call(window.api.sftp.listMany(sessionId, batchDirs), { silent: true })
     if (res) out = res
@@ -80,7 +81,7 @@ async function flush(): Promise<void> {
        * 每个请求过的目录都要有一条明确的失败原因。
        */
       out = { dirs: {}, errors: {} }
-      for (const d of batchDirs) out.errors[d] = '读取失败'
+      for (const d of batchDirs) out.errors[d] = tNow('files.ui.readFailed')
     }
   }
 

@@ -72,9 +72,9 @@ export function CommandCardTip({
       style={{ left: pos?.x ?? -9999, top: pos?.y ?? -9999 }}
     >
       {/*
-        名称单独一个块 + 命令单独一个块。
-        短命令用 break-all 完整预览；多行/超长脚本改为单行提示，避免浮层撑满半屏遮挡终端。
-      */}
+       * 名称单独一个块 + 命令单独一个块。
+       * 短命令用 break-all 完整预览；多行/超长脚本改为单行提示，避免浮层撑满半屏遮挡终端。
+       */}
       <div className="text-xs font-medium leading-snug text-ink">{name}</div>
       {isLongCommand ? (
         <div className="mt-1 text-3xs italic text-ink-3">
@@ -88,13 +88,13 @@ export function CommandCardTip({
         </div>
       )}
       <div className="mt-1 text-3xs text-ink-3">
-        {useCount > 0 ? `用过 ${useCount} 次` : '还没用过'}
+        {useCount > 0 ? t('cmd.tip.usedCount', { count: useCount }) : t('cmd.tip.neverUsed')}
         <span className="mx-1 text-ink-3/50">·</span>
-        单击执行 · Ctrl+单击编辑
+        {t('cmd.tip.actions')}
         {/*
-          只在「限定了环境」时补一句：默认命令两者都适用，
-          给每条都标「全部环境」等于给每条都加噪音。
-        */}
+         * 只在「限定了环境」时补一句：默认命令两者都适用，
+         * 给每条都标「全部环境」等于给每条都加噪音。
+         */}
         {normalizeEnvs(envs) && (
           <>
             <span className="mx-1 text-ink-3/50">·</span>

@@ -15,6 +15,7 @@ import {
   XCircle
 } from 'lucide-react'
 import type { BatchStatus } from '@shared/types'
+import { useI18n, type I18nKey } from '@/i18n'
 import { call } from '@/lib/ipc'
 import { useOverlayEscape } from '@/lib/overlayKeys'
 import { cn } from '@/lib/utils'
@@ -30,6 +31,7 @@ import { useToastStore } from '@/stores/toastStore'
  * 卡片视图看单台详情；对比视图把各设备输出并排排列，方便找差异。
  */
 export function BatchPanel(): React.JSX.Element | null {
+  const { t } = useI18n()
   const panelOpen = useBatchStore((s) => s.panelOpen)
 
   const close = (): void => useBatchStore.setState({ panelOpen: false })
@@ -41,10 +43,10 @@ export function BatchPanel(): React.JSX.Element | null {
     <div className="panel-shell fixed inset-x-0 z-30 flex flex-col bg-app">
       <div className="flex h-9 shrink-0 items-center gap-2 border-b border-edge bg-panel px-3">
         <Boxes size={14} className="text-accent" />
-        <span className="text-xs font-semibold">批量执行</span>
-        <span className="text-2xs text-ink-3">多设备广播命令，分别收集输出并对比</span>
+        <span className="text-xs font-semibold">{t('panel.batch.title')}</span>
+        <span className="text-2xs text-ink-3">{t('panel.batch.subtitle')}</span>
         <span className="flex-1" />
-        <button className="btn-icon" title="关闭 (Esc)" onClick={close}>
+        <button className="btn-icon" title={t('panel.batch.closeEsc')} onClick={close}>
           <X size={14} />
         </button>
       </div>
@@ -62,6 +64,7 @@ export function BatchPanel(): React.JSX.Element | null {
  * ------------------------------------------------------------------ */
 
 function SessionPicker(): React.JSX.Element {
+  const { t } = useI18n()
   const sessions = useSshSessions()
   const selected = useBatchStore((s) => s.selectedSessionIds)
 
@@ -73,7 +76,7 @@ function SessionPicker(): React.JSX.Element {
   return (
     <div className="flex rail-w shrink-0 flex-col border-r border-edge bg-panel">
       <div className="flex shrink-0 items-center gap-1.5 border-b border-edge-soft px-2.5 py-1.5">
-        <span className="text-2xs font-semibold text-ink-2">目标设备</span>
+        <span className="text-2xs font-semibold text-ink-2">{t('panel.batch.targets')}</span>
         <span className="text-2xs text-ink-3">
           {liveSelected}/{connected.length}
         </span>
@@ -82,21 +85,21 @@ function SessionPicker(): React.JSX.Element {
           className="text-2xs text-ink-3 transition-colors hover:text-ink"
           onClick={() => useBatchStore.getState().setSelected(connected.map((s) => s.id))}
         >
-          全选在线
+          {t('panel.batch.selectAllOnline')}
         </button>
         <span className="text-2xs text-ink-3/50">|</span>
         <button
           className="text-2xs text-ink-3 transition-colors hover:text-ink"
           onClick={() => useBatchStore.getState().setSelected([])}
         >
-          清空
+          {t('panel.batch.clear')}
         </button>
       </div>
 
       <div className="scroll-thin min-h-0 flex-1 overflow-y-auto p-1.5">
         {sessions.length === 0 && (
           <div className="px-2 py-4 text-2xs leading-relaxed text-ink-3">
-            还没有打开任何会话。先在左侧打开多个 SSH 连接，再回到这里批量执行。
+            {t('panel.batch.noSessions')}
           </div>
         )}
         {sessions.map((s) => {
@@ -111,7 +114,7 @@ function SessionPicker(): React.JSX.Element {
                   ? 'cursor-default text-ink-2 hover:bg-hover/60'
                   : 'cursor-not-allowed text-ink-3/70'
               )}
-              title={selectable ? s.target : '会话未连接，无法参与批量执行'}
+              title={selectable ? s.target : t('panel.batch.sessionOfflineTitle')}
               /* 断线/已关的会话也必须能点掉：否则它卡在已选集合里，
                * 既执行不了也去不掉，「已选 N 台」跟着虚高 */
               onClick={() => {
@@ -139,7 +142,7 @@ function SessionPicker(): React.JSX.Element {
       </div>
 
       <div className="shrink-0 border-t border-edge-soft px-2.5 py-1.5 text-3xs leading-relaxed text-ink-3">
-        命令将在每台设备上独立执行，互不影响；输出按设备分别收集。
+        {t('panel.batch.footerHint')}
       </div>
     </div>
   )
@@ -150,6 +153,7 @@ function SessionPicker(): React.JSX.Element {
  * ------------------------------------------------------------------ */
 
 function CommandAndResults(): React.JSX.Element {
+  const { t } = useI18n()
   const command = useBatchStore((s) => s.command)
   const timeoutMs = useBatchStore((s) => s.timeoutMs)
   const running = useBatchStore((s) => s.running)
@@ -186,7 +190,7 @@ function CommandAndResults(): React.JSX.Element {
       <div className="shrink-0 border-b border-edge-soft p-3 pb-2">
         <textarea
           className="textarea selectable min-h-[64px] font-mono text-xs leading-relaxed"
-          placeholder="输入要在所有选中设备上执行的命令，例如：uname -a && uptime"
+          placeholder={t('panel.batch.cmdPlaceholder')}
           value={command}
           onChange={(e) => useBatchStore.getState().setCommand(e.target.value)}
         />
@@ -199,7 +203,7 @@ function CommandAndResults(): React.JSX.Element {
               e.target.value = ''
             }}
           >
-            <option value="">插入常用命令…</option>
+            <option value="">{t('panel.batch.insertSnippet')}</option>
             {commands.map((c) => (
               <option key={c.id} value={c.id}>
                 {c.name}
@@ -207,7 +211,7 @@ function CommandAndResults(): React.JSX.Element {
             ))}
           </select>
           <label className="flex items-center gap-1.5 text-2xs text-ink-3">
-            超时
+            {t('panel.batch.timeout')}
             <input
               className="input h-7 w-[64px] font-mono"
               value={String(timeoutMs)}
@@ -230,7 +234,7 @@ function CommandAndResults(): React.JSX.Element {
               className="btn h-7 px-2.5 text-2xs"
               onClick={() => useBatchStore.getState().clearResults()}
             >
-              清空结果
+              {t('panel.batch.clearResults')}
             </button>
           )}
           {running ? (
@@ -239,7 +243,7 @@ function CommandAndResults(): React.JSX.Element {
               onClick={() => void useBatchStore.getState().cancel()}
             >
               <X size={12} />
-              取消
+              {t('panel.batch.cancel')}
             </button>
           ) : (
             <button
@@ -248,7 +252,7 @@ function CommandAndResults(): React.JSX.Element {
               onClick={() => void useBatchStore.getState().start()}
             >
               <Boxes size={12} />
-              执行（{selectedCount} 台）
+              {t('panel.batch.runBtn', { count: selectedCount })}
             </button>
           )}
         </div>
@@ -256,7 +260,7 @@ function CommandAndResults(): React.JSX.Element {
 
       {runOrder.length > 0 && (
         <div className="flex shrink-0 items-center gap-2 border-b border-edge-soft px-3 py-1">
-          <span className="text-2xs text-ink-3">结果</span>
+          <span className="text-2xs text-ink-3">{t('panel.batch.results')}</span>
           <span className="flex-1" />
           <div className="flex items-center gap-0.5 rounded border border-edge bg-app p-0.5">
             <button
@@ -267,7 +271,7 @@ function CommandAndResults(): React.JSX.Element {
               onClick={() => useBatchStore.getState().setView('cards')}
             >
               <LayoutList size={11} />
-              卡片
+              {t('panel.batch.viewCards')}
             </button>
             <button
               className={cn(
@@ -277,7 +281,7 @@ function CommandAndResults(): React.JSX.Element {
               onClick={() => useBatchStore.getState().setView('columns')}
             >
               <Columns3 size={11} />
-              对比
+              {t('panel.batch.viewColumns')}
             </button>
           </div>
         </div>
@@ -287,8 +291,8 @@ function CommandAndResults(): React.JSX.Element {
         {runOrder.length === 0 ? (
           <EmptyState
             icon={<Boxes size={30} />}
-            title="准备就绪"
-            hint="在左侧勾选多台在线设备，输入一条命令并执行 —— 输出会按设备分别收集，可用「对比」视图并排查看"
+            title={t('panel.batch.emptyTitle')}
+            hint={t('panel.batch.emptyHint')}
           />
         ) : view === 'cards' ? (
           <div className="space-y-2">
@@ -332,24 +336,25 @@ function BatchStatusIcon({ status }: { status: BatchStatus | undefined }): React
   }
 }
 
-function statusText(status: BatchStatus | undefined): string {
+function statusKey(status: BatchStatus | undefined): I18nKey {
   switch (status) {
     case 'running':
-      return '执行中'
+      return 'panel.batch.statusRunning'
     case 'done':
-      return '完成'
+      return 'panel.batch.statusDone'
     case 'error':
-      return '失败'
+      return 'panel.batch.statusError'
     case 'timeout':
-      return '超时'
+      return 'panel.batch.statusTimeout'
     case 'cancelled':
-      return '已取消'
+      return 'panel.batch.statusCancelled'
     default:
-      return '等待'
+      return 'panel.batch.statusPending'
   }
 }
 
 function BatchResultCard({ sessionId }: { sessionId: string }): React.JSX.Element {
+  const { t } = useI18n()
   const result = useBatchStore((s) => s.results[sessionId])
   const status = useBatchStore((s) => s.statuses[sessionId])
   const session = useSessionStore((s) => s.sessions.find((x) => x.id === sessionId))
@@ -362,7 +367,12 @@ function BatchResultCard({ sessionId }: { sessionId: string }): React.JSX.Elemen
   const copyOutput = (): void => {
     const text = result ? (result.stdout || result.stderr || result.error || '') : ''
     void call(window.api.clip.write(text), { silent: true }).then((ok) => {
-      if (ok !== null) useToastStore.getState().push({ kind: 'success', title: `已复制「${title}」输出` })
+      if (ok !== null) {
+        useToastStore.getState().push({
+          kind: 'success',
+          title: t('panel.batch.copiedOutput', { title })
+        })
+      }
     })
   }
 
@@ -384,12 +394,12 @@ function BatchResultCard({ sessionId }: { sessionId: string }): React.JSX.Elemen
         </span>
         <span className="flex-1" />
         <span className="font-mono text-3xs text-ink-3">
-          {statusText(status)}
+          {t(statusKey(status))}
           {result ? ` · ${result.durationMs}ms · exit ${result.exitCode ?? '-'}` : ''}
         </span>
         <button
           className="btn-icon h-5 w-5"
-          title="复制输出"
+          title={t('panel.batch.copyOutput')}
           onClick={(e) => {
             e.stopPropagation()
             copyOutput()
@@ -404,7 +414,7 @@ function BatchResultCard({ sessionId }: { sessionId: string }): React.JSX.Elemen
             {result
               ? result.stdout.trim() === ''
                 ? result.stderr.trim() === ''
-                  ? '（无输出）'
+                  ? t('panel.batch.noOutput')
                   : ''
                 : result.stdout
               : ''}
@@ -426,6 +436,7 @@ function BatchResultCard({ sessionId }: { sessionId: string }): React.JSX.Elemen
 }
 
 function BatchColumn({ sessionId }: { sessionId: string }): React.JSX.Element {
+  const { t } = useI18n()
   const result = useBatchStore((s) => s.results[sessionId])
   const status = useBatchStore((s) => s.statuses[sessionId])
   const session = useSessionStore((s) => s.sessions.find((x) => x.id === sessionId))
@@ -437,15 +448,15 @@ function BatchColumn({ sessionId }: { sessionId: string }): React.JSX.Element {
         <BatchStatusIcon status={status} />
         <span className="min-w-0 flex-1 truncate text-xs text-ink">{title}</span>
         <span className="shrink-0 font-mono text-3xs text-ink-3">
-          {result ? `exit ${result.exitCode ?? '-'}` : statusText(status)}
+          {result ? `exit ${result.exitCode ?? '-'}` : t(statusKey(status))}
         </span>
       </div>
       <pre className="scroll-thin max-h-[420px] min-h-[120px] flex-1 overflow-auto whitespace-pre-wrap break-words px-2.5 py-2 font-mono text-3xs leading-relaxed text-ink-2">
         {result
           ? result.stdout.trim() === ''
-            ? result.stderr.trim() || '（无输出）'
+            ? result.stderr.trim() || t('panel.batch.noOutput')
             : result.stdout
-          : '执行中…'}
+          : t('panel.batch.runningEllipsis')}
       </pre>
     </div>
   )

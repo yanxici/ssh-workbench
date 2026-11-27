@@ -13,6 +13,7 @@ import {
   X
 } from 'lucide-react'
 import { cn, formatBytes } from '@/lib/utils'
+import { useI18n } from '@/i18n'
 import { useOverlayEscape } from '@/lib/overlayKeys'
 import { ConfirmDialog } from '@/components/ui'
 import { expandFilePlaceholder, shellQuotePath, useFirmwareStore } from '@/stores/firmwareStore'
@@ -24,6 +25,7 @@ import { useSshSessions } from '@/stores/sessionStore'
  * 每一步都有明确的状态与产物，升级命令完全可编辑（兼容各家厂商脚本）。
  */
 export function FirmwarePanel(): React.JSX.Element | null {
+  const { t } = useI18n()
   const panelOpen = useFirmwareStore((s) => s.panelOpen)
 
   const close = (): void => useFirmwareStore.setState({ panelOpen: false })
@@ -35,12 +37,10 @@ export function FirmwarePanel(): React.JSX.Element | null {
     <div className="panel-shell fixed inset-x-0 z-30 flex flex-col bg-app">
       <div className="flex h-9 shrink-0 items-center gap-2 border-b border-edge bg-panel px-3">
         <Rocket size={14} className="text-accent" />
-        <span className="text-xs font-semibold">固件升级助手</span>
-        <span className="text-2xs text-ink-3">
-          上传 → 校验（SHA256 双端比对）→ 升级（流式回显）→ 重启监控
-        </span>
+        <span className="text-xs font-semibold">{t('panel.firmware.title')}</span>
+        <span className="text-2xs text-ink-3">{t('panel.firmware.subtitle')}</span>
         <span className="flex-1" />
-        <button className="btn-icon" title="关闭 (Esc)" onClick={close}>
+        <button className="btn-icon" title={t('panel.firmware.closeEsc')} onClick={close}>
           <X size={14} />
         </button>
       </div>
@@ -109,6 +109,7 @@ function StepCard({
  * ------------------------------------------------------------------ */
 
 function TargetBar(): React.JSX.Element {
+  const { t } = useI18n()
   // 固件升级靠 SFTP 传包 + 远端命令，串口会话在这里选了也只会报「仅支持 SSH」
   const sessions = useSshSessions()
   const sessionId = useFirmwareStore((s) => s.sessionId)
@@ -116,25 +117,25 @@ function TargetBar(): React.JSX.Element {
 
   return (
     <div className="flex items-center gap-2 rounded-lg border border-edge-soft bg-panel px-3 py-2">
-      <span className="text-2xs text-ink-3">目标设备</span>
+      <span className="text-2xs text-ink-3">{t('panel.firmware.targetDevice')}</span>
       <select
         className="input h-7 w-[280px]"
         value={sessionId ?? ''}
         onChange={(e) => useFirmwareStore.getState().setSessionId(e.target.value)}
       >
-        <option value="">选择一台在线设备…</option>
+        <option value="">{t('panel.firmware.selectDevice')}</option>
         {connected.map((s) => (
           <option key={s.id} value={s.id}>
-            {s.title}（{s.target}）
+            {t('panel.firmware.sessionOption', { title: s.title, target: s.target })}
           </option>
         ))}
       </select>
       {connected.length === 0 && (
-        <span className="text-2xs text-warning">没有在线会话，请先在左侧连接设备</span>
+        <span className="text-2xs text-warning">{t('panel.firmware.noOnlineSession')}</span>
       )}
       <span className="flex-1" />
       <span className="text-3xs leading-relaxed text-ink-3">
-        提示：升级前建议先用「一键诊断」留一份体检报告
+        {t('panel.firmware.diagTip')}
       </span>
     </div>
   )
@@ -145,13 +146,14 @@ function TargetBar(): React.JSX.Element {
  * ------------------------------------------------------------------ */
 
 function StepSelectFile(): React.JSX.Element {
+  const { t } = useI18n()
   const file = useFirmwareStore((s) => s.file)
   return (
-    <StepCard index={1} title="选择固件文件" status={file ? 'done' : 'todo'}>
+    <StepCard index={1} title={t('panel.firmware.step1Title')} status={file ? 'done' : 'todo'}>
       <div className="flex flex-wrap items-center gap-2">
         <button className="btn h-7 px-3 text-xs" onClick={() => void useFirmwareStore.getState().pickFile()}>
           <FileUp size={12} />
-          {file ? '重新选择' : '浏览本地文件…'}
+          {file ? t('panel.firmware.reselect') : t('panel.firmware.browseFile')}
         </button>
         {file && (
           <span className="min-w-0 text-xs text-ink-2">
@@ -171,6 +173,7 @@ function StepSelectFile(): React.JSX.Element {
  * ------------------------------------------------------------------ */
 
 function StepUpload(): React.JSX.Element {
+  const { t } = useI18n()
   const file = useFirmwareStore((s) => s.file)
   const remoteDir = useFirmwareStore((s) => s.remoteDir)
   const uploadTaskId = useFirmwareStore((s) => s.uploadTaskId)
@@ -191,12 +194,12 @@ function StepUpload(): React.JSX.Element {
   return (
     <StepCard
       index={2}
-      title="上传到设备"
-      hint="大文件会走 SFTP 队列，可看到实时进度"
+      title={t('panel.firmware.step2Title')}
+      hint={t('panel.firmware.step2Hint')}
       status={uploadedPath ? 'done' : uploading || (task && task.status === 'running') ? 'doing' : 'todo'}
     >
       <div className="flex items-center gap-2">
-        <span className="shrink-0 text-2xs text-ink-3">上传目录</span>
+        <span className="shrink-0 text-2xs text-ink-3">{t('panel.firmware.uploadDir')}</span>
         <input
           className="input h-7 w-[220px] font-mono"
           value={remoteDir}
@@ -209,11 +212,11 @@ function StepUpload(): React.JSX.Element {
           onClick={() => void useFirmwareStore.getState().startUpload()}
         >
           <FileUp size={12} />
-          开始上传
+          {t('panel.firmware.startUpload')}
         </button>
         {uploadedPath && (
           <span className="min-w-0 flex-1 truncate font-mono text-2xs text-success">
-            已上传：{uploadedPath}
+            {t('panel.firmware.uploadedAt', { path: uploadedPath })}
           </span>
         )}
       </div>
@@ -229,7 +232,9 @@ function StepUpload(): React.JSX.Element {
         </div>
       )}
       {task?.status === 'error' && (
-        <div className="mt-2 text-2xs text-danger">上传失败：{task.error}</div>
+        <div className="mt-2 text-2xs text-danger">
+          {t('panel.firmware.uploadFailed', { error: task.error ?? '' })}
+        </div>
       )}
     </StepCard>
   )
@@ -240,6 +245,7 @@ function StepUpload(): React.JSX.Element {
  * ------------------------------------------------------------------ */
 
 function StepVerify(): React.JSX.Element {
+  const { t } = useI18n()
   const uploadedPath = useFirmwareStore((s) => s.uploadedPath)
   const verifying = useFirmwareStore((s) => s.verifying)
   const verify = useFirmwareStore((s) => s.verify)
@@ -247,8 +253,8 @@ function StepVerify(): React.JSX.Element {
   return (
     <StepCard
       index={3}
-      title="校验固件完整性"
-      hint="本机 SHA256 与设备端 sha256sum/md5sum 双端比对"
+      title={t('panel.firmware.step3Title')}
+      hint={t('panel.firmware.step3Hint')}
       status={verify ? (verify.match ? 'done' : 'warn') : verifying ? 'doing' : 'todo'}
     >
       <div className="flex items-center gap-2">
@@ -258,21 +264,25 @@ function StepVerify(): React.JSX.Element {
           onClick={() => void useFirmwareStore.getState().startVerify()}
         >
           <ShieldCheck size={12} />
-          开始校验
+          {t('panel.firmware.startVerify')}
         </button>
-        {!uploadedPath && <span className="text-2xs text-ink-3">请先完成上传</span>}
+        {!uploadedPath && (
+          <span className="text-2xs text-ink-3">{t('panel.firmware.uploadFirst')}</span>
+        )}
       </div>
 
       {verify && (
         <div className="mt-2 space-y-1 font-mono text-3xs leading-relaxed">
           <div className="text-ink-3">
-            本机（{verify.algo}）：<span className="text-ink-2">{verify.localHash}</span>
+            {t('panel.firmware.localHash', { algo: verify.algo })}
+            <span className="text-ink-2">{verify.localHash}</span>
           </div>
           <div className="text-ink-3">
-            设备（{verify.algo}）：<span className="text-ink-2">{verify.remoteHash}</span>
+            {t('panel.firmware.remoteHash', { algo: verify.algo })}
+            <span className="text-ink-2">{verify.remoteHash}</span>
           </div>
           <div className={verify.match ? 'text-success' : 'text-danger'}>
-            {verify.match ? '✓ 一致，固件完整无损坏' : '✗ 不一致！请勿升级，建议重新上传后再次校验'}
+            {verify.match ? t('panel.firmware.verifyMatch') : t('panel.firmware.verifyMismatch')}
           </div>
         </div>
       )}
@@ -285,6 +295,7 @@ function StepVerify(): React.JSX.Element {
  * ------------------------------------------------------------------ */
 
 function StepUpgrade(): React.JSX.Element {
+  const { t } = useI18n()
   const uploadedPath = useFirmwareStore((s) => s.uploadedPath)
   const command = useFirmwareStore((s) => s.upgradeCommand)
   const timeoutMs = useFirmwareStore((s) => s.upgradeTimeoutMs)
@@ -296,13 +307,13 @@ function StepUpgrade(): React.JSX.Element {
   return (
     <StepCard
       index={4}
-      title="执行升级命令"
-      hint="命令完全可编辑，兼容各家升级脚本"
+      title={t('panel.firmware.step4Title')}
+      hint={t('panel.firmware.step4Hint')}
       status={result ? (result.status === 'done' && result.exitCode === 0 ? 'done' : 'warn') : upgrading ? 'doing' : 'todo'}
     >
       <textarea
         className="textarea selectable min-h-[56px] font-mono text-2xs leading-relaxed"
-        placeholder="例如：sysupgrade -n {{file}} / fwupdate {{file}} / swupdate -i {{file}}"
+        placeholder={t('panel.firmware.cmdPlaceholder')}
         value={command}
         onChange={(e) => useFirmwareStore.getState().setUpgradeCommand(e.target.value)}
       />
@@ -318,7 +329,7 @@ function StepUpgrade(): React.JSX.Element {
               .setUpgradeCommand(base ? `${base} ${shellQuotePath(uploadedPath)}` : shellQuotePath(uploadedPath))
           }}
         >
-          插入文件路径
+          {t('panel.firmware.insertFilePath')}
         </button>
         <button
           className="btn h-6 px-2 text-2xs"
@@ -328,7 +339,7 @@ function StepUpgrade(): React.JSX.Element {
             useFirmwareStore.getState().setUpgradeCommand(`sysupgrade -n ${shellQuotePath(uploadedPath)}`)
           }
         >
-          模板：sysupgrade -n
+          {t('panel.firmware.tplSysupgrade')}
         </button>
         <button
           className="btn h-6 px-2 text-2xs"
@@ -337,13 +348,13 @@ function StepUpgrade(): React.JSX.Element {
             uploadedPath && useFirmwareStore.getState().setUpgradeCommand(`fwupdate ${shellQuotePath(uploadedPath)}`)
           }
         >
-          模板：fwupdate
+          {t('panel.firmware.tplFwupdate')}
         </button>
 
         <span className="flex-1" />
         <label className="flex items-center gap-1 text-2xs text-ink-3">
           <Timer size={11} />
-          超时
+          {t('panel.firmware.timeout')}
           <input
             className="input h-6 w-[70px] font-mono"
             value={String(Math.round(timeoutMs / 1000))}
@@ -353,12 +364,12 @@ function StepUpgrade(): React.JSX.Element {
                 .setUpgradeTimeoutMs(Number(e.target.value.replace(/[^\d]/g, '')) * 1000 || 0)
             }
           />
-          秒
+          {t('panel.firmware.seconds')}
         </label>
         {upgrading ? (
           <button className="btn h-7 px-3 text-xs" onClick={() => void useFirmwareStore.getState().cancelUpgrade()}>
             <X size={12} />
-            取消
+            {t('panel.firmware.cancel')}
           </button>
         ) : (
           <button
@@ -367,14 +378,14 @@ function StepUpgrade(): React.JSX.Element {
             onClick={() => setConfirming(true)}
           >
             <Play size={12} />
-            执行升级
+            {t('panel.firmware.runUpgrade')}
           </button>
         )}
       </div>
 
       {(log || upgrading) && (
         <pre className="scroll-thin mt-2 max-h-[280px] overflow-auto whitespace-pre-wrap break-words rounded-md border border-edge bg-app px-2.5 py-2 font-mono text-3xs leading-relaxed text-ink-2">
-          {log || '等待输出…'}
+          {log || t('panel.firmware.waitingOutput')}
         </pre>
       )}
 
@@ -385,14 +396,21 @@ function StepUpgrade(): React.JSX.Element {
             result.status === 'done' && result.exitCode === 0 ? 'text-success' : 'text-warning'
           )}
         >
-          {result.status === 'done' && result.exitCode === 0 && '升级命令执行成功（退出码 0）'}
-          {result.status === 'done' && result.exitCode !== 0 && result.exitCode !== null &&
-            `命令结束，退出码 ${result.exitCode}，请核对上方输出`}
-          {result.exitCode === null && result.status === 'done' &&
-            '连接已中断 —— 升级脚本可能已触发重启，属正常现象'}
-          {result.status === 'timeout' && `执行超时（${Math.round(result.durationMs / 1000)}s）`}
-          {result.status === 'cancelled' && '已取消'}
-          {result.status === 'error' && `执行失败：${result.error ?? '未知原因'}`}
+          {result.status === 'done' && result.exitCode === 0 && t('panel.firmware.upgradeOk')}
+          {result.status === 'done' &&
+            result.exitCode !== 0 &&
+            result.exitCode !== null &&
+            t('panel.firmware.upgradeExit', { code: result.exitCode })}
+          {result.exitCode === null &&
+            result.status === 'done' &&
+            t('panel.firmware.upgradeDisconnected')}
+          {result.status === 'timeout' &&
+            t('panel.firmware.upgradeTimeout', { seconds: Math.round(result.durationMs / 1000) })}
+          {result.status === 'cancelled' && t('panel.firmware.upgradeCancelled')}
+          {result.status === 'error' &&
+            t('panel.firmware.upgradeError', {
+              error: result.error ?? t('panel.firmware.unknownReason')
+            })}
           {result.error && result.status === 'done' && result.exitCode !== 0 && (
             <div className="mt-0.5 font-mono text-3xs text-ink-3">{result.error}</div>
           )}
@@ -401,13 +419,13 @@ function StepUpgrade(): React.JSX.Element {
 
       <ConfirmDialog
         open={confirming}
-        title="执行固件升级"
+        title={t('panel.firmware.confirmUpgradeTitle')}
         danger
-        confirmText="执行升级"
+        confirmText={t('panel.firmware.confirmUpgradeBtn')}
         message={
           <>
-            将在设备上执行：
-            <div className="mt-2 selectable break-all rounded border border-edge bg-app px-2 py-1.5 font-mono text-2xs text-ink-2">
+            {t('panel.firmware.confirmWillRun')}
+            <div className="mt-2 selectable break-all rounded-sm border border-edge bg-app px-2 py-1.5 font-mono text-2xs text-ink-2">
               {/*
                * 必须展示真正要执行的命令：占位符没展开时，用户确认的是一句带
                * {{file}} 的假命令
@@ -415,7 +433,7 @@ function StepUpgrade(): React.JSX.Element {
               {expandFilePlaceholder(command, uploadedPath)}
             </div>
             <div className="mt-2 text-2xs text-danger">
-              升级过程中请勿断电断网，否则设备可能无法启动。
+              {t('panel.firmware.confirmDangerHint')}
             </div>
           </>
         }
@@ -434,6 +452,7 @@ function StepUpgrade(): React.JSX.Element {
  * ------------------------------------------------------------------ */
 
 function StepReboot(): React.JSX.Element {
+  const { t } = useI18n()
   const rebootCommand = useFirmwareStore((s) => s.rebootCommand)
   const rebooting = useFirmwareStore((s) => s.rebooting)
   const waitPort = useFirmwareStore((s) => s.waitPort)
@@ -448,8 +467,8 @@ function StepReboot(): React.JSX.Element {
   return (
     <StepCard
       index={5}
-      title="重启并监控启动"
-      hint="TCP 探针等待设备回来，再抓取启动日志"
+      title={t('panel.firmware.step5Title')}
+      hint={t('panel.firmware.step5Hint')}
       status={bootLog ? 'done' : wait.online ? 'doing' : 'todo'}
     >
       <div className="flex flex-wrap items-center gap-2">
@@ -464,12 +483,12 @@ function StepReboot(): React.JSX.Element {
           onClick={() => setConfirming(true)}
         >
           <RotateCcw size={12} />
-          重启设备
+          {t('panel.firmware.rebootBtn')}
         </button>
 
         <span className="mx-1 h-4 w-px bg-edge-soft" />
 
-        <span className="text-2xs text-ink-3">等待上线端口</span>
+        <span className="text-2xs text-ink-3">{t('panel.firmware.waitPort')}</span>
         <input
           className="input h-7 w-[64px] font-mono"
           value={String(waitPort)}
@@ -479,17 +498,20 @@ function StepReboot(): React.JSX.Element {
         />
         {wait.waiting ? (
           <button className="btn h-7 px-3 text-xs" onClick={() => useFirmwareStore.getState().stopWaitOnline()}>
-            停止等待（已尝试 {wait.attempts} 次）
+            {t('panel.firmware.stopWait', { attempts: wait.attempts })}
           </button>
         ) : (
           <button className="btn h-7 px-3 text-xs" onClick={() => void useFirmwareStore.getState().startWaitOnline()}>
             <Timer size={12} />
-            开始等待上线
+            {t('panel.firmware.startWait')}
           </button>
         )}
         {wait.online && (
           <span className="text-2xs text-success">
-            设备已上线{wait.lastLatency !== undefined ? `（${wait.lastLatency}ms）` : ''}
+            {t('panel.firmware.online')}
+            {wait.lastLatency !== undefined
+              ? t('panel.firmware.onlineLatency', { ms: wait.lastLatency })
+              : ''}
           </span>
         )}
 
@@ -497,17 +519,19 @@ function StepReboot(): React.JSX.Element {
         <button
           className="btn h-7 px-3 text-xs"
           disabled={bootLoading}
-          title={hasOnline ? '在当前活动会话上抓取 dmesg' : '需要先重新连接设备'}
+          title={
+            hasOnline ? t('panel.firmware.fetchBootOnline') : t('panel.firmware.fetchBootOffline')
+          }
           onClick={() => void useFirmwareStore.getState().fetchBootLog()}
         >
           {bootLoading ? <Loader2 size={12} className="animate-spin" /> : <ShieldCheck size={12} />}
-          抓取启动日志
+          {t('panel.firmware.fetchBootBtn')}
         </button>
       </div>
 
       {!hasOnline && (
         <div className="mt-2 text-2xs leading-relaxed text-ink-3">
-          设备重启后原连接会断开：请双击左侧连接重新建立会话，再点「抓取启动日志」确认这次升级是否干净启动。
+          {t('panel.firmware.reconnectHint')}
         </div>
       )}
 
@@ -519,14 +543,14 @@ function StepReboot(): React.JSX.Element {
 
       <ConfirmDialog
         open={confirming}
-        title="重启设备"
+        title={t('panel.firmware.confirmRebootTitle')}
         danger
-        confirmText="执行重启"
+        confirmText={t('panel.firmware.confirmRebootBtn')}
         message={
           <>
-            将在设备上执行：
+            {t('panel.firmware.confirmWillRun')}
             <span className="ml-1 font-mono text-2xs text-ink-2">{rebootCommand || 'reboot'}</span>
-            <div className="mt-2 text-2xs text-ink-3">当前连接会立即断开，属正常现象。</div>
+            <div className="mt-2 text-2xs text-ink-3">{t('panel.firmware.confirmRebootHint')}</div>
           </>
         }
         onCancel={() => setConfirming(false)}

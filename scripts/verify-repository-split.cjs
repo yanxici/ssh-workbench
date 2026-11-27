@@ -187,7 +187,7 @@ async function main() {
   check('有 dangerPatterns 默认清单', Array.isArray(s0.dangerPatterns) && s0.dangerPatterns.includes('rm -rf'))
 
   const s1 = await repo.updateSettings({ terminal: { fontSize: 16 } })
-  check('部分 patch 保留 terminal 其它字段', s1.terminal.fontSize === 16 && s1.terminal.scrollback === 5000, s1.terminal)
+  check('部分 patch 保留 terminal 其它字段', s1.terminal.fontSize === 16 && s1.terminal.scrollback === 3000, s1.terminal)
   check('未 patch 的设置保持不变', s1.theme === 'light')
 
   /* ---------------- 巡检项 ---------------- */

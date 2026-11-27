@@ -2,8 +2,12 @@ import { create } from 'zustand'
 import type { Connection, ConnectionInput } from '@shared/types'
 import { call } from '@/lib/ipc'
 import { fuzzyMatch } from '@/lib/fuzzy'
+import { tNow } from '@/i18n/core'
 import { useSettingsStore } from './settingsStore'
 import { useToastStore } from './toastStore'
+
+/** 未分组连接的内部数据分组名（与主进程/JSON 存储一致，不随界面语言改变） */
+const DEFAULT_GROUP = '\u9ed8\u8ba4'
 
 /**
  * 连接分组的两套来源：
@@ -86,7 +90,9 @@ export const useConnectionStore = create<ConnectionState>()((set, get) => ({
   },
 
   save: async (input) => {
-    const saved = await call(window.api.conn.save(input), { errorTitle: '保存连接失败' })
+    const saved = await call(window.api.conn.save(input), {
+      errorTitle: tNow('conn.ui.store.saveFailed')
+    })
     if (saved) {
       set((s) => {
         const idx = s.connections.findIndex((c) => c.id === saved.id)
@@ -96,7 +102,7 @@ export const useConnectionStore = create<ConnectionState>()((set, get) => ({
         return { connections: next }
       })
       // 保存到新分组名时，把它登记进分组表，否则空分组一刷新就消失
-      const g = (saved.group || '默认').trim()
+      const g = (saved.group || DEFAULT_GROUP).trim()
       if (g && !savedGroups().includes(g) && !savedOrder().includes(g)) {
         await useSettingsStore.getState().update({ connectionGroups: [...savedGroups(), g] })
       }
@@ -113,7 +119,9 @@ export const useConnectionStore = create<ConnectionState>()((set, get) => ({
 
   removeMany: async (ids) => {
     if (ids.length === 0) return 0
-    const n = await call(window.api.conn.removeMany(ids), { errorTitle: '批量删除失败' })
+    const n = await call(window.api.conn.removeMany(ids), {
+      errorTitle: tNow('conn.ui.store.removeManyFailed')
+    })
     if (n === null) return 0
     const gone = new Set(ids)
     set((s) => ({ connections: s.connections.filter((c) => !gone.has(c.id)) }))
@@ -123,7 +131,7 @@ export const useConnectionStore = create<ConnectionState>()((set, get) => ({
   updateTags: async (ids, tags, mode = 'add') => {
     if (ids.length === 0) return 0
     const n = await call(window.api.conn.updateTags(ids, tags, mode), {
-      errorTitle: '批量改标签失败'
+      errorTitle: tNow('conn.ui.store.updateTagsFailed')
     })
     if (n === null) return 0
     /*
@@ -177,9 +185,14 @@ export const useConnectionStore = create<ConnectionState>()((set, get) => ({
     const g = name.trim()
     if (!g) return false
     const exists =
-      get().connections.some((c) => (c.group || '默认') === g) || savedGroups().includes(g)
+      get().connections.some((c) => (c.group || DEFAULT_GROUP) === g) || savedGroups().includes(g)
     if (exists) {
-      useToastStore.getState().push({ kind: 'warning', title: `分组「${g}」已存在` })
+      useToastStore.getState().push({
+        kind: 'warning',
+        title: tNow('conn.ui.store.groupExists', {
+          group: g === DEFAULT_GROUP ? tNow('conn.ui.defaultGroup') : g
+        })
+      })
       return false
     }
     await useSettingsStore.getState().update({ connectionGroups: [...savedGroups(), g] })
@@ -191,16 +204,21 @@ export const useConnectionStore = create<ConnectionState>()((set, get) => ({
     if (!g || g === oldName) return false
     // 目标名已被占用：拒绝并提示，避免两组合并成一组这种意外
     const clash =
-      get().connections.some((c) => (c.group || '默认') === g) ||
+      get().connections.some((c) => (c.group || DEFAULT_GROUP) === g) ||
       savedGroups().includes(g)
     if (clash) {
-      useToastStore.getState().push({ kind: 'warning', title: `分组「${g}」已存在` })
+      useToastStore.getState().push({
+        kind: 'warning',
+        title: tNow('conn.ui.store.groupExists', {
+          group: g === DEFAULT_GROUP ? tNow('conn.ui.defaultGroup') : g
+        })
+      })
       return false
     }
 
     // 主进程一次读改写完成，避免逐条保存
     const moved = await call(window.api.conn.renameGroup(oldName, g), {
-      errorTitle: '重命名分组失败'
+      errorTitle: tNow('conn.ui.store.renameGroupFailed')
     })
     if (moved === null) return false
 
@@ -247,7 +265,7 @@ export const useConnectionStore = create<ConnectionState>()((set, get) => ({
 
   deleteGroup: async (group) => {
     const removed = await call(window.api.conn.deleteGroup(group), {
-      errorTitle: '删除分组失败'
+      errorTitle: tNow('conn.ui.store.deleteGroupFailed')
     })
     if (removed === null) return null
     if (savedGroups().includes(group)) {
@@ -276,7 +294,7 @@ export const useConnectionStore = create<ConnectionState>()((set, get) => ({
     const targets = get().connections.filter((c) => ids.includes(c.id))
     let moved = 0
     for (const c of targets) {
-      if ((c.group || '默认') === g) continue
+      if ((c.group || DEFAULT_GROUP) === g) continue
       const saved = await call(
         window.api.conn.save({
           id: c.id,
@@ -301,7 +319,7 @@ export const useConnectionStore = create<ConnectionState>()((set, get) => ({
           serial: c.serial,
           legacyAlgorithms: c.legacyAlgorithms
         }),
-        { errorTitle: '移动分组失败' }
+        { errorTitle: tNow('conn.ui.store.moveGroupFailed') }
       )
       if (saved) moved++
     }
@@ -397,7 +415,7 @@ export function scoreConnection(c: Connection, kw: string): number {
     if (tagScore > 0) best = Math.max(best, tagScore + FIELD_WEIGHT.tag)
   }
 
-  const groupScore = matchFree(c.group || '默认')
+  const groupScore = matchFree(c.group || DEFAULT_GROUP)
   if (groupScore > 0) best = Math.max(best, groupScore + FIELD_WEIGHT.group)
 
   return best
@@ -423,7 +441,7 @@ export function groupConnections(
   const kw = keyword.trim()
   // 聚焦某组时先按组裁剪，再做关键字匹配 —— 两者的交集才是用户要的
   const scoped = onlyGroup
-    ? connections.filter((c) => (c.group || '默认') === onlyGroup)
+    ? connections.filter((c) => (c.group || DEFAULT_GROUP) === onlyGroup)
     : connections
   let filtered: Connection[]
   /** 搜索态下的相关度表，用于组内排序 */
@@ -444,7 +462,7 @@ export function groupConnections(
 
   const map = new Map<string, Connection[]>()
   for (const c of filtered) {
-    const key = c.group || '默认'
+    const key = c.group || DEFAULT_GROUP
     const list = map.get(key)
     if (list) list.push(c)
     else map.set(key, [c])

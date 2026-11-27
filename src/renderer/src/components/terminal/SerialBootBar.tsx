@@ -20,6 +20,7 @@ import { useToastStore } from '@/stores/toastStore'
 import { isImeComposing } from '@/lib/ime'
 import { call } from '@/lib/ipc'
 import { cn, formatBytes } from '@/lib/utils'
+import { useI18n } from '@/i18n'
 
 /**
  * 串口会话顶部的刷机引导条。
@@ -58,6 +59,7 @@ interface Props {
 }
 
 export function SerialBootBar({ session }: Props): React.JSX.Element {
+  const { t } = useI18n()
   const [open, setOpen] = useState(false)
   const [autoKey, setAutoKey] = useState(false)
   const [phase, setPhase] = useState<'idle' | 'wait' | 'burst'>('idle')
@@ -104,12 +106,16 @@ export function SerialBootBar({ session }: Props): React.JSX.Element {
   const send = useCallback(
     (text: string): void => {
       if (!connected) {
-        push({ kind: 'error', title: '串口未连接', detail: '等串口连上再发送' })
+        push({
+          kind: 'error',
+          title: t('term.serial.notConnected'),
+          detail: t('term.serial.waitConnectSend')
+        })
         return
       }
       void window.api.session.write(session.id, text)
     },
-    [connected, push, session.id]
+    [connected, push, session.id, t]
   )
 
   const stopAutoKey = useCallback((): void => {
@@ -177,28 +183,40 @@ export function SerialBootBar({ session }: Props): React.JSX.Element {
    */
   const applyBaud = useCallback(async (): Promise<void> => {
     if (!connected) {
-      push({ kind: 'error', title: '串口未连接', detail: '等串口连上再切换波特率' })
+      push({
+        kind: 'error',
+        title: t('term.serial.notConnected'),
+        detail: t('term.serial.waitConnectBaud')
+      })
       return
     }
     const next = Number(baud)
     if (!Number.isInteger(next) || next <= 0) {
-      push({ kind: 'error', title: '波特率不合法', detail: '请输入正整数，例如 115200' })
+      push({
+        kind: 'error',
+        title: t('term.serial.invalidBaud'),
+        detail: t('term.serial.invalidBaudHint')
+      })
       return
     }
     if (next === sessionBaud) return
     setPacing(true)
     try {
       const applied = await call(window.api.session.setBaud(session.id, next), {
-        errorTitle: '切换波特率失败'
+        errorTitle: t('term.serial.setBaudFailed')
       })
       if (applied === null) return
       setBaud(String(applied))
       applySerialBaud(session.id, applied)
-      push({ kind: 'success', title: `已切到 ${applied}`, detail: '端口没有重开，输出不会中断' })
+      push({
+        kind: 'success',
+        title: t('term.serial.baudApplied', { baud: applied }),
+        detail: t('term.serial.baudAppliedDetail')
+      })
     } finally {
       setPacing(false)
     }
-  }, [applySerialBaud, baud, connected, push, session.id, sessionBaud])
+  }, [applySerialBaud, baud, connected, push, session.id, sessionBaud, t])
 
   /**
    * 发 BREAK。
@@ -209,17 +227,23 @@ export function SerialBootBar({ session }: Props): React.JSX.Element {
    */
   const fireBreak = useCallback(async (): Promise<void> => {
     if (!connected) {
-      push({ kind: 'error', title: '串口未连接', detail: '等串口连上再发 BREAK' })
+      push({
+        kind: 'error',
+        title: t('term.serial.notConnected'),
+        detail: t('term.serial.waitConnectBreak')
+      })
       return
     }
-    await call(window.api.session.break(session.id), { errorTitle: '发送 BREAK 失败' })
-  }, [connected, push, session.id])
+    await call(window.api.session.break(session.id), { errorTitle: t('term.serial.breakFailed') })
+  }, [connected, push, session.id, t])
 
   const pickFirmware = useCallback(async (): Promise<void> => {
-    const picked = await call(window.api.firmware.pickFile(), { errorTitle: '选择固件失败' })
+    const picked = await call(window.api.firmware.pickFile(), {
+      errorTitle: t('term.serial.pickFirmwareFailed')
+    })
     if (!picked || picked.canceled || !picked.file) return
     setFirmware(picked.file)
-  }, [])
+  }, [t])
 
   const toggleServer = useCallback(async (): Promise<void> => {
     if (server?.running) {
@@ -227,25 +251,31 @@ export function SerialBootBar({ session }: Props): React.JSX.Element {
       return
     }
     if (!firmware) {
-      push({ kind: 'error', title: '先选固件', detail: 'TFTP 只对外提供一个文件' })
+      push({
+        kind: 'error',
+        title: t('term.serial.pickFirmwareFirst'),
+        detail: t('term.serial.tftpSingleFile')
+      })
       return
     }
     await startServer(firmware.path)
-  }, [firmware, push, server?.running, startServer, stopServer])
+  }, [firmware, push, server?.running, startServer, stopServer, t])
 
-  const ipHint = server?.addresses?.[0] ?? '未检测到可用网卡'
+  const ipHint = server?.addresses?.[0] ?? t('term.serial.noNic')
 
   return (
     <div className="shrink-0 border-b border-edge bg-panel/60">
-      {/* 折叠头：一行说清"这条是干什么的" + 当前波特率 */}
+      {
+        /* 折叠头：一行说清"这条是干什么的" + 当前波特率 */
+      }
       <button
         className="flex h-7 w-full items-center gap-1.5 px-3 text-left text-2xs text-ink-3 hover:text-ink-2"
         onClick={() => setOpen((v) => !v)}
       >
         {open ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
         <Usb size={11} />
-        <span className="text-ink-2">串口刷机引导</span>
-        <span className="text-ink-3">U-Boot · 上电 2 秒内按 2 进命令行</span>
+        <span className="text-ink-2">{t('term.serial.barTitle')}</span>
+        <span className="text-ink-3">{t('term.serial.barSub')}</span>
         {sessionBaud !== undefined && (
           <span className="flex items-center gap-0.5 font-mono text-ink-3">
             <Gauge size={10} />
@@ -256,8 +286,8 @@ export function SerialBootBar({ session }: Props): React.JSX.Element {
           <span className="ml-auto flex items-center gap-1 text-accent">
             <Play size={10} />
             {phase === 'wait'
-              ? `${(Math.ceil(remaining / 100) / 10).toFixed(1)}s 后连发`
-              : '正在连发 2…'}
+              ? t('term.serial.waitBurst', { sec: (Math.ceil(remaining / 100) / 10).toFixed(1) })
+              : t('term.serial.bursting')}
           </span>
         )}
         {phase === 'idle' && server?.running && (
@@ -271,13 +301,13 @@ export function SerialBootBar({ session }: Props): React.JSX.Element {
       {open && (
         <div className="flex flex-col gap-2 px-3 pb-2.5">
           {/*
-            串口参数：与刷机三步分开，因为「设备不吐字」和「刷机」是两件事。
-            波特率错了的表现就是一片空白或满屏乱码 —— 这里能就地试另一个速率，
-            不用断开重连；BREAK 用来打断已经在自动启动的板子。
-          */}
+           * 串口参数：与刷机三步分开，因为「设备不吐字」和「刷机」是两件事。
+           * 波特率错了的表现就是一片空白或满屏乱码 —— 这里能就地试另一个速率，
+           * 不用断开重连；BREAK 用来打断已经在自动启动的板子。
+           */}
           <div className="flex flex-wrap items-center gap-1.5">
             <Gauge size={11} className="text-ink-3" />
-            <span className="text-2xs text-ink-2">波特率</span>
+            <span className="text-2xs text-ink-2">{t('term.serial.baudLabel')}</span>
             <input
               type="number"
               className="input h-6 w-20 px-1 text-center font-mono text-2xs"
@@ -291,7 +321,7 @@ export function SerialBootBar({ session }: Props): React.JSX.Element {
                 if (e.key === 'Enter') void applyBaud()
               }}
               disabled={!connected || pacing}
-              title="直接输入任意速率，回车或点「应用」生效"
+              title={t('term.serial.baudInputTitle')}
             />
             <select
               className="input h-6 px-1 text-2xs"
@@ -300,9 +330,9 @@ export function SerialBootBar({ session }: Props): React.JSX.Element {
                 if (e.target.value) setBaud(e.target.value)
               }}
               disabled={!connected || pacing}
-              title="常用档位，选中只填进左边的输入框，不会立刻切换"
+              title={t('term.serial.baudPresetTitle')}
             >
-              <option value="">档位…</option>
+              <option value="">{t('term.serial.baudPresetPlaceholder')}</option>
               {SERIAL_BAUD_PRESETS.map((v) => (
                 <option key={v} value={v}>
                   {v}
@@ -313,29 +343,30 @@ export function SerialBootBar({ session }: Props): React.JSX.Element {
               className="btn h-6 px-2 text-2xs"
               onClick={() => void applyBaud()}
               disabled={!connected || pacing || String(sessionBaud ?? '') === baud}
-              title="只改驱动里的速率，端口不重开，正在输出的数据不会中断"
+              title={t('term.serial.baudApplyTitle')}
             >
-              {pacing ? '切换中…' : '应用'}
+              {pacing ? t('term.serial.switching') : t('term.serial.apply')}
             </button>
             <button
               className="btn ml-2 h-6 px-2 text-2xs"
               onClick={() => void fireBreak()}
               disabled={!connected}
-              title="TX 拉低 250ms。打断自动启动、进维护模式用；不少 bootloader 只认 BREAK"
+              title={t('term.serial.breakTitle')}
             >
               <Zap size={10} />
               BREAK
             </button>
           </div>
           <div className="pl-5 text-3xs leading-relaxed text-ink-3">
-            波特率错了就是一片空白或满屏乱码 —— 这里就地切换，不重连、不丢输出。
-            切换只影响这次会话，不改连接配置里保存的值。
+            {t('term.serial.baudHelp')}
           </div>
 
-          {/* 第一步：进 U-Boot 命令行 */}
+          {
+            /* 第一步：进 U-Boot 命令行 */
+          }
           <div className="flex flex-wrap items-center gap-1.5">
             <span className="w-4 text-2xs text-ink-3">1</span>
-            <span className="text-2xs text-ink-2">重启板子，倒计时结束时自动发送</span>
+            <span className="text-2xs text-ink-2">{t('term.serial.step1Text')}</span>
             <code className="rounded bg-raised px-1 py-0.5 font-mono text-2xs text-accent">2</code>
             <label className="ml-1 flex items-center gap-1 text-2xs text-ink-3">
               <input
@@ -347,14 +378,16 @@ export function SerialBootBar({ session }: Props): React.JSX.Element {
                   if (!e.target.checked) stopAutoKey()
                 }}
               />
-              自动连发
+              {t('term.serial.autoBurst')}
             </label>
             {phase !== 'idle' ? (
               <button className="btn h-6 px-2 text-2xs" onClick={stopAutoKey}>
                 <Square size={10} />
                 {phase === 'wait'
-                  ? `取消（${(Math.ceil(remaining / 100) / 10).toFixed(1)}s 后开始连发）`
-                  : '停止连发'}
+                  ? t('term.serial.cancelWaitBurst', {
+                      sec: (Math.ceil(remaining / 100) / 10).toFixed(1)
+                    })
+                  : t('term.serial.stopBurst')}
               </button>
             ) : (
               <button
@@ -363,51 +396,57 @@ export function SerialBootBar({ session }: Props): React.JSX.Element {
                 disabled={!connected}
                 title={
                   autoKey
-                    ? `${AUTOKEY_DELAY_MS / 1000} 秒后开始连发 ${BURST_SHOTS} 个 2，给拨电源留时间`
-                    : '立即发送一个 2'
+                    ? t('term.serial.armBurstTitle', {
+                        sec: AUTOKEY_DELAY_MS / 1000,
+                        shots: BURST_SHOTS
+                      })
+                    : t('term.serial.send2Title')
                 }
               >
                 <Play size={10} />
-                {autoKey ? '倒计时后连发' : '立即发送 2'}
+                {autoKey ? t('term.serial.armBurstBtn') : t('term.serial.send2Btn')}
               </button>
             )}
           </div>
 
           <div className="pl-5 text-3xs leading-relaxed text-ink-3">
-            「连发」是为了对准时序：窗口只有 2 秒，发一次等于赌自己刚好卡在里面。
-            点完按钮再给板子断电上电，剩下的交给它。
+            {t('term.serial.step1Help')}
           </div>
 
-          {/* 第二步：Y（不带回车） */}
+          {
+            /* 第二步：Y（不带回车） */
+          }
           <div className="flex flex-wrap items-center gap-1.5">
             <span className="w-4 text-2xs text-ink-3">2</span>
-            <span className="text-2xs text-ink-2">看到 tftpboot 提示后输入</span>
+            <span className="text-2xs text-ink-2">{t('term.serial.step2Text')}</span>
             <code className="rounded bg-raised px-1 py-0.5 font-mono text-2xs text-accent">Y</code>
-            <span className="text-2xs text-ink-3">不带回车</span>
+            <span className="text-2xs text-ink-3">{t('term.serial.noEnter')}</span>
             <button
               className="btn h-6 px-2 text-2xs"
               onClick={() => send('Y')}
               disabled={!connected}
             >
               <Send size={10} />
-              发送 Y
+              {t('term.serial.sendY')}
             </button>
           </div>
 
-          {/* 第三步：两次回车 + 固件名 */}
+          {
+            /* 第三步：两次回车 + 固件名 */
+          }
           <div className="flex flex-wrap items-center gap-1.5">
             <span className="w-4 text-2xs text-ink-3">3</span>
-            <span className="text-2xs text-ink-2">回车 → 回车 → 输入固件名 → 回车</span>
+            <span className="text-2xs text-ink-2">{t('term.serial.step3Text')}</span>
             <button className="btn h-6 px-2 text-2xs" onClick={() => send('\r')} disabled={!connected}>
-              回车
+              {t('term.serial.enter')}
             </button>
             <button
               className="btn h-6 px-2 text-2xs"
               onClick={() => send(`${server?.file ?? DEFAULT_FIRMWARE_HINT}\r`)}
               disabled={!connected}
-              title="把固件名整行发过去（含回车）"
+              title={t('term.serial.sendFirmwareTitle')}
             >
-              发固件名
+              {t('term.serial.sendFirmwareBtn')}
             </button>
             <span className="font-mono text-2xs text-ink-3">
               {server?.file ?? DEFAULT_FIRMWARE_HINT}
@@ -415,17 +454,17 @@ export function SerialBootBar({ session }: Props): React.JSX.Element {
           </div>
 
           <div className="mt-0.5 flex flex-wrap items-center gap-1.5 border-t border-edge/60 pt-2">
-            <span className="text-2xs text-ink-2">TFTP 服务端</span>
+            <span className="text-2xs text-ink-2">{t('term.serial.tftpServer')}</span>
             <button className="btn h-6 px-2 text-2xs" onClick={() => void pickFirmware()}>
               <HardDriveDownload size={10} />
-              {firmware ? '换固件' : '选固件'}
+              {firmware ? t('term.serial.changeFirmware') : t('term.serial.chooseFirmware')}
             </button>
             <button
               className={cn('btn h-6 px-2 text-2xs', server?.running && 'text-danger')}
               onClick={() => void toggleServer()}
               disabled={busy}
             >
-              {server?.running ? '停止' : '启动'}
+              {server?.running ? t('term.serial.stop') : t('term.serial.start')}
             </button>
             {firmware && (
               <span className="selectable font-mono text-2xs text-ink-3" title={firmware.path}>
@@ -434,7 +473,7 @@ export function SerialBootBar({ session }: Props): React.JSX.Element {
             )}
             {server?.running && (
               <span className="selectable text-2xs text-ink-3">
-                本机地址{' '}
+                {t('term.serial.localIp')}{' '}
                 <span className="font-mono text-accent">{ipHint}</span>
               </span>
             )}
@@ -442,14 +481,13 @@ export function SerialBootBar({ session }: Props): React.JSX.Element {
 
           {server?.running && (
             <div className="text-3xs leading-relaxed text-ink-3">
-              板子那边的 tftp 客户端不一定让你改 serverip —— 7628 这套引导菜单通常把地址写死了。
-              它要的地址如果和上面这个不一致，就把电脑这块网口的 IP 直接改成它要的那个（部署文档里
-              设 IP 那一步的截图就是这个原因），再回来点启动。
-              首次启动 Windows 会弹防火墙授权，要允许「专用网络」，否则板子连不上。
+              {t('term.serial.tftpHelp')}
             </div>
           )}
 
-          {/* 最近几条日志：现场排错就看这里 */}
+          {
+            /* 最近几条日志：现场排错就看这里 */
+          }
           {logs.length > 0 && (
             <div className="scroll-thin max-h-20 overflow-y-auto rounded border border-edge bg-app px-2 py-1">
               {logs.slice(-6).map((line, i) => (

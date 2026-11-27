@@ -294,16 +294,22 @@ export function TabBar(): React.JSX.Element {
     const serial = s?.kind === 'serial'
     return [
       ...(canReconnect
-        ? [{ label: '重新连接', icon: <RefreshCw size={12} />, onClick: () => reconnect(id) }]
+        ? [
+            {
+              label: t('common.tab.reconnect'),
+              icon: <RefreshCw size={12} />,
+              onClick: () => reconnect(id)
+            }
+          ]
         : []),
       {
-        label: '新建终端（复用此连接）',
+        label: t('common.tab.openTerminal'),
         icon: <SquarePlus size={12} />,
         disabled: s?.status !== 'connected' || serial,
         onClick: () => openTerminal(id)
       },
       {
-        label: '重命名',
+        label: t('common.tab.rename'),
         icon: <Pencil size={12} />,
         onClick: () => {
           if (s) startRename(id, s.title)
@@ -315,7 +321,7 @@ export function TabBar(): React.JSX.Element {
        * 比一个需要眼睛去对齐的小方框更快读懂。
        */
       {
-        label: muted(connId) ? '恢复本连接通知' : '本连接不弹通知',
+        label: muted(connId) ? t('common.tab.unmuteConn') : t('common.tab.muteConn'),
         icon: muted(connId) ? <BellRing size={12} /> : <BellOff size={12} />,
         disabled: !connId || !notifyPrefs.enabled,
         onClick: () => {
@@ -330,13 +336,13 @@ export function TabBar(): React.JSX.Element {
        * 右键两步点到，行为可预期。
        */
       {
-        label: '向右分屏',
+        label: t('common.tab.splitRight'),
         icon: <Columns2 size={12} />,
         disabled: s?.status !== 'connected' || serial || paneCount(ownerOf(id)) >= MAX_PANES,
         onClick: () => splitPane(id, 'row')
       },
       {
-        label: '向下分屏',
+        label: t('common.tab.splitDown'),
         icon: <Rows2 size={12} />,
         disabled: s?.status !== 'connected' || serial || paneCount(ownerOf(id)) >= MAX_PANES,
         onClick: () => splitPane(id, 'col')
@@ -348,12 +354,12 @@ export function TabBar(): React.JSX.Element {
        * 不用两个菜单项 —— 用户看到的那块只有一个「x」，语义跟着它走最自然。
        */
       {
-        label: paneCount(ownerOf(id)) > 1 ? '关闭此分屏' : '关闭',
+        label: paneCount(ownerOf(id)) > 1 ? t('common.tab.closePane') : t('common.tab.close'),
         icon: <XCircle size={12} />,
         onClick: () => closePane(id)
       },
       {
-        label: '关闭其他标签',
+        label: t('common.tab.closeOthers'),
         icon: <CircleSlash2 size={12} />,
         disabled: paneCount(ownerOf(id)) < 1 || tabs.length <= 1,
         onClick: () => closeOtherTabsOf(ownerOf(id))
@@ -489,7 +495,7 @@ export function TabBar(): React.JSX.Element {
                       'flex h-4 w-4 shrink-0 items-center justify-center rounded transition-colors duration-150',
                       isActive ? 'text-warning hover:bg-hover' : 'text-ink-3 hover:bg-hover hover:text-ink'
                     )}
-                    title="重新连接"
+                    title={t('common.tab.reconnect')}
                     onMouseDown={(e) => e.stopPropagation()}
                     onClick={(e) => {
                       e.stopPropagation()
@@ -514,7 +520,7 @@ export function TabBar(): React.JSX.Element {
                        */
                       'text-ink-3 opacity-0 group-hover:opacity-100 hover:bg-hover hover:text-ink focus-visible:opacity-100'
                 )}
-                title={paneCount(s.id) > 1 ? '关闭此分屏' : '关闭标签'}
+                title={paneCount(s.id) > 1 ? t('common.tab.closePane') : t('common.tab.closeTab')}
                 onClick={(e) => {
                   e.stopPropagation()
                   /*
@@ -531,25 +537,29 @@ export function TabBar(): React.JSX.Element {
             </div>
           )
         })}
-        {/* 溢出提示只能放在 map 外面：写进循环里的话每个标签都会长出一条 +N */}
+        {/*
+          * 溢出提示只能放在 map 外面：写进循环里的话每个标签都会长出一条 +N
+          */}
         {hiddenTabs > 0 && (
           <div
             className="flex shrink-0 items-center px-2 text-2xs text-ink-3"
-            title={`另有 ${hiddenTabs} 个会话未显示标签（超过上限 ${MAX_TABS}），可在左侧连接列表切换`}
+            title={t('common.tab.hiddenTabs', { count: hiddenTabs, max: MAX_TABS })}
           >
             +{hiddenTabs}
           </div>
         )}
       </div>
 
-      {/* 在当前会话上新建终端（复用 SSH 连接，免重新登录） */}
+      {/*
+        * 在当前会话上新建终端（复用 SSH 连接，免重新登录）
+        */}
       {activeSession && (
         <button
           className="no-drag titlebar-btn ml-0.5 h-6 w-6 shrink-0 self-center"
           title={
             activeSession.kind === 'serial'
-              ? '串口会话不支持多开（COM 口独占）'
-              : '在当前会话新建终端 (Ctrl+Shift+T)'
+              ? t('common.tab.serialNoMulti')
+              : t('common.tab.newTerminalHint')
           }
           disabled={activeSession.status !== 'connected' || activeSession.kind === 'serial'}
           onClick={() => openTerminal(activeSession.id)}
@@ -560,13 +570,15 @@ export function TabBar(): React.JSX.Element {
 
       <button
         className="no-drag titlebar-btn ml-0.5 h-6 w-6 shrink-0 self-center"
-        title="新建连接 (Ctrl+N)"
+        title={t('common.tab.newConnectionHint')}
         onClick={() => openConnEditor(null)}
       >
         <Plus size={14} />
       </button>
 
-      {/* 标签右侧的空白仍是拖拽区，方便拖动窗口 */}
+      {/*
+        * 标签右侧的空白仍是拖拽区，方便拖动窗口
+        */}
       <span className="min-w-[16px] flex-1" />
 
       {/*
@@ -580,7 +592,7 @@ export function TabBar(): React.JSX.Element {
           className="tabs-scrollbar no-drag"
           style={{ width: trackW }}
           onMouseDown={onTrackDown}
-          title="拖动或点击可横向滚动标签"
+          title={t('common.tab.scrollHint')}
         >
           <div
             className="tabs-scrollbar-thumb"

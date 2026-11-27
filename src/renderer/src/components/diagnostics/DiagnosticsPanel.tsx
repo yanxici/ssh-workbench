@@ -25,6 +25,7 @@ import {
   XCircle
 } from 'lucide-react'
 import type { DiagReport, DiagSection, DiagSectionResult, DiagSectionStatus } from '@shared/types'
+import { useI18n } from '@/i18n'
 import { call } from '@/lib/ipc'
 import { cn, formatBytes, formatTime } from '@/lib/utils'
 import { useOverlayEscape } from '@/lib/overlayKeys'
@@ -41,6 +42,7 @@ import { BundleDialog } from './BundleDialog'
  * - 报告库：历史报告的查看 / 导出（Markdown / HTML）/ 删除。
  */
 export function DiagnosticsPanel(): React.JSX.Element | null {
+  const { t } = useI18n()
   const panelOpen = useDiagStore((s) => s.panelOpen)
   const tab = useDiagStore((s) => s.tab)
   const setTab = useDiagStore((s) => s.setTab)
@@ -64,7 +66,7 @@ export function DiagnosticsPanel(): React.JSX.Element | null {
     <div className="panel-shell fixed inset-x-0 z-30 flex flex-col bg-app">
       <div className="flex h-9 shrink-0 items-center gap-2 border-b border-edge bg-panel px-3">
         <Activity size={14} className="text-accent" />
-        <span className="text-xs font-semibold">一键诊断巡检</span>
+        <span className="text-xs font-semibold">{t('panel.diag.title')}</span>
         {viewing && tab === 'reports' && (
           <>
             <span className="text-2xs text-ink-3">/</span>
@@ -74,31 +76,31 @@ export function DiagnosticsPanel(): React.JSX.Element | null {
         <div className="ml-3 flex items-center gap-0.5 rounded-md border border-edge bg-app p-0.5">
           {(
             [
-              { key: 'run', label: '运行诊断' },
-              { key: 'reports', label: '报告库' }
+              { key: 'run', label: t('panel.diag.tabRun') },
+              { key: 'reports', label: t('panel.diag.tabReports') }
             ] as const
-          ).map((t) => (
+          ).map((item) => (
             <button
-              key={t.key}
+              key={item.key}
               className={cn(
-                'rounded px-2.5 py-1 text-2xs transition-colors',
-                tab === t.key ? 'bg-accent/15 text-accent' : 'text-ink-3 hover:text-ink-2'
+                'rounded-sm px-2.5 py-1 text-2xs transition-colors',
+                tab === item.key ? 'bg-accent/15 text-accent' : 'text-ink-3 hover:text-ink-2'
               )}
-              onClick={() => setTab(t.key)}
+              onClick={() => setTab(item.key)}
             >
-              {t.label}
+              {item.label}
             </button>
           ))}
         </div>
         <span className="flex-1" />
         <button
           className="btn-icon"
-          title="打开报告目录"
+          title={t('panel.diag.openDir')}
           onClick={() => void call(window.api.diag.openDir(), { silent: true })}
         >
           <FolderOpen size={14} />
         </button>
-        <button className="btn-icon" title="关闭 (Esc)" onClick={close}>
+        <button className="btn-icon" title={t('panel.diag.closeEsc')} onClick={close}>
           <X size={14} />
         </button>
       </div>
@@ -129,6 +131,7 @@ export function DiagnosticsPanel(): React.JSX.Element | null {
  * ------------------------------------------------------------------ */
 
 function RunView({ onEditSection }: { onEditSection: (s: DiagSection | null) => void }): React.JSX.Element {
+  const { t } = useI18n()
   const sections = useDiagStore((s) => s.sections)
   const selected = useDiagStore((s) => s.selected)
   const running = useDiagStore((s) => s.running)
@@ -157,10 +160,12 @@ function RunView({ onEditSection }: { onEditSection: (s: DiagSection | null) => 
 
   return (
     <div className="flex min-h-0 flex-1">
-      {/* 左：诊断项清单 */}
+      {/*
+       * 左：诊断项清单
+       */}
       <div className="flex w-[300px] shrink-0 flex-col border-r border-edge bg-panel">
         <div className="flex shrink-0 items-center gap-1.5 border-b border-edge-soft px-2.5 py-1.5">
-          <span className="text-2xs font-semibold text-ink-2">诊断项</span>
+          <span className="text-2xs font-semibold text-ink-2">{t('panel.diag.sections')}</span>
           <span className="text-2xs text-ink-3">
             {selected.length}/{sections.length}
           </span>
@@ -169,18 +174,18 @@ function RunView({ onEditSection }: { onEditSection: (s: DiagSection | null) => 
             className="text-2xs text-ink-3 transition-colors hover:text-ink"
             onClick={() => useDiagStore.getState().selectAll(true)}
           >
-            全选
+            {t('panel.diag.selectAll')}
           </button>
           <span className="text-2xs text-ink-3/50">|</span>
           <button
             className="text-2xs text-ink-3 transition-colors hover:text-ink"
             onClick={() => useDiagStore.getState().selectAll(false)}
           >
-            清空
+            {t('panel.diag.clear')}
           </button>
           <button
             className="btn-icon ml-1 h-5 w-5"
-            title="新建自定义诊断项"
+            title={t('panel.diag.newSection')}
             onClick={() => onEditSection(null)}
           >
             <Plus size={12} />
@@ -236,7 +241,7 @@ function RunView({ onEditSection }: { onEditSection: (s: DiagSection | null) => 
                       {item.builtin ? (
                         <button
                           className="btn-icon h-5 w-5 opacity-0 group-hover:opacity-100"
-                          title="复制为自定义（可改命令）"
+                          title={t('panel.diag.copyCustom')}
                           onClick={(e) => {
                             e.stopPropagation()
                             onEditSection(item)
@@ -247,7 +252,7 @@ function RunView({ onEditSection }: { onEditSection: (s: DiagSection | null) => 
                       ) : (
                         <button
                           className="btn-icon h-5 w-5 opacity-0 group-hover:opacity-100"
-                          title="编辑自定义诊断项"
+                          title={t('panel.diag.editCustom')}
                           onClick={(e) => {
                             e.stopPropagation()
                             onEditSection(item)
@@ -265,19 +270,22 @@ function RunView({ onEditSection }: { onEditSection: (s: DiagSection | null) => 
         </div>
       </div>
 
-      {/* 右：执行与结果 */}
+      {/*
+       * 右：执行与结果
+       */}
       <div className="flex min-w-0 flex-1 flex-col">
         <div className="flex shrink-0 items-center gap-2 border-b border-edge-soft px-3 py-1.5">
           <span className="text-2xs text-ink-3">
-            目标会话：
+            {t('panel.diag.targetSession')}
             {targetSession ? (
               <span className="text-ink-2">
-                {targetSession.title}（{targetSession.target}）
+                {t('panel.diag.targetValue', {
+                  title: targetSession.title,
+                  target: targetSession.target
+                })}
               </span>
             ) : (
-              <span className="text-warning">
-                无在线 SSH 会话，请先连接设备（串口会话不提供诊断）
-              </span>
+              <span className="text-warning">{t('panel.diag.noSshSession')}</span>
             )}
           </span>
           <span className="flex-1" />
@@ -292,7 +300,7 @@ function RunView({ onEditSection }: { onEditSection: (s: DiagSection | null) => 
               onClick={() => void useDiagStore.getState().cancel()}
             >
               <X size={12} />
-              取消
+              {t('panel.diag.cancel')}
             </button>
           ) : (
             <button
@@ -301,7 +309,7 @@ function RunView({ onEditSection }: { onEditSection: (s: DiagSection | null) => 
               onClick={() => void useDiagStore.getState().start()}
             >
               <Activity size={12} />
-              开始诊断
+              {t('panel.diag.start')}
             </button>
           )}
           {lastReport && !running && (
@@ -309,7 +317,7 @@ function RunView({ onEditSection }: { onEditSection: (s: DiagSection | null) => 
               <span className="mx-0.5 h-4 w-px bg-edge-soft" />
               <button
                 className="btn h-7 px-2.5 text-xs"
-                title="导出 Markdown（适合贴工单 / 研发群）"
+                title={t('panel.diag.exportMdHint')}
                 onClick={() => void useDiagStore.getState().exportReport(lastReport.id, 'md')}
               >
                 <FileText size={12} />
@@ -317,7 +325,7 @@ function RunView({ onEditSection }: { onEditSection: (s: DiagSection | null) => 
               </button>
               <button
                 className="btn h-7 px-2.5 text-xs"
-                title="导出单文件 HTML（适合发客户 / 归档）"
+                title={t('panel.diag.exportHtmlHint')}
                 onClick={() => void useDiagStore.getState().exportReport(lastReport.id, 'html')}
               >
                 <FileCode2 size={12} />
@@ -325,11 +333,11 @@ function RunView({ onEditSection }: { onEditSection: (s: DiagSection | null) => 
               </button>
               <button
                 className="btn h-7 px-2.5 text-xs"
-                title="复制 Markdown 报告到剪贴板"
+                title={t('panel.diag.copyMdHint')}
                 onClick={() => void useDiagStore.getState().copyMarkdown(lastReport.id)}
               >
                 <ClipboardCopy size={12} />
-                复制
+                {t('panel.diag.copy')}
               </button>
             </>
           )}
@@ -348,11 +356,11 @@ function RunView({ onEditSection }: { onEditSection: (s: DiagSection | null) => 
           {runOrder.length === 0 ? (
             <EmptyState
               icon={<Activity size={30} />}
-              title="准备就绪"
+              title={t('panel.diag.readyTitle')}
               hint={
                 targetSession
-                  ? '左侧勾选要执行的诊断项（默认已全选内置项），点「开始诊断」在设备上逐项采集，完成后自动生成报告'
-                  : '请先在左侧打开一个 SSH 连接，再回到这里运行诊断'
+                  ? t('panel.diag.readyHintOnline')
+                  : t('panel.diag.readyHintOffline')
               }
             />
           ) : (
@@ -372,18 +380,23 @@ function RunView({ onEditSection }: { onEditSection: (s: DiagSection | null) => 
 }
 
 function SummaryBar({ report }: { report: DiagReport }): React.JSX.Element {
+  const { t } = useI18n()
   return (
     <div className="flex items-center gap-2 rounded-lg border border-edge bg-panel px-3 py-2">
       <CheckCircle2 size={14} className="text-success" />
       <span className="text-xs text-ink">
-        诊断完成 · {report.sectionCount} 项（正常 {report.okCount} / 异常 {report.problemCount}）
+        {t('panel.diag.summary', {
+          total: report.sectionCount,
+          ok: report.okCount,
+          problem: report.problemCount
+        })}
       </span>
       <span className="flex-1" />
       <button
         className="text-2xs text-accent transition-colors hover:text-ink"
         onClick={() => void useDiagStore.getState().viewReport(report.id)}
       >
-        查看完整报告 →
+        {t('panel.diag.viewFullReport')}
       </button>
     </div>
   )
@@ -412,13 +425,16 @@ function PlaceholderCard({
   group: string
   status: DiagSectionStatus
 }): React.JSX.Element {
+  const { t } = useI18n()
   return (
     <div className="flex items-center gap-2 rounded-lg border border-edge-soft bg-panel/60 px-3 py-2">
       <StatusIcon status={status} />
       <span className="text-xs text-ink-2">{name}</span>
       <span className="rounded bg-raised px-1 py-px text-3xs text-ink-3">{group}</span>
       <span className="flex-1" />
-      <span className="text-2xs text-ink-3">{status === 'running' ? '执行中…' : '待执行'}</span>
+      <span className="text-2xs text-ink-3">
+        {status === 'running' ? t('panel.diag.running') : t('panel.diag.pending')}
+      </span>
     </div>
   )
 }
@@ -441,12 +457,16 @@ function StatusIcon({ status }: { status: DiagSectionStatus }): React.JSX.Elemen
 }
 
 function ResultCard({ result, defaultOpen = false }: { result: DiagSectionResult; defaultOpen?: boolean }): React.JSX.Element {
+  const { t } = useI18n()
   const [open, setOpen] = useState(defaultOpen || result.status === 'error' || result.status === 'timeout')
 
   const copyOutput = (): void => {
     void call(window.api.clip.write(result.output || result.error || ''), { silent: true }).then((ok) => {
       if (ok !== null) {
-        useToastStore.getState().push({ kind: 'success', title: `已复制「${result.name}」输出` })
+        useToastStore.getState().push({
+          kind: 'success',
+          title: t('panel.diag.copiedSection', { name: result.name })
+        })
       }
     })
   }
@@ -471,7 +491,7 @@ function ResultCard({ result, defaultOpen = false }: { result: DiagSectionResult
         </span>
         <button
           className="btn-icon h-5 w-5"
-          title="复制本节输出"
+          title={t('panel.diag.copySection')}
           onClick={(e) => {
             e.stopPropagation()
             copyOutput()
@@ -487,7 +507,7 @@ function ResultCard({ result, defaultOpen = false }: { result: DiagSectionResult
             $ {result.command}
           </div>
           <pre className="scroll-thin max-h-[380px] overflow-auto whitespace-pre-wrap break-words px-3 py-2 font-mono text-2xs leading-relaxed text-ink-2">
-            {result.output.trim() === '' ? '（无输出）' : result.output}
+            {result.output.trim() === '' ? t('panel.diag.noOutput') : result.output}
           </pre>
           {result.error && result.error.trim() !== '' && (
             <pre className="scroll-thin max-h-[160px] overflow-auto whitespace-pre-wrap break-words border-t border-danger/20 bg-danger/5 px-3 py-1.5 font-mono text-3xs leading-relaxed text-danger/90">
@@ -505,6 +525,7 @@ function ResultCard({ result, defaultOpen = false }: { result: DiagSectionResult
  * ------------------------------------------------------------------ */
 
 function ReportsListView({ onBundle }: { onBundle: (id: string) => void }): React.JSX.Element {
+  const { t } = useI18n()
   const reports = useDiagStore((s) => s.reports)
   const [keyword, setKeyword] = useState('')
   const [pendingDelete, setPendingDelete] = useState<string | null>(null)
@@ -525,7 +546,7 @@ function ReportsListView({ onBundle }: { onBundle: (id: string) => void }): Reac
       <div className="mb-2 flex items-center gap-2">
         <input
           className="input max-w-[260px]"
-          placeholder="搜索报告（设备 / 名称）…"
+          placeholder={t('panel.diag.searchReports')}
           value={keyword}
           onChange={(e) => setKeyword(e.target.value)}
         />
@@ -535,18 +556,18 @@ function ReportsListView({ onBundle }: { onBundle: (id: string) => void }): Reac
           onClick={() => void useDiagStore.getState().loadReports()}
         >
           <RefreshCw size={12} />
-          刷新
+          {t('panel.diag.refresh')}
         </button>
       </div>
 
       {filtered.length === 0 ? (
         <EmptyState
           icon={<FileText size={28} />}
-          title={reports.length === 0 ? '还没有诊断报告' : '没有匹配的报告'}
+          title={reports.length === 0 ? t('panel.diag.emptyReports') : t('panel.diag.emptySearchReports')}
           hint={
             reports.length === 0
-              ? '运行一次诊断后，报告会自动保存在这里，可随时查看、导出 Markdown / HTML 或复制给研发'
-              : '换个关键字试试'
+              ? t('panel.diag.emptyReportsHint')
+              : t('panel.diag.emptySearchHint')
           }
         />
       ) : (
@@ -568,49 +589,49 @@ function ReportsListView({ onBundle }: { onBundle: (id: string) => void }): Reac
                       r.problemCount > 0 ? 'bg-danger/10 text-danger' : 'bg-success/10 text-success'
                     )}
                   >
-                    正常 {r.okCount} / 异常 {r.problemCount}
+                    {t('panel.diag.reportCounts', { ok: r.okCount, problem: r.problemCount })}
                   </span>
                 </div>
               </div>
               <div className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
                 <button
                   className="btn-icon h-6 w-6"
-                  title="查看"
+                  title={t('panel.diag.view')}
                   onClick={() => void useDiagStore.getState().viewReport(r.id)}
                 >
                   <Eye size={12} />
                 </button>
                 <button
                   className="btn-icon h-6 w-6"
-                  title="导出 Markdown"
+                  title={t('panel.diag.exportMd')}
                   onClick={() => void useDiagStore.getState().exportReport(r.id, 'md')}
                 >
                   <FileText size={12} />
                 </button>
                 <button
                   className="btn-icon h-6 w-6"
-                  title="导出 HTML"
+                  title={t('panel.diag.exportHtml')}
                   onClick={() => void useDiagStore.getState().exportReport(r.id, 'html')}
                 >
                   <FileCode2 size={12} />
                 </button>
                 <button
                   className="btn-icon h-6 w-6"
-                  title="复制 Markdown"
+                  title={t('panel.diag.copyMd')}
                   onClick={() => void useDiagStore.getState().copyMarkdown(r.id)}
                 >
                   <ClipboardCopy size={12} />
                 </button>
                 <button
                   className="btn-icon h-6 w-6"
-                  title="一键打包（报告+日志+历史+配置 → zip）"
+                  title={t('panel.diag.bundleTooltip')}
                   onClick={() => onBundle(r.id)}
                 >
                   <Package size={12} />
                 </button>
                 <button
                   className="btn-icon h-6 w-6 hover:text-danger"
-                  title="删除"
+                  title={t('panel.diag.delete')}
                   onClick={() => setPendingDelete(r.id)}
                 >
                   <Trash2 size={12} />
@@ -623,18 +644,18 @@ function ReportsListView({ onBundle }: { onBundle: (id: string) => void }): Reac
 
       <ConfirmDialog
         open={pendingDelete !== null}
-        title="删除诊断报告"
+        title={t('panel.diag.deleteReportTitle')}
         danger
-        confirmText="删除"
-        message="确定删除这份诊断报告吗？该操作不可撤销。"
+        confirmText={t('panel.diag.deleteReportConfirm')}
+        message={t('panel.diag.deleteReportMsg')}
         onCancel={() => setPendingDelete(null)}
         onConfirm={() => {
           const id = pendingDelete
           setPendingDelete(null)
           if (!id) return
-          void call(window.api.diag.removeReport(id), { errorTitle: '删除失败' }).then(() =>
-            useDiagStore.getState().loadReports()
-          )
+          void call(window.api.diag.removeReport(id), {
+            errorTitle: t('panel.diag.deleteReportError')
+          }).then(() => useDiagStore.getState().loadReports())
         }}
       />
     </div>
@@ -648,13 +669,14 @@ function ReportDetailView({
   report: DiagReport
   onBundle: (id: string) => void
 }): React.JSX.Element {
+  const { t } = useI18n()
   const closeReport = useDiagStore((s) => s.closeReport)
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex shrink-0 items-center gap-2 border-b border-edge-soft px-3 py-1.5">
         <button className="btn h-7 px-2 text-2xs" onClick={closeReport}>
           <ArrowLeft size={12} />
-          返回报告库
+          {t('panel.diag.backToReports')}
         </button>
         <span className="text-2xs text-ink-3">
           {report.host} · {formatTime(report.startedAt)} ~ {formatTime(report.finishedAt)}
@@ -679,15 +701,15 @@ function ReportDetailView({
           onClick={() => void useDiagStore.getState().copyMarkdown(report.id)}
         >
           <ClipboardCopy size={12} />
-          复制
+          {t('panel.diag.copy')}
         </button>
         <button
           className="btn h-7 px-2.5 text-2xs"
-          title="一键打包：报告 + 会话日志 + 命令历史 + 配置备份 → zip"
+          title={t('panel.diag.bundleTitle')}
           onClick={() => onBundle(report.id)}
         >
           <Package size={12} />
-          打包
+          {t('panel.diag.bundleBtn')}
         </button>
       </div>
 

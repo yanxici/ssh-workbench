@@ -5,6 +5,20 @@ All notable changes to SSH Workbench will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.5.2] - 2026-11-27
+
+<!-- release-notes:start -->
+### 这一版更新了什么
+
+- **全量中英双语界面（简体中文 / English）**：完整抽离模块化 `i18n` 引擎与 7 个分域词典，将主界面、连接管理、串口刷机引导条、SFTP/ShellFS 文件树与远程编辑器、命令中心、一键巡检等技术支持工具及全部提示/状态栏彻底双语化，`npm run verify:i18n` 渲染层硬编码中文基线由 **1,996 行降至 0 行**（默认简体中文界面文案保持原样兼容），新增 `verify-i18n-en.cjs` 全英文 UI 端到端零溢出校验。
+- **Windows 安装包与运行时体积瘦身**：引入打包后置钩子 `scripts/after-pack.cjs` 仅保留 `zh-CN` / `en-US` 语言包并剔除跨平台串口原生预编译，同时在 `electron-builder.yml` 过滤 `node_modules` 测试与文档文件，显著压缩安装包与解压体积（`win32-x64` 串口与 SFTP 实测保持完整可用）。
+- **内存降耗与按需渲染优化**：默认 DOM 渲染路径下跳过空转 GPU 硬件加速进程并关闭 `SpareRendererForSitePerProcess` / 磁盘缓存等冗余浏览器特性；取消开机空闲全量预加载 9 个重型面板（改为鼠标悬停工具栏按需预热），`SettingsPanel`、`ConnectionEditor`、`CommandCenter`、`CommandEditor`、`RemoteEditorDialog` 与 `@xterm/addon-webgl` 全部改为按需动态拆包与活跃标签上下文池化，默认 `scrollback` 调整为 `3000` 行，大幅压低首屏 JS 体积与多会话闲置内存。
+<!-- release-notes:end -->
+
+### Added
+
+- **Full Bilingual i18n (`i18n/core.ts` + `locales/*.ts`) & Packaging Hook (`scripts/after-pack.cjs`)**: Modular pure-TS translation core covering all renderer components, stores, and pure helpers (`tNow`), plus `scripts/verify-i18n-en.cjs` English E2E verification and Windows `afterPack` pruning.
+
 ## [2.5.1] - 2026-11-27
 
 <!-- release-notes:start -->

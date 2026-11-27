@@ -53,7 +53,7 @@ function main() {
   check('TreeLevel 把 busy 回报给上层', /onBusyRef\.current\(true\)/.test(tree) && /onBusyRef\.current\(false\)/.test(tree))
 
   check('FileExplorer 刷新按钮会转', /RefreshCw size=\{13\} className=\{cn\(loading && 'animate-spin'\)\}/.test(explorer))
-  check('FileExplorer 刷新按钮加载中禁用', /title=\{loading \? '正在刷新…' : '刷新当前目录'\}[\s\S]{0,80}disabled=\{loading\}/.test(explorer))
+  check('FileExplorer 刷新按钮加载中禁用', /title=\{loading \? (?:t\('files\.ui\.refreshing'\)|'正在刷新…') : (?:t\('files\.ui\.refreshDir'\)|'刷新当前目录')\}[\s\S]{0,80}disabled=\{loading\}/.test(explorer))
   check('FileExplorer forced 时即使有缓存也进 loading', /setLoading\(!hit\.cached \|\| forced\)/.test(explorer))
 
   /* ---- 3. 主进程：全部元数据原语必须带超时 ---- */

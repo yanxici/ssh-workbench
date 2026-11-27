@@ -12,6 +12,7 @@ import {
   X
 } from 'lucide-react'
 import type { BackupDiffResult, BackupMeta } from '@shared/types'
+import { useI18n } from '@/i18n'
 import { cn, formatBytes, formatTime } from '@/lib/utils'
 import { useOverlayEscape } from '@/lib/overlayKeys'
 import { ConfirmDialog, EmptyState, Field, Modal } from '@/components/ui'
@@ -24,6 +25,7 @@ import { useToastStore } from '@/stores/toastStore'
  * 备份设备配置文件到本地 → 与设备当前内容逐文件对比（行级 diff）→ 一键还原（自动留 .bak）。
  */
 export function BackupPanel(): React.JSX.Element | null {
+  const { t } = useI18n()
   const panelOpen = useBackupStore((s) => s.panelOpen)
   const backups = useBackupStore((s) => s.backups)
   const selectedId = useBackupStore((s) => s.selectedId)
@@ -37,35 +39,42 @@ export function BackupPanel(): React.JSX.Element | null {
     <div className="panel-shell fixed inset-x-0 z-30 flex flex-col bg-app">
       <div className="flex h-9 shrink-0 items-center gap-2 border-b border-edge bg-panel px-3">
         <Archive size={14} className="text-accent" />
-        <span className="text-xs font-semibold">配置备份对比</span>
-        <span className="text-2xs text-ink-3">{backups.length} 份备份</span>
+        <span className="text-xs font-semibold">{t('panel.backup.title')}</span>
+        <span className="text-2xs text-ink-3">
+          {t('panel.backup.count', { count: backups.length })}
+        </span>
         <span className="flex-1" />
         <button className="btn h-7 px-3 text-xs" onClick={() => useBackupStore.getState().setCreateOpen(true)}>
           <Plus size={12} />
-          新建备份
+          {t('panel.backup.newBackup')}
         </button>
         <button
           className="btn-icon"
-          title="打开备份目录"
+          title={t('panel.backup.openDir')}
           onClick={() => void window.api.backups.openDir()}
         >
           <FolderOpen size={14} />
         </button>
-        <button className="btn-icon" title="刷新" onClick={() => void useBackupStore.getState().load()}>
+        <button
+          className="btn-icon"
+          title={t('panel.backup.refresh')}
+          onClick={() => void useBackupStore.getState().load()}
+        >
           <RefreshCw size={14} />
         </button>
-        <button className="btn-icon" title="关闭 (Esc)" onClick={close}>
+        <button className="btn-icon" title={t('panel.backup.closeEsc')} onClick={close}>
           <X size={14} />
         </button>
       </div>
 
       <div className="flex min-h-0 flex-1">
-        {/* 左：备份列表 */}
+        {/*
+         * 左：备份列表
+         */}
         <div className="scroll-thin w-[280px] shrink-0 overflow-y-auto border-r border-edge bg-panel p-1.5">
           {backups.length === 0 && (
             <div className="px-2 py-4 text-2xs leading-relaxed text-ink-3">
-              还没有备份。点右上角「新建备份」，把设备上的配置文件（如 /etc/config、/etc/network/interfaces）
-              采回本地存档。
+              {t('panel.backup.emptyList')}
             </div>
           )}
           {backups.map((b) => (
@@ -73,9 +82,19 @@ export function BackupPanel(): React.JSX.Element | null {
           ))}
         </div>
 
-        {/* 右：详情 */}
+        {/*
+         * 右：详情
+         */}
         <div className="min-w-0 flex-1">
-          {selectedId ? <BackupDetailView /> : <EmptyState icon={<Archive size={30} />} title="选择或新建一份备份" hint="备份后可与设备当前配置逐行对比，出问题时一键还原（原文件自动留 .bak）" />}
+          {selectedId ? (
+            <BackupDetailView />
+          ) : (
+            <EmptyState
+              icon={<Archive size={30} />}
+              title={t('panel.backup.emptyDetailTitle')}
+              hint={t('panel.backup.emptyDetailHint')}
+            />
+          )}
         </div>
       </div>
 
@@ -89,6 +108,7 @@ export function BackupPanel(): React.JSX.Element | null {
  * ------------------------------------------------------------------ */
 
 function BackupRow({ backup, selected }: { backup: BackupMeta; selected: boolean }): React.JSX.Element {
+  const { t } = useI18n()
   const [confirming, setConfirming] = useState(false)
   return (
     <div
@@ -108,12 +128,12 @@ function BackupRow({ backup, selected }: { backup: BackupMeta; selected: boolean
           <span>·</span>
           <span>{formatTime(backup.createdAt)}</span>
           <span>·</span>
-          <span className="font-mono">{backup.fileCount} 文件</span>
+          <span className="font-mono">{t('panel.backup.fileCount', { count: backup.fileCount })}</span>
         </div>
       </div>
       <button
         className="btn-icon h-5 w-5 shrink-0 opacity-0 hover:text-danger group-hover:opacity-100"
-        title="删除备份"
+        title={t('panel.backup.deleteTitle')}
         onClick={(e) => {
           e.stopPropagation()
           setConfirming(true)
@@ -124,13 +144,16 @@ function BackupRow({ backup, selected }: { backup: BackupMeta; selected: boolean
 
       <ConfirmDialog
         open={confirming}
-        title="删除备份"
+        title={t('panel.backup.deleteTitle')}
         danger
-        confirmText="删除"
+        confirmText={t('panel.backup.deleteConfirm')}
         message={
           <>
-            确定删除备份
-            <span className="font-medium text-ink">「{backup.name}」</span>吗？该操作不可撤销。
+            {t('panel.backup.deletePrefix')}
+            <span className="font-medium text-ink">
+              {t('panel.backup.deleteQuoted', { name: backup.name })}
+            </span>
+            {t('panel.backup.deleteSuffix')}
           </>
         }
         onCancel={() => setConfirming(false)}
@@ -148,6 +171,7 @@ function BackupRow({ backup, selected }: { backup: BackupMeta; selected: boolean
  * ------------------------------------------------------------------ */
 
 function BackupDetailView(): React.JSX.Element {
+  const { t } = useI18n()
   const detail = useBackupStore((s) => s.detail)
   const diffs = useBackupStore((s) => s.diffs)
   const diffPath = useBackupStore((s) => s.diffPath)
@@ -168,7 +192,7 @@ function BackupDetailView(): React.JSX.Element {
     return (
       <div className="flex h-full items-center justify-center gap-2 text-2xs text-ink-3">
         <RefreshCw size={12} className="animate-spin" />
-        读取备份中…
+        {t('panel.backup.loadingDetail')}
       </div>
     )
   }
@@ -181,23 +205,23 @@ function BackupDetailView(): React.JSX.Element {
         <div className="flex items-center gap-2">
           <span className="text-xs font-semibold text-ink">{detail.name}</span>
           <span className="font-mono text-2xs text-ink-3">
-            {detail.connectionName}（{detail.host}） · {formatTime(detail.createdAt)} ·{' '}
-            {formatBytes(detail.totalSize)}
+            {t('panel.backup.detailMeta', { name: detail.connectionName, host: detail.host })} ·{' '}
+            {formatTime(detail.createdAt)} · {formatBytes(detail.totalSize)}
           </span>
           <span className="flex-1" />
         </div>
 
         <div className="mt-1.5 flex flex-wrap items-center gap-2">
-          <span className="text-2xs text-ink-3">对比会话</span>
+          <span className="text-2xs text-ink-3">{t('panel.backup.compareSession')}</span>
           <select
             className="input h-7 w-[240px]"
             value={compareSessionId ?? ''}
             onChange={(e) => useBackupStore.getState().setCompareSessionId(e.target.value)}
           >
-            <option value="">选择一台在线设备…</option>
+            <option value="">{t('panel.backup.selectDevice')}</option>
             {connected.map((s) => (
               <option key={s.id} value={s.id}>
-                {s.title}（{s.target}）
+                {t('panel.backup.detailMeta', { name: s.title, host: s.target })}
               </option>
             ))}
           </select>
@@ -207,7 +231,7 @@ function BackupDetailView(): React.JSX.Element {
             onClick={() => void useBackupStore.getState().diffAll()}
           >
             <GitCompare size={12} />
-            {diffAllRunning ? '对比中…' : '与设备对比全部'}
+            {diffAllRunning ? t('panel.backup.diffing') : t('panel.backup.diffAll')}
           </button>
           <span className="flex-1" />
           <button
@@ -216,7 +240,7 @@ function BackupDetailView(): React.JSX.Element {
             onClick={() => setConfirmRestoreAll(true)}
           >
             <ArchiveRestore size={12} />
-            还原全部（{restorable.length}）
+            {t('panel.backup.restoreAll', { count: restorable.length })}
           </button>
         </div>
 
@@ -231,7 +255,7 @@ function BackupDetailView(): React.JSX.Element {
 
       <div className="scroll-thin min-h-0 flex-1 overflow-y-auto">
         {detail.files.length === 0 && (
-          <div className="px-3 py-4 text-2xs text-ink-3">这份备份里还没有文件。</div>
+          <div className="px-3 py-4 text-2xs text-ink-3">{t('panel.backup.noFiles')}</div>
         )}
         {detail.files.map((f) => {
           const d = diffs[f.path]
@@ -258,13 +282,13 @@ function BackupDetailView(): React.JSX.Element {
               <button
                 className="btn h-6 shrink-0 px-2 text-2xs"
                 disabled={f.content === undefined || !compareSessionId}
-                title="把备份内容写回设备（原文件自动改名 .bak）"
+                title={t('panel.backup.restoreTooltip')}
                 onClick={(e) => {
                   e.stopPropagation()
                   setPendingRestore(f.path)
                 }}
               >
-                还原
+                {t('panel.backup.restoreBtn')}
               </button>
             </div>
           )
@@ -277,36 +301,36 @@ function BackupDetailView(): React.JSX.Element {
             <span className="font-mono text-2xs text-ink-2">{diffPath}</span>
             {diff && (
               <span className="text-3xs text-ink-3">
-                {diff.status === 'same' && '无差异'}
+                {diff.status === 'same' && t('panel.backup.diffSame')}
                 {diff.status === 'changed' && (
                   <>
                     <span className="text-success">+{diff.added}</span> /{' '}
                     <span className="text-danger">-{diff.removed}</span>
                   </>
                 )}
-                {diff.status === 'remote-missing' && '设备上已不存在'}
-                {diff.status === 'error' && '无法读取'}
+                {diff.status === 'remote-missing' && t('panel.backup.diffMissing')}
+                {diff.status === 'error' && t('panel.backup.diffError')}
               </span>
             )}
             {diffing && <RefreshCw size={11} className="animate-spin text-accent" />}
             <span className="flex-1" />
-            <span className="text-3xs text-ink-3">绿=设备新增 · 红=设备删除（相对备份）</span>
+            <span className="text-3xs text-ink-3">{t('panel.backup.diffLegend')}</span>
             <button
               className="btn h-6 px-2 text-2xs"
               disabled={!compareSessionId}
               onClick={() => void useBackupStore.getState().runDiff(diffPath)}
             >
               <RefreshCw size={11} />
-              重新对比
+              {t('panel.backup.reDiff')}
             </button>
             <button className="btn-icon h-6 w-6" onClick={() => useBackupStore.setState({ diffPath: null })}>
               <X size={11} />
             </button>
           </div>
           <div className="scroll-thin min-h-0 flex-1 overflow-auto bg-app px-2 py-1.5 font-mono text-2xs leading-normal">
-            {!diff && <div className="text-ink-3">对比中…</div>}
+            {!diff && <div className="text-ink-3">{t('panel.backup.diffing')}</div>}
             {diff?.status === 'same' && (
-              <div className="py-3 text-center text-ink-3">设备当前内容与备份完全一致 ✓</div>
+              <div className="py-3 text-center text-ink-3">{t('panel.backup.diffMatchFull')}</div>
             )}
             {diff?.error && <div className="py-2 text-danger">{diff.error}</div>}
             {diff?.lines.map((line, i) => (
@@ -329,23 +353,29 @@ function BackupDetailView(): React.JSX.Element {
 
       <ConfirmDialog
         open={pendingRestore !== null}
-        title="还原此文件"
+        title={t('panel.backup.restoreOneTitle')}
         danger
-        confirmText="还原"
+        confirmText={t('panel.backup.restoreOneConfirm')}
         message={
           <>
-            将把备份内容写回设备{' '}
-            <span className="font-medium text-ink">{restoreTarget?.target ?? '（未选择）'}</span>
+            {t('panel.backup.restoreOnePrefix')}
+            <span className="font-medium text-ink">
+              {restoreTarget?.target ?? t('panel.backup.unselected')}
+            </span>
             {/*
              * 单文件还原同样要提示跨主机：写错机器上同名路径是真实丢配置的场景
              */}
             {restoreTarget && restoreTarget.host !== detail.host ? (
-              <span className="text-danger">{'（不是备份来源 ' + detail.host + '）'}</span>
+              <span className="text-danger">
+                {t('panel.backup.crossHostWarn', { host: detail.host })}
+              </span>
             ) : null}
-            ：
+            {t('panel.backup.colon')}
             <div className="mt-1 selectable break-all font-mono text-2xs text-ink-3">{pendingRestore}</div>
             <div className="mt-2 text-2xs text-ink-3">
-              设备上的原文件会先自动改名为 <span className="font-mono">.bak</span>，可用于回退。
+              {t('panel.backup.bakHintBefore')}
+              <span className="font-mono">.bak</span>
+              {t('panel.backup.bakHintAfter')}
             </div>
           </>
         }
@@ -359,22 +389,25 @@ function BackupDetailView(): React.JSX.Element {
 
       <ConfirmDialog
         open={confirmRestoreAll}
-        title="还原全部文件"
+        title={t('panel.backup.restoreAllTitle')}
         danger
-        confirmText={`还原 ${restorable.length} 个文件`}
+        confirmText={t('panel.backup.restoreAllConfirm', { count: restorable.length })}
         message={
           <>
-            将把这份备份里的 {restorable.length} 个文件全部写回设备{' '}
-            <span className="font-medium text-ink">{restoreTarget?.target ?? '（未选择）'}</span>
+            {t('panel.backup.restoreAllPrefix', { count: restorable.length })}
+            <span className="font-medium text-ink">
+              {restoreTarget?.target ?? t('panel.backup.unselected')}
+            </span>
             {/*
              * 比 host 而不是 target：target 是 user@host，跟备份里的纯 host 永远不相等，
              * 每次同机还原都会误报跨主机，警告变成狼来了。
              */}
             {restoreTarget && restoreTarget.host !== detail.host
-              ? '（不是备份来源 ' + detail.host + '）'
-              : ''}。
+              ? t('panel.backup.crossHostWarn', { host: detail.host })
+              : ''}
+            {t('panel.backup.period')}
             <div className="mt-2 text-2xs text-danger">
-              批量还原可能影响设备网络，请确认设备当前状态后再执行。
+              {t('panel.backup.restoreAllWarn')}
             </div>
           </>
         }
@@ -395,17 +428,32 @@ function DiffStatusChip({
   entry?: string
   diff?: BackupDiffResult
 }): React.JSX.Element {
+  const { t } = useI18n()
   if (entry) {
-    return <span className="shrink-0 rounded bg-warning/10 px-1 py-px text-3xs text-warning" title={entry}>读取失败</span>
+    return (
+      <span
+        className="shrink-0 rounded-sm bg-warning/10 px-1 py-px text-3xs text-warning"
+        title={entry}
+      >
+        {t('panel.backup.chipReadFail')}
+      </span>
+    )
   }
   if (!diff) {
-    return <span className="shrink-0 rounded bg-raised px-1 py-px text-3xs text-ink-3">未对比</span>
+    return (
+      <span className="shrink-0 rounded-sm bg-raised px-1 py-px text-3xs text-ink-3">
+        {t('panel.backup.chipUntested')}
+      </span>
+    )
   }
   const map = {
-    same: ['bg-success/10 text-success', '一致'],
-    changed: ['bg-warning/10 text-warning', `有差异 +${diff.added}/-${diff.removed}`],
-    'remote-missing': ['bg-danger/10 text-danger', '设备上不存在'],
-    error: ['bg-danger/10 text-danger', '读取失败']
+    same: ['bg-success/10 text-success', t('panel.backup.chipSame')],
+    changed: [
+      'bg-warning/10 text-warning',
+      t('panel.backup.chipChanged', { added: diff.added, removed: diff.removed })
+    ],
+    'remote-missing': ['bg-danger/10 text-danger', t('panel.backup.chipMissing')],
+    error: ['bg-danger/10 text-danger', t('panel.backup.chipReadFail')]
   } as const
   const [cls, label] = map[diff.status]
   return <span className={cn('shrink-0 rounded px-1 py-px text-3xs', cls)}>{label}</span>
@@ -418,6 +466,7 @@ function DiffStatusChip({
 const DEFAULT_PATHS = '/etc/config\n/etc/network/interfaces\n/etc/hosts'
 
 function CreateBackupModal(): React.JSX.Element {
+  const { t } = useI18n()
   const open = useBackupStore((s) => s.createOpen)
   const sessions = useSshSessions()
   const connected = sessions.filter((s) => s.status === 'connected')
@@ -431,7 +480,7 @@ function CreateBackupModal(): React.JSX.Element {
 
   const submit = async (): Promise<void> => {
     if (!sessionId) {
-      useToastStore.getState().push({ kind: 'warning', title: '请选择要备份的设备会话' })
+      useToastStore.getState().push({ kind: 'warning', title: t('panel.backup.pickSessionWarn') })
       return
     }
     setSaving(true)
@@ -439,7 +488,10 @@ function CreateBackupModal(): React.JSX.Element {
       .getState()
       .create(
         sessionId,
-        name.trim() || `${chosen?.title ?? '设备'} 配置备份`,
+        name.trim() ||
+          t('panel.backup.defaultName', {
+            title: chosen?.title ?? t('panel.backup.defaultDeviceName')
+          }),
         paths.split('\n')
       )
     setSaving(false)
@@ -452,41 +504,45 @@ function CreateBackupModal(): React.JSX.Element {
   return (
     <Modal
       open={open}
-      title="新建配置备份"
+      title={t('panel.backup.modalTitle')}
       onClose={() => useBackupStore.getState().setCreateOpen(false)}
       footer={
         <>
           <button className="btn h-7 px-3 text-xs" onClick={() => useBackupStore.getState().setCreateOpen(false)}>
-            取消
+            {t('panel.backup.cancel')}
           </button>
           <button className="btn btn-primary h-7 px-3.5 text-xs" disabled={saving} onClick={() => void submit()}>
-            {saving ? '采集中…' : '开始备份'}
+            {saving ? t('panel.backup.collecting') : t('panel.backup.startBackup')}
           </button>
         </>
       }
     >
       <div className="space-y-3.5">
-        <Field label="设备会话（需在线）">
+        <Field label={t('panel.backup.fieldSession')}>
           <select className="input selectable" value={sessionId} onChange={(e) => setSessionId(e.target.value)}>
-            <option value="">选择一台在线设备…</option>
+            <option value="">{t('panel.backup.selectDevice')}</option>
             {connected.map((s) => (
               <option key={s.id} value={s.id}>
-                {s.title}（{s.target}）
+                {t('panel.backup.detailMeta', { name: s.title, host: s.target })}
               </option>
             ))}
           </select>
         </Field>
-        <Field label="备份名称">
+        <Field label={t('panel.backup.fieldName')}>
           <input
             className="input selectable"
             value={name}
             onChange={(e) => setName(e.target.value)}
-            placeholder={chosen ? `${chosen.title} 配置备份` : '例如：A区 现场配置'}
+            placeholder={
+              chosen
+                ? t('panel.backup.defaultName', { title: chosen.title })
+                : t('panel.backup.fieldNamePlaceholder')
+            }
           />
         </Field>
         <Field
-          label="要备份的路径（每行一个，可以是文件或目录）"
-          hint="目录会递归采集（深度 ≤ 4 层、单文件 ≤ 512 KB、总量 ≤ 8 MB）"
+          label={t('panel.backup.fieldPaths')}
+          hint={t('panel.backup.fieldPathsHint')}
         >
           <textarea
             className="textarea selectable min-h-[88px] font-mono text-2xs leading-relaxed"

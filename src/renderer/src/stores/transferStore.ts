@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import type { TransferRecord } from '@shared/types'
 import { call } from '@/lib/ipc'
+import { tNow } from '@/i18n/core'
 import { localDirname, remoteDirname } from '@/lib/utils'
 import { useSessionStore } from './sessionStore'
 import { useSftpStore } from './sftpStore'
@@ -95,7 +96,9 @@ export const useTransferStore = create<TransferState>()((set, get) => ({
       return
     }
     set({ loading: true })
-    const list = await call(window.api.transfer.list(), { errorTitle: '读取传输记录失败' })
+    const list = await call(window.api.transfer.list(), {
+      errorTitle: tNow('files.ui.err.loadTransfers')
+    })
     set({ loading: false, loaded: true, records: list ?? [] })
     if (pendingReload) {
       pendingReload = false
@@ -144,11 +147,11 @@ export const useTransferStore = create<TransferState>()((set, get) => ({
     if (record.via !== 'sftp') {
       useToastStore.getState().push({
         kind: 'info',
-        title: '这类传输不能一键重试',
+        title: tNow('files.ui.transfer.cannotRetry'),
         detail:
           record.via === 'trzsz'
-            ? 'trzsz 需要在终端里由远端发起；请在终端窗口重新拖入文件'
-            : 'ZMODEM 由对端发起，请在终端里重新执行 sz / rz'
+            ? tNow('files.ui.transfer.trzszRetryHint')
+            : tNow('files.ui.transfer.zmodemRetryHint')
       })
       return
     }
@@ -156,8 +159,8 @@ export const useTransferStore = create<TransferState>()((set, get) => ({
     if (!record.localPath || !record.remotePath) {
       useToastStore.getState().push({
         kind: 'warning',
-        title: '这条记录缺少路径',
-        detail: '原始路径没有记录，无法按原样重试'
+        title: tNow('files.ui.transfer.missingPath'),
+        detail: tNow('files.ui.transfer.missingPathHint')
       })
       return
     }
@@ -167,8 +170,8 @@ export const useTransferStore = create<TransferState>()((set, get) => ({
     if (!session) {
       useToastStore.getState().push({
         kind: 'warning',
-        title: '该连接当前未建立',
-        detail: '请先在连接列表里连上，再回来重试这条传输'
+        title: tNow('files.ui.transfer.disconnected'),
+        detail: tNow('files.ui.transfer.reconnectToRetry')
       })
       return
     }
@@ -195,10 +198,10 @@ export const useTransferStore = create<TransferState>()((set, get) => ({
   },
 
   reveal: async (path) => {
-    await call(window.api.transfer.reveal(path), { errorTitle: '定位文件失败' })
+    await call(window.api.transfer.reveal(path), { errorTitle: tNow('files.ui.err.reveal') })
   },
 
   openDir: async (path) => {
-    await call(window.api.transfer.openDir(path), { errorTitle: '打开目录失败' })
+    await call(window.api.transfer.openDir(path), { errorTitle: tNow('files.ui.err.openDir') })
   }
 }))

@@ -4,6 +4,7 @@ import { appliesTo } from '@shared/commandEnv'
 import { call } from '@/lib/ipc'
 import { sortGroupNames } from '@/lib/groupOrder'
 import { searchCommands } from '@/lib/commandSearch'
+import { tNow } from '@/i18n/core'
 import { useToastStore } from './toastStore'
 import { useSettingsStore } from './settingsStore'
 
@@ -69,13 +70,13 @@ export const useCommandStore = create<CommandState>()((set, get) => ({
   },
 
   save: async (input) => {
-    const saved = await call(window.api.command.save(input), { errorTitle: '保存命令失败' })
+    const saved = await call(window.api.command.save(input), { errorTitle: tNow('cmd.error.save') })
     if (saved) await get().load()
     return saved
   },
 
   remove: async (id) => {
-    const res = await call(window.api.command.remove(id), { errorTitle: '删除命令失败' })
+    const res = await call(window.api.command.remove(id), { errorTitle: tNow('cmd.error.remove') })
     if (res === null) return false
     set((s) => ({ commands: s.commands.filter((c) => c.id !== id) }))
     return true
@@ -96,23 +97,23 @@ export const useCommandStore = create<CommandState>()((set, get) => ({
   },
 
   importJson: async (mode) => {
-    const res = await call(window.api.command.import(mode), { errorTitle: '导入失败' })
+    const res = await call(window.api.command.import(mode), { errorTitle: tNow('cmd.error.import') })
     if (!res) return
     if (res.canceled) return
     await get().load()
     useToastStore.getState().push({
       kind: 'success',
-      title: `导入完成：新增 ${res.imported} 条`,
-      detail: res.skipped > 0 ? `跳过重复/无效 ${res.skipped} 条` : undefined
+      title: tNow('cmd.toast.importDone', { count: res.imported }),
+      detail: res.skipped > 0 ? tNow('cmd.toast.importSkipped', { count: res.skipped }) : undefined
     })
   },
 
   exportJson: async () => {
-    const res = await call(window.api.command.export(), { errorTitle: '导出失败' })
+    const res = await call(window.api.command.export(), { errorTitle: tNow('cmd.error.export') })
     if (!res || res.canceled) return
     useToastStore.getState().push({
       kind: 'success',
-      title: `已导出 ${res.count} 条常用命令`,
+      title: tNow('cmd.toast.exportDone', { count: res.count }),
       detail: res.path
     })
   },
@@ -126,9 +127,9 @@ export const useCommandStore = create<CommandState>()((set, get) => ({
     const g = name.trim()
     if (!g) return false
     const exists =
-      get().commands.some((c) => (c.group || '默认') === g) || savedGroups().includes(g)
+      get().commands.some((c) => (c.group || tNow('cmd.defaultGroup')) === g) || savedGroups().includes(g)
     if (exists) {
-      useToastStore.getState().push({ kind: 'warning', title: `分组「${g}」已存在` })
+      useToastStore.getState().push({ kind: 'warning', title: tNow('cmd.toast.groupExists', { group: g }) })
       return false
     }
     await useSettingsStore.getState().update({ commandGroups: [...savedGroups(), g] })
@@ -140,7 +141,7 @@ export const useCommandStore = create<CommandState>()((set, get) => ({
     if (!g || g === oldName) return
     // 主进程一次读改写完成，避免逐条保存
     const moved = await call(window.api.command.renameGroup(oldName, g), {
-      errorTitle: '重命名分组失败'
+      errorTitle: tNow('cmd.error.renameGroup')
     })
     if (moved === null) return
     const groups = savedGroups()
@@ -166,7 +167,7 @@ export const useCommandStore = create<CommandState>()((set, get) => ({
 
   deleteGroup: async (group) => {
     const removed = await call(window.api.command.deleteGroup(group), {
-      errorTitle: '删除分组失败'
+      errorTitle: tNow('cmd.error.deleteGroup')
     })
     if (removed === null) return null
     if (savedGroups().includes(group)) {
@@ -232,7 +233,7 @@ export function groupCommands(
     const map = new Map<string, Command[]>()
     for (const c of commands) {
       if (!appliesTo(c, env)) continue
-      const key = c.group || '默认'
+      const key = c.group || tNow('cmd.defaultGroup')
       const list = map.get(key)
       if (list) list.push(c)
       else map.set(key, [c])
@@ -256,7 +257,7 @@ export function groupCommands(
 
   const map = new Map<string, Command[]>()
   for (const r of ranked) {
-    const key = r.command.group || '默认'
+    const key = r.command.group || tNow('cmd.defaultGroup')
     const list = map.get(key)
     if (list) list.push(r.command)
     else map.set(key, [r.command])
@@ -264,7 +265,7 @@ export function groupCommands(
   // 搜索态下组也按「组内最高分」排序：命中密集的分组排在前面
   const groupScore = new Map<string, number>()
   for (const r of ranked) {
-    const key = r.command.group || '默认'
+    const key = r.command.group || tNow('cmd.defaultGroup')
     groupScore.set(key, Math.max(groupScore.get(key) ?? 0, r.score))
   }
   return [...map.keys()]

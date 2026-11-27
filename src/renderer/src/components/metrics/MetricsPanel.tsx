@@ -1,6 +1,7 @@
 import type * as React from 'react'
 import { Gauge, PauseCircle, PlayCircle, Wifi, X } from 'lucide-react'
 import type { MetricsSample } from '@shared/types'
+import { useI18n } from '@/i18n'
 import { cn } from '@/lib/utils'
 import { useOverlayEscape } from '@/lib/overlayKeys'
 import { EmptyState } from '@/components/ui'
@@ -12,6 +13,7 @@ import { useSessionStore, useSshSessions } from '@/stores/sessionStore'
  * 采样在主进程侧进行（3s 一帧），这里只做滚动序列渲染（每会话最多 120 点）。
  */
 export function MetricsPanel(): React.JSX.Element | null {
+  const { t } = useI18n()
   const panelOpen = useMetricsStore((s) => s.panelOpen)
   const monitored = useMetricsStore((s) => s.monitored)
   const order = useMetricsStore((s) => s.order)
@@ -25,10 +27,10 @@ export function MetricsPanel(): React.JSX.Element | null {
     <div className="panel-shell fixed inset-x-0 z-30 flex flex-col bg-app">
       <div className="flex h-9 shrink-0 items-center gap-2 border-b border-edge bg-panel px-3">
         <Gauge size={14} className="text-accent" />
-        <span className="text-xs font-semibold">资源仪表盘</span>
-        <span className="text-2xs text-ink-3">每 3 秒一帧 · 多会话可同时监控</span>
+        <span className="text-xs font-semibold">{t('panel.metrics.title')}</span>
+        <span className="text-2xs text-ink-3">{t('panel.metrics.subtitle')}</span>
         <span className="flex-1" />
-        <button className="btn-icon" title="关闭 (Esc)" onClick={close}>
+        <button className="btn-icon" title={t('panel.metrics.closeEsc')} onClick={close}>
           <X size={14} />
         </button>
       </div>
@@ -39,8 +41,8 @@ export function MetricsPanel(): React.JSX.Element | null {
           {order.length === 0 ? (
             <EmptyState
               icon={<Gauge size={30} />}
-              title="还没有监控中的设备"
-              hint="在左侧为在线会话开启监控（默认已自动监控当前活动会话），即可看到 CPU / 内存 / 磁盘 / 温度 / 网络 的实时曲线"
+              title={t('panel.metrics.emptyTitle')}
+              hint={t('panel.metrics.emptyHint')}
             />
           ) : (
             <div className="space-y-3">
@@ -60,13 +62,14 @@ export function MetricsPanel(): React.JSX.Element | null {
  * ------------------------------------------------------------------ */
 
 function MonitorTargets(): React.JSX.Element {
+  const { t } = useI18n()
   const sessions = useSshSessions()
   const monitored = useMetricsStore((s) => s.monitored)
 
   return (
     <div className="flex rail-w shrink-0 flex-col border-r border-edge bg-panel">
       <div className="flex shrink-0 items-center gap-1.5 border-b border-edge-soft px-2.5 py-1.5">
-        <span className="text-2xs font-semibold text-ink-2">监控目标</span>
+        <span className="text-2xs font-semibold text-ink-2">{t('panel.metrics.targets')}</span>
         <span className="text-2xs text-ink-3">
           {Object.keys(monitored).length}/{sessions.filter((s) => s.status === 'connected').length}
         </span>
@@ -75,22 +78,21 @@ function MonitorTargets(): React.JSX.Element {
           className="text-2xs text-ink-3 transition-colors hover:text-ink"
           onClick={() => void useMetricsStore.getState().startAllConnected()}
         >
-          全部监控
+          {t('panel.metrics.startAll')}
         </button>
         <span className="text-2xs text-ink-3/50">|</span>
         <button
           className="text-2xs text-ink-3 transition-colors hover:text-ink"
           onClick={() => void useMetricsStore.getState().stopAll()}
         >
-          全部停止
+          {t('panel.metrics.stopAll')}
         </button>
       </div>
 
       <div className="scroll-thin min-h-0 flex-1 overflow-y-auto p-1.5">
         {sessions.length === 0 && (
           <div className="px-2 py-4 text-2xs leading-relaxed text-ink-3">
-            还没有可监控的会话。指标采集靠远端命令取数，只有 SSH 会话能监控；
-            串口会话是 Console 救急通道，不提供指标。
+            {t('panel.metrics.noSessions')}
           </div>
         )}
         {sessions.map((s) => {
@@ -130,7 +132,7 @@ function MonitorTargets(): React.JSX.Element {
                   isMonitored ? 'text-success' : 'text-ink-3'
                 )}
                 disabled={!selectable}
-                title={isMonitored ? '停止监控' : '开始监控'}
+                title={isMonitored ? t('panel.metrics.stopMonitor') : t('panel.metrics.startMonitor')}
                 onClick={() =>
                   isMonitored
                     ? void useMetricsStore.getState().stop(s.id)
@@ -145,7 +147,7 @@ function MonitorTargets(): React.JSX.Element {
       </div>
 
       <div className="shrink-0 border-t border-edge-soft px-2.5 py-1.5 text-3xs leading-relaxed text-ink-3">
-        一帧只执行一条轻量采样命令（读 /proc + df），对设备负担很小；连续 3 次失败会自动停止。
+        {t('panel.metrics.footerHint')}
       </div>
     </div>
   )
@@ -156,6 +158,7 @@ function MonitorTargets(): React.JSX.Element {
  * ------------------------------------------------------------------ */
 
 function SessionCard({ series }: { series?: SessionSeries }): React.JSX.Element | null {
+  const { t } = useI18n()
   const session = useSessionStore((s) => s.sessions.find((x) => x.id === series?.sessionId))
   if (!series) return null
 
@@ -185,11 +188,13 @@ function SessionCard({ series }: { series?: SessionSeries }): React.JSX.Element 
         </span>
         <span className="flex-1" />
         <span className="font-mono text-3xs text-ink-3">
-          {samples.length > 0 ? `已采样 ${samples.length} 帧` : '采样中…'}
+          {samples.length > 0
+            ? t('panel.metrics.sampledCount', { count: samples.length })
+            : t('panel.metrics.sampling')}
         </span>
         <button
           className="btn-icon h-5 w-5"
-          title="停止监控"
+          title={t('panel.metrics.stopMonitor')}
           onClick={() => void useMetricsStore.getState().stop(series.sessionId)}
         >
           <X size={11} />
@@ -198,15 +203,17 @@ function SessionCard({ series }: { series?: SessionSeries }): React.JSX.Element 
 
       <div className="grid grid-cols-2 gap-2 p-2.5 xl:grid-cols-3">
         <MetricTile
-          label="CPU 使用率"
+          label={t('panel.metrics.cpu')}
           value={last?.cpuPercent !== undefined ? `${last.cpuPercent.toFixed(1)}%` : '--'}
           accent={last?.cpuPercent !== undefined && last.cpuPercent > 85 ? 'danger' : 'accent'}
           series={[{ values: cpu, token: 'accent' }]}
           max={100}
-          hint={last?.load1 !== undefined ? `负载 ${last.load1}` : undefined}
+          hint={
+            last?.load1 !== undefined ? t('panel.metrics.loadHint', { load: last.load1 }) : undefined
+          }
         />
         <MetricTile
-          label="内存"
+          label={t('panel.metrics.memory')}
           value={last?.memPercent !== undefined ? `${last.memPercent.toFixed(1)}%` : '--'}
           accent={last?.memPercent !== undefined && last.memPercent > 90 ? 'danger' : 'success'}
           series={[{ values: mem, token: 'success' }]}
@@ -218,7 +225,7 @@ function SessionCard({ series }: { series?: SessionSeries }): React.JSX.Element 
           }
         />
         <MetricTile
-          label="根分区磁盘"
+          label={t('panel.metrics.disk')}
           value={last?.diskPercent !== undefined ? `${last.diskPercent.toFixed(1)}%` : '--'}
           accent={last?.diskPercent !== undefined && last.diskPercent > 90 ? 'danger' : 'warning'}
           series={[{ values: disk, token: 'warning' }]}
@@ -230,14 +237,14 @@ function SessionCard({ series }: { series?: SessionSeries }): React.JSX.Element 
           }
         />
         <MetricTile
-          label="温度"
+          label={t('panel.metrics.temp')}
           value={last?.tempC !== undefined ? `${last.tempC.toFixed(1)}℃` : '--'}
           accent={last?.tempC !== undefined && last.tempC > 75 ? 'danger' : 'warning'}
           series={[{ values: temp, token: 'warning' }]}
           hint={undefined}
         />
         <MetricTile
-          label="网络"
+          label={t('panel.metrics.network')}
           value={
             last?.netRxKbps !== undefined || last?.netTxKbps !== undefined
               ? `↓${fmtKbps(last?.netRxKbps)} · ↑${fmtKbps(last?.netTxKbps)}`
@@ -248,14 +255,14 @@ function SessionCard({ series }: { series?: SessionSeries }): React.JSX.Element 
             { values: rx, token: 'accent' },
             { values: tx, token: 'success' }
           ]}
-          hint="蓝=下行 · 绿=上行"
+          hint={t('panel.metrics.networkLegend')}
         />
         <MetricTile
-          label="系统负载"
+          label={t('panel.metrics.loadavg')}
           value={last?.load1 !== undefined ? String(last.load1) : '--'}
           accent="accent"
           series={[]}
-          hint="1 分钟平均（/proc/loadavg）"
+          hint={t('panel.metrics.loadavgHint')}
         />
       </div>
     </div>

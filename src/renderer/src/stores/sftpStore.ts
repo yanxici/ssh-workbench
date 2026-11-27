@@ -8,6 +8,7 @@ import type {
   TransferTask
 } from '@shared/types'
 import { call } from '@/lib/ipc'
+import { tNow } from '@/i18n/core'
 import { localDirname, localJoin, remoteDirname, remoteJoin } from '@/lib/utils'
 import { normalizeRemoteDir, rememberUploadDir, resolveUploadDir } from '@/lib/uploadDir'
 import { invalidateDir, loadDir, peekDir } from '@/lib/dirCache'
@@ -68,24 +69,27 @@ async function pickAndUpload(
   if (!target) {
     useToastStore.getState().push({
       kind: 'warning',
-      title: '没有可用的目标目录',
+      title: tNow('files.ui.toast.noTargetDir'),
       detail:
         kind === 'folder'
-          ? '请先进入远端的一个目录，再上传文件夹'
-          : '请先进入远端的一个目录，再上传文件'
+          ? tNow('files.ui.toast.enterDirUploadFolder')
+          : tNow('files.ui.toast.enterDirUploadFile')
     })
     return null
   }
   rememberUploadDir(sessionId, target)
 
-  const label = kind === 'folder' ? '上传文件夹' : '上传文件'
+  const label =
+    kind === 'folder'
+      ? tNow('files.ui.toast.uploadKindFolder')
+      : tNow('files.ui.toast.uploadKindFile')
   const res =
     kind === 'folder'
       ? await call(window.api.sftp.uploadFolderDialog(sessionId, target, true, force), {
-          errorTitle: `${label}失败`
+          errorTitle: tNow('files.ui.toast.uploadFailedWithKind', { kind: label })
         })
       : await call(window.api.sftp.uploadDialog(sessionId, target, force), {
-          errorTitle: `${label}失败`
+          errorTitle: tNow('files.ui.toast.uploadFailedWithKind', { kind: label })
         })
   if (!res || res.canceled) return null
 
@@ -95,9 +99,12 @@ async function pickAndUpload(
     kind: 'info',
     title:
       kind === 'folder'
-        ? `已加入 ${res.count} 个文件夹上传任务`
-        : `已加入 ${res.count} 个上传任务`,
-    detail: kind === 'folder' ? `目标：${target}（远端保留同名目录）` : `目标：${target}`
+        ? tNow('files.ui.toast.queuedFolderUploads', { count: res.count })
+        : tNow('files.ui.toast.queuedUploads', { count: res.count }),
+    detail:
+      kind === 'folder'
+        ? tNow('files.ui.toast.targetFolderDetail', { target })
+        : tNow('files.ui.toast.targetDetail', { target })
   })
   return { count: res.count, target }
 }
@@ -359,7 +366,7 @@ export const useSftpStore = create<SftpState>()((set, get) => ({
     }
 
     const remoteHome = await call(window.api.sftp.home(sessionId), {
-      errorTitle: '无法打开文件管理（请确认会话已连接）'
+      errorTitle: tNow('files.ui.err.openManager')
     })
     /*
      * 两次 await 期间用户完全可能又切到另一个会话（或关掉面板）。
@@ -379,7 +386,9 @@ export const useSftpStore = create<SftpState>()((set, get) => ({
 
   navLocal: async (dir) => {
     set({ localLoading: true })
-    const files = await call(window.api.local.list(dir), { errorTitle: '读取本地目录失败' })
+    const files = await call(window.api.local.list(dir), {
+      errorTitle: tNow('files.ui.err.readLocal')
+    })
     if (files) set({ localDir: dir, localFiles: files, localSel: [] })
     set({ localLoading: false })
   },
@@ -413,7 +422,7 @@ export const useSftpStore = create<SftpState>()((set, get) => ({
     const files = await loadDir(
       sessionId,
       dir,
-      () => call(window.api.sftp.list(sessionId, dir), { errorTitle: '读取远程目录失败' }),
+      () => call(window.api.sftp.list(sessionId, dir), { errorTitle: tNow('files.ui.err.readRemote') }),
       force
     )
     /*
@@ -477,15 +486,15 @@ export const useSftpStore = create<SftpState>()((set, get) => ({
     rememberUploadDir(sessionId, target)
     const ids = await call(
       window.api.sftp.upload(sessionId, localPaths, target, keepRoot ? { keepRoot: true } : undefined),
-      { errorTitle: '上传失败' }
+      { errorTitle: tNow('files.ui.err.upload') }
     )
     if (ids) {
       // 上传会改变目标目录内容：失效该目录并在完成后刷新，避免看到旧列表
       invalidateDir(sessionId, target)
       useToastStore.getState().push({
         kind: 'info',
-        title: `已加入 ${ids.length} 个上传任务`,
-        detail: `目标：${target}`
+        title: tNow('files.ui.toast.queuedUploads', { count: ids.length }),
+        detail: tNow('files.ui.toast.targetDetail', { target })
       })
     }
   },
@@ -508,13 +517,13 @@ export const useSftpStore = create<SftpState>()((set, get) => ({
     const target = localDir ?? get().localDir
     if (!sessionId || remotePaths.length === 0 || !target) return null
     const ids = await call(window.api.sftp.download(sessionId, remotePaths, target), {
-      errorTitle: '下载失败'
+      errorTitle: tNow('files.ui.err.download')
     })
     if (!ids) return null
     useToastStore.getState().push({
       kind: 'info',
-      title: `已加入 ${ids.length} 个下载任务`,
-      detail: `目标：${target}`
+      title: tNow('files.ui.toast.queuedDownloads', { count: ids.length }),
+      detail: tNow('files.ui.toast.targetDetail', { target })
     })
     return { count: ids.length, target }
   },
@@ -525,12 +534,12 @@ export const useSftpStore = create<SftpState>()((set, get) => ({
     // 没给就弹系统对话框，落点由用户临时决定
     if (localDir) return get().downloadPaths(sessionId, remotePaths, localDir)
     const res = await call(window.api.sftp.downloadDialog(sessionId, remotePaths), {
-      errorTitle: '下载失败'
+      errorTitle: tNow('files.ui.err.download')
     })
     if (!res || res.canceled) return null
     useToastStore.getState().push({
       kind: 'info',
-      title: `已加入 ${res.count} 个下载任务`
+      title: tNow('files.ui.toast.queuedDownloads', { count: res.count })
     })
     return { count: res.count, target: '' }
   },
@@ -627,7 +636,7 @@ export const useSftpStore = create<SftpState>()((set, get) => ({
      */
     if (done && !notifiedTasks.has(e.taskId)) {
       notifiedTasks.add(e.taskId)
-      const name = done.remotePath || done.localPath || '文件'
+      const name = done.remotePath || done.localPath || tNow('files.ui.toast.fileFallback')
       const base = name.split(/[\\/]/).pop() || name
       queueTransferNotify({
         sessionId: e.sessionId,
@@ -699,7 +708,7 @@ export const useSftpStore = create<SftpState>()((set, get) => ({
     const seq = get().openEditorSeq + 1
     set({ openEditorSeq: seq })
     const read = await call(window.api.sftp.readText(sessionId, path), {
-      errorTitle: '无法打开文件'
+      errorTitle: tNow('files.ui.err.openFile')
     })
     // 慢文件后到就把快文件盖掉了：只认最后一次点击
     if (get().openEditorSeq !== seq) return
@@ -716,13 +725,13 @@ export const useSftpStore = create<SftpState>()((set, get) => ({
     if (!sessionId || !editing) return false
     const done = await call(
       window.api.sftp.writeText(sessionId, editing.path, content, editing.encoding),
-      { errorTitle: '保存失败' }
+      { errorTitle: tNow('files.ui.err.save') }
     )
     if (done === null) return false
     useToastStore.getState().push({
       kind: 'success',
-      title: '已保存到远端',
-      detail: `原文件已自动备份为 ${editing.path}.bak`
+      title: tNow('files.ui.toast.savedRemote'),
+      detail: tNow('files.ui.toast.savedBackup', { path: editing.path })
     })
     if (opts?.close) {
       set({ editing: null })
@@ -747,12 +756,12 @@ export const useSftpStore = create<SftpState>()((set, get) => ({
     const sessionId = get().sessionId
     if (!sessionId) return
     const done = await call(window.api.sftp.remove(sessionId, path), {
-      errorTitle: '删除失败'
+      errorTitle: tNow('files.ui.err.delete')
     })
     if (done !== null) {
       // 写操作后必须让缓存失效，否则再进这个目录看到的是删除前的旧列表
       invalidateDir(sessionId, remoteDirname(path))
-      useToastStore.getState().push({ kind: 'success', title: '已删除' })
+      useToastStore.getState().push({ kind: 'success', title: tNow('files.ui.toast.deleted') })
       await get().refreshRemote()
     }
   },
@@ -761,7 +770,7 @@ export const useSftpStore = create<SftpState>()((set, get) => ({
     const { sessionId, remoteDir } = get()
     if (!sessionId) return
     const done = await call(window.api.sftp.mkdir(sessionId, remoteJoin(remoteDir, name)), {
-      errorTitle: '新建文件夹失败'
+      errorTitle: tNow('files.ui.err.mkdir')
     })
     if (done !== null) {
       invalidateDir(sessionId, remoteDir)
@@ -774,7 +783,7 @@ export const useSftpStore = create<SftpState>()((set, get) => ({
     if (!sessionId) return
     const done = await call(
       window.api.sftp.rename(sessionId, path, remoteJoin(remoteDirname(path), newName)),
-      { errorTitle: '重命名失败' }
+      { errorTitle: tNow('files.ui.err.rename') }
     )
     if (done !== null) {
       invalidateDir(sessionId, remoteDirname(path))
@@ -786,11 +795,13 @@ export const useSftpStore = create<SftpState>()((set, get) => ({
     const sessionId = get().sessionId
     if (!sessionId) return
     const done = await call(window.api.sftp.chmod(sessionId, path, mode), {
-      errorTitle: '修改权限失败'
+      errorTitle: tNow('files.ui.err.chmod')
     })
     if (done !== null) {
       invalidateDir(sessionId, remoteDirname(path))
-      useToastStore.getState().push({ kind: 'success', title: `权限已更新为 ${mode.toString(8)}` })
+      useToastStore
+        .getState()
+        .push({ kind: 'success', title: tNow('files.ui.chmodUpdated', { mode: mode.toString(8) }) })
       await get().refreshRemote()
     }
   },
@@ -798,9 +809,11 @@ export const useSftpStore = create<SftpState>()((set, get) => ({
   /* ---------------- 本地操作 ---------------- */
 
   removeLocal: async (path) => {
-    const done = await call(window.api.local.remove([path]), { errorTitle: '删除失败' })
+    const done = await call(window.api.local.remove([path]), {
+      errorTitle: tNow('files.ui.err.delete')
+    })
     if (done !== null) {
-      useToastStore.getState().push({ kind: 'success', title: '本地文件已删除' })
+      useToastStore.getState().push({ kind: 'success', title: tNow('files.ui.toast.deletedLocal') })
       await get().refreshLocal()
     }
   },
@@ -809,14 +822,14 @@ export const useSftpStore = create<SftpState>()((set, get) => ({
     const { localDir } = get()
     if (!localDir) return
     const done = await call(window.api.local.mkdir(localDir, name), {
-      errorTitle: '新建文件夹失败'
+      errorTitle: tNow('files.ui.err.mkdir')
     })
     if (done !== null) await get().refreshLocal()
   },
 
   renameLocal: async (path, newName) => {
     const done = await call(window.api.local.rename(path, localJoin(localDirname(path), newName)), {
-      errorTitle: '重命名失败'
+      errorTitle: tNow('files.ui.err.rename')
     })
     if (done !== null) await get().refreshLocal()
   }

@@ -16,6 +16,7 @@
  */
 
 import type { LayoutSizes } from '@shared/types'
+import { tNow } from '../i18n/core'
 
 export type PaneKey = 'sidebar' | 'commandRail'
 
@@ -57,8 +58,8 @@ export const KEYS: PaneKey[] = ['sidebar', 'commandRail']
 
 /** 区域的中文名（分隔条 aria-label、设置面板共用） */
 export const PANE_LABEL: Record<PaneKey, string> = {
-  sidebar: '侧边栏',
-  commandRail: '命令栏'
+  sidebar: tNow('common.layout.paneSidebar'),
+  commandRail: tNow('common.layout.paneCommandRail')
 }
 
 /** 把任意输入夹到该栏的合法区间；非数字/NaN 回退默认值 */

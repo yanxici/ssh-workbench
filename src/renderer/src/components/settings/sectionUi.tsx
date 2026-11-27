@@ -2,6 +2,7 @@ import type * as React from 'react'
 import { useState, type ReactNode } from 'react'
 import { ChevronRight } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { useI18n } from '@/i18n'
 
 /**
  * 设置面板的 UI 地基：可折叠分组 / 一行设置 / 分段控件。
@@ -46,6 +47,7 @@ export function Section({
   defaultOpen?: boolean
   children: ReactNode
 }): React.JSX.Element {
+  const { t } = useI18n()
   const [open, setOpen] = useState(() => readOpenSections()[id] ?? defaultOpen)
 
   const toggle = (): void => {
@@ -60,9 +62,11 @@ export function Section({
       <button
         className="flex w-full cursor-default items-center gap-1.5 px-2.5 py-1.5 text-left transition-colors hover:bg-hover/50"
         onClick={toggle}
-        title={open ? '收起该分组' : '展开该分组'}
+        title={open ? t('settings.ext.section.collapse') : t('settings.ext.section.expand')}
       >
-        {/* 同一个图标旋转：两个图标互切没有中间态，展开/收起看起来是跳变 */}
+        {/*
+          * 折叠箭头与连接分组用同一条通道：同图标旋转，不互切
+          */}
         <ChevronRight size={12} className={cn('chev-rot shrink-0 text-ink-3', open && 'rotate-90')} />
         <span className="text-2xs font-semibold uppercase tracking-wider text-ink-2">{title}</span>
         {hint && <span className="ml-1 truncate text-2xs text-ink-3/80">{hint}</span>}
@@ -115,7 +119,9 @@ export function Row({
         <div className="text-xs text-ink-2">{label}</div>
         {hint && <div className="mt-0.5 text-2xs leading-snug text-ink-3">{hint}</div>}
       </div>
-      {/* 控件区固定宽度、允许换行压缩：开关不再被右侧裁切 */}
+      {/*
+        * 控件区固定宽度、允许换行压缩：开关不再被右侧裁切
+        */}
       <div className="flex shrink-0 flex-wrap items-center justify-end gap-1">{children}</div>
     </div>
   )

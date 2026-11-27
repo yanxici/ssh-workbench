@@ -93,7 +93,9 @@ export function PasteConfirmDialog({
         </>
       }
     >
-      {/* stopPropagation：弹窗里的按键不进终端，也不触发全局快捷键 */}
+      {
+        /* stopPropagation：弹窗里的按键不进终端，也不触发全局快捷键 */
+      }
       <div className="space-y-2.5" onKeyDown={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between text-2xs text-ink-3">
           <span>{t('terminal.paste.target', { target })}</span>

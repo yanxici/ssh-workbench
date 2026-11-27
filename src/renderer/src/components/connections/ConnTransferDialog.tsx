@@ -12,6 +12,8 @@ import { isImeComposing } from '@/lib/ime'
 import type { ExternalImportPreview, ExternalImportSource } from '@shared/types'
 import { useI18n, type I18nKey } from '@/i18n'
 
+const DEFAULT_GROUP = '\u9ed8\u8ba4'
+
 /**
  * 连接导出 / 导入：导出文件发给同事，对方导入后直接可用
  * （密码在对方机器上重新加密保存，私钥写入对方数据目录并改写路径）。
@@ -33,6 +35,7 @@ export function ConnTransferDialog({
  * ------------------------------------------------------------------ */
 
 function ExportDialog({ onClose }: { onClose: () => void }): React.JSX.Element {
+  const { t } = useI18n()
   const connections = useConnectionStore((s) => s.connections)
   // 空分组也要能选：用户可能刚建好分组就想把别的组导进去
   const savedGroups = useSettingsStore((s) => s.settings.connectionGroups)
@@ -61,9 +64,9 @@ function ExportDialog({ onClose }: { onClose: () => void }): React.JSX.Element {
     })
 
   const error = ((): string | null => {
-    if (count === 0) return '请至少选择一个分组'
-    if (usePass && pass.length < 4) return '口令至少 4 位'
-    if (usePass && pass !== pass2) return '两次输入的口令不一致'
+    if (count === 0) return t('conn.ui.export.errSelectGroup')
+    if (usePass && pass.length < 4) return t('conn.ui.export.errPassLength')
+    if (usePass && pass !== pass2) return t('conn.ui.export.errPassMismatch')
     return null
   })()
 
@@ -76,19 +79,22 @@ function ExportDialog({ onClose }: { onClose: () => void }): React.JSX.Element {
         includeSecrets,
         passphrase: usePass ? pass : undefined
       }),
-      { errorTitle: '导出失败' }
+      { errorTitle: t('conn.ui.export.failed') }
     )
     setBusy(false)
     if (!res || res.canceled) return
 
     const warns: string[] = []
-    if (res.noPassword > 0) warns.push(`${res.noPassword} 条密码连接本机没有可用密码`)
-    if (res.missingKeys > 0) warns.push(`${res.missingKeys} 条私钥连接找不到私钥文件`)
-    if (res.droppedJumps > 0) warns.push(`${res.droppedJumps} 个跳板机不在导出范围内，已去掉`)
+    if (res.noPassword > 0) warns.push(t('conn.ui.export.warnNoPassword', { count: res.noPassword }))
+    if (res.missingKeys > 0) warns.push(t('conn.ui.export.warnMissingKeys', { count: res.missingKeys }))
+    if (res.droppedJumps > 0) warns.push(t('conn.ui.export.warnDroppedJumps', { count: res.droppedJumps }))
     useToastStore.getState().push({
       kind: warns.length > 0 ? 'warning' : 'success',
-      title: `已导出 ${res.count} 条连接${includeSecrets ? `，私钥 ${res.keyCount} 个` : ''}`,
-      detail: [res.path, ...warns].join('；')
+      title: t('conn.ui.export.done', {
+        count: res.count,
+        keySuffix: includeSecrets ? t('conn.ui.export.doneKeySuffix', { count: res.keyCount }) : ''
+      }),
+      detail: [res.path, ...warns].join(t('conn.ui.listSep'))
     })
     onClose()
   }
@@ -96,33 +102,33 @@ function ExportDialog({ onClose }: { onClose: () => void }): React.JSX.Element {
   return (
     <Modal
       open
-      title="导出连接"
+      title={t('conn.ui.export.title')}
       onClose={onClose}
       width="max-w-lg"
       footer={
         <>
           {error && <span className="mr-auto text-2xs text-warning">{error}</span>}
           <button className="btn" onClick={onClose}>
-            取消
+            {t('conn.ui.cancel')}
           </button>
           <button className="btn btn-primary" disabled={busy || Boolean(error)} onClick={() => void submit()}>
             {busy ? <Loader2 size={13} className="animate-spin" /> : <FileDown size={13} />}
-            导出 {count} 条
+            {t('conn.ui.export.submit', { count })}
           </button>
         </>
       }
     >
       <div className="space-y-4">
-        <Field label="导出范围" hint={`共 ${groups.length} 个分组`}>
+        <Field label={t('conn.ui.export.scope')} hint={t('conn.ui.export.scopeHint', { count: groups.length })}>
           <div className="mb-1.5 flex gap-3 text-2xs">
             <button
               className="text-accent hover:underline"
               onClick={() => setSelected(new Set(groups.map((g) => g.group)))}
             >
-              全选
+              {t('conn.ui.selectAll')}
             </button>
             <button className="text-accent hover:underline" onClick={() => setSelected(new Set())}>
-              全不选
+              {t('conn.ui.selectNone')}
             </button>
           </div>
           <div className="scroll-thin max-h-48 overflow-y-auto rounded-md border border-edge-soft bg-app p-1.5">
@@ -137,7 +143,9 @@ function ExportDialog({ onClose }: { onClose: () => void }): React.JSX.Element {
                   checked={selected.has(g.group)}
                   onChange={() => toggle(g.group)}
                 />
-                <span className="min-w-0 flex-1 truncate">{g.group}</span>
+                <span className="min-w-0 flex-1 truncate">
+                  {g.group === DEFAULT_GROUP ? t('conn.ui.defaultGroup') : g.group}
+                </span>
                 <span className="text-2xs text-ink-3">{g.items.length}</span>
               </label>
             ))}
@@ -146,9 +154,9 @@ function ExportDialog({ onClose }: { onClose: () => void }): React.JSX.Element {
 
         <div className="flex items-start justify-between gap-3">
           <div>
-            <div className="text-xs text-ink">带上密码和私钥</div>
+            <div className="text-xs text-ink">{t('conn.ui.export.includeSecrets')}</div>
             <div className="mt-0.5 text-2xs leading-relaxed text-ink-3">
-              对方导入后直接能登录。关闭则只导出连接信息，对方需自己补密码。
+              {t('conn.ui.export.includeSecretsHint')}
             </div>
           </div>
           <Toggle checked={includeSecrets} onChange={setIncludeSecrets} />
@@ -157,9 +165,9 @@ function ExportDialog({ onClose }: { onClose: () => void }): React.JSX.Element {
         <div>
           <div className="flex items-start justify-between gap-3">
             <div>
-              <div className="text-xs text-ink">设置口令加密文件</div>
+              <div className="text-xs text-ink">{t('conn.ui.export.usePass')}</div>
               <div className="mt-0.5 text-2xs leading-relaxed text-ink-3">
-                导入时需要输入这个口令。口令忘了文件就打不开。
+                {t('conn.ui.export.usePassHint')}
               </div>
             </div>
             <Toggle checked={usePass} onChange={setUsePass} />
@@ -169,7 +177,7 @@ function ExportDialog({ onClose }: { onClose: () => void }): React.JSX.Element {
               <input
                 className="input selectable"
                 type="password"
-                placeholder="口令（至少 4 位）"
+                placeholder={t('conn.ui.export.passPlaceholder')}
                 value={pass}
                 onChange={(e) => setPass(e.target.value)}
                 autoFocus
@@ -177,7 +185,7 @@ function ExportDialog({ onClose }: { onClose: () => void }): React.JSX.Element {
               <input
                 className="input selectable"
                 type="password"
-                placeholder="再输入一次"
+                placeholder={t('conn.ui.export.passConfirmPlaceholder')}
                 value={pass2}
                 onChange={(e) => setPass2(e.target.value)}
               />
@@ -188,7 +196,7 @@ function ExportDialog({ onClose }: { onClose: () => void }): React.JSX.Element {
         {includeSecrets && !usePass && (
           <div className="flex gap-2 rounded-md border border-warning/30 bg-warning/5 px-3 py-2 text-2xs leading-relaxed text-warning">
             <AlertTriangle size={13} className="mt-px shrink-0" />
-            文件里是明文密码和私钥，拿到文件的人可以登录这些设备。建议设置口令，或只通过可信渠道发送。
+            {t('conn.ui.export.plaintextWarning')}
           </div>
         )}
       </div>
@@ -223,7 +231,9 @@ function ImportDialog({ onClose }: { onClose: () => void }): React.JSX.Element {
    * 取消选择等于关掉整个弹窗，根本走不到外部导入那一页。
    */
   const pickBackupFile = async (): Promise<void> => {
-    const res = await call(window.api.conn.importPick(), { errorTitle: '无法读取文件' })
+    const res = await call(window.api.conn.importPick(), {
+      errorTitle: t('conn.ui.import.readFailed')
+    })
     if (!res || res.canceled || !res.path) return
     setFile({ path: res.path, encrypted: Boolean(res.encrypted) })
     if (!res.encrypted) void loadPreview(res.path)
@@ -237,7 +247,9 @@ function ImportDialog({ onClose }: { onClose: () => void }): React.JSX.Element {
     if (res.ok) setPreview(res.data)
     else if (passphrase !== undefined) setPassError(res.error)
     else {
-      useToastStore.getState().push({ kind: 'error', title: '无法读取文件', detail: res.error })
+      useToastStore
+        .getState()
+        .push({ kind: 'error', title: t('conn.ui.import.readFailed'), detail: res.error })
       onClose()
     }
   }
@@ -247,31 +259,33 @@ function ImportDialog({ onClose }: { onClose: () => void }): React.JSX.Element {
     setBusy(true)
     const res = await call(
       window.api.conn.importApply(file.path, file.encrypted ? pass : undefined, mode),
-      { errorTitle: '导入失败' }
+      { errorTitle: t('conn.ui.import.failed') }
     )
     setBusy(false)
     if (!res) return
     await load()
-    const parts = [`新增 ${res.added}`]
-    if (res.updated > 0) parts.push(`覆盖 ${res.updated}`)
-    if (res.skipped > 0) parts.push(`跳过重复 ${res.skipped}`)
-    if (res.invalid > 0) parts.push(`格式不对忽略 ${res.invalid}`)
+    const parts = [t('conn.ui.import.partAdded', { count: res.added })]
+    if (res.updated > 0) parts.push(t('conn.ui.import.partUpdated', { count: res.updated }))
+    if (res.skipped > 0) parts.push(t('conn.ui.import.partSkipped', { count: res.skipped }))
+    if (res.invalid > 0) parts.push(t('conn.ui.import.partInvalid', { count: res.invalid }))
     const details: string[] = []
-    if (res.keysWritten > 0) details.push(`已保存 ${res.keysWritten} 个私钥文件`)
+    if (res.keysWritten > 0) {
+      details.push(t('conn.ui.import.detailKeysWritten', { count: res.keysWritten }))
+    }
     if (res.invalidKeys > 0) {
-      details.push(`${res.invalidKeys} 个私钥文件格式无法识别，已跳过（相关连接需重新选私钥）`)
+      details.push(t('conn.ui.import.detailInvalidKeys', { count: res.invalidKeys }))
     }
     /*
      * 端口待确认要在导入完成的提示里说清楚：用户以为导入完就能连，
      * 结果点开发现连不上（本机没有那个 COM 号），会以为是导入坏了。
      */
     if (res.pendingPorts > 0) {
-      details.push(`${res.pendingPorts} 条串口连接的端口需要重新选择（对方机器上的 COM 号在本机不适用）`)
+      details.push(t('conn.ui.import.detailPendingPorts', { count: res.pendingPorts }))
     }
     useToastStore.getState().push({
       kind: res.pendingPorts > 0 ? 'warning' : 'success',
-      title: `导入完成：${parts.join('，')}`,
-      detail: details.length > 0 ? details.join('；') : undefined
+      title: t('conn.ui.import.done', { summary: parts.join(t('conn.ui.commaSep')) }),
+      detail: details.length > 0 ? details.join(t('conn.ui.listSep')) : undefined
     })
     onClose()
   }
@@ -325,13 +339,13 @@ function ImportDialog({ onClose }: { onClose: () => void }): React.JSX.Element {
   return (
     <Modal
       open
-      title="导入连接"
+      title={t('conn.ui.import.title')}
       onClose={onClose}
       width="max-w-lg"
       footer={
         <>
           <button className="btn" onClick={onClose}>
-            取消
+            {t('conn.ui.cancel')}
           </button>
           {page === 'backup' ? (
             needPass ? (
@@ -341,7 +355,7 @@ function ImportDialog({ onClose }: { onClose: () => void }): React.JSX.Element {
                 onClick={() => void loadPreview(file?.path ?? '', pass)}
               >
                 {busy && <Loader2 size={13} className="animate-spin" />}
-                解锁
+                {t('conn.ui.import.unlock')}
               </button>
             ) : (
               <button
@@ -350,7 +364,7 @@ function ImportDialog({ onClose }: { onClose: () => void }): React.JSX.Element {
                 onClick={() => void apply()}
               >
                 {busy ? <Loader2 size={13} className="animate-spin" /> : <FileUp size={13} />}
-                导入
+                {t('conn.ui.import.submit')}
               </button>
             )
           ) : (
@@ -408,7 +422,7 @@ function ImportDialog({ onClose }: { onClose: () => void }): React.JSX.Element {
             )}
 
         {needPass && (
-          <Field label="文件口令" hint="导出时设置的口令">
+          <Field label={t('conn.ui.import.filePass')} hint={t('conn.ui.import.filePassHint')}>
             <input
               className="input selectable"
               type="password"
@@ -432,36 +446,39 @@ function ImportDialog({ onClose }: { onClose: () => void }): React.JSX.Element {
         {file && !needPass && !preview && (
           <div className="flex items-center gap-2 text-xs text-ink-3">
             <Loader2 size={13} className="animate-spin" />
-            正在读取…
+            {t('conn.ui.import.reading')}
           </div>
         )}
 
         {preview && (
           <>
             <div className="grid grid-cols-3 gap-2 text-center">
-              <Stat label="连接" value={preview.count} />
-              <Stat label="带凭据" value={preview.withSecrets} />
-              <Stat label="私钥文件" value={preview.keyCount} />
+              <Stat label={t('conn.ui.import.statConnections')} value={preview.count} />
+              <Stat label={t('conn.ui.import.statSecrets')} value={preview.withSecrets} />
+              <Stat label={t('conn.ui.import.statKeys')} value={preview.keyCount} />
             </div>
 
             {preview.serialCount > 0 && (
               <div className="text-2xs leading-relaxed text-ink-3">
-                其中 {preview.serialCount} 条是串口连接。
+                {t('conn.ui.import.serialSummary', { count: preview.serialCount })}
                 {preview.pendingPorts > 0
-                  ? ` 有 ${preview.pendingPorts} 条的端口在本机找不到，导入后需要重新选择端口才能连接。`
-                  : ' 端口已按 USB 身份对上，导入后可直接使用。'}
+                  ? t('conn.ui.import.serialPending', { count: preview.pendingPorts })
+                  : t('conn.ui.import.serialMatched')}
               </div>
             )}
 
-            <GroupList label="包含分组" groups={preview.groups} />
+            <GroupList label={t('conn.ui.import.groupsLabel')} groups={preview.groups} />
 
             {preview.duplicates > 0 && (
-              <Field label="重复连接" hint={`${preview.duplicates} 条与本机已有连接相同（名称、地址、端口、用户名都一样）`}>
+              <Field
+                label={t('conn.extImport.duplicatesLabel')}
+                hint={t('conn.extImport.duplicates', { count: preview.duplicates })}
+              >
                 <div className="flex gap-2">
                   {(
                     [
-                      ['skip', '跳过，保留本机的'],
-                      ['overwrite', '用文件里的覆盖']
+                      ['skip', t('conn.extImport.duplicatesSkip')],
+                      ['overwrite', t('conn.ui.import.duplicatesOverwrite')]
                     ] as const
                   ).map(([v, label]) => (
                     <button
@@ -483,7 +500,9 @@ function ImportDialog({ onClose }: { onClose: () => void }): React.JSX.Element {
             )}
 
             {preview.invalid > 0 && (
-              <div className="text-2xs text-warning">{preview.invalid} 条格式不对，会被忽略。</div>
+              <div className="text-2xs text-warning">
+                {t('conn.ui.import.invalidIgnored', { count: preview.invalid })}
+              </div>
             )}
           </>
         )}
@@ -594,12 +613,15 @@ function GroupList({
   label: string
   groups: Array<{ name: string; count: number }>
 }): React.JSX.Element {
+  const { t } = useI18n()
   return (
     <Field label={label} hint={String(groups.length)}>
       <div className="scroll-thin max-h-32 overflow-y-auto rounded-md border border-edge-soft bg-app px-2.5 py-1.5 text-xs text-ink-2">
         {groups.map((g) => (
           <div key={g.name} className="flex justify-between py-0.5">
-            <span className="truncate">{g.name}</span>
+            <span className="truncate">
+              {g.name === DEFAULT_GROUP ? t('conn.ui.defaultGroup') : g.name}
+            </span>
             <span className="text-2xs text-ink-3">{g.count}</span>
           </div>
         ))}

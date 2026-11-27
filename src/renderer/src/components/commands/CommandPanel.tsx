@@ -49,6 +49,9 @@ import {
   type MenuEntry
 } from '@/components/ui'
 import { isImeComposing } from '@/lib/ime'
+import { translate, useI18n } from '@/i18n'
+
+const EMPTY_IDS: string[] = []
 
 /**
  * 常用命令面板（侧栏 / 底栏两种排布）：
@@ -58,30 +61,6 @@ import { isImeComposing } from '@/lib/ime'
  * - 组内拖拽排序、分组拖拽换序、右键菜单保留原有全部动作
  * - 想要更大的检索界面按 Ctrl+K 打开命令中心
  */
-
-const SORT_LABEL: Record<SortMode, string> = {
-  smart: '智能',
-  recent: '最近',
-  frequent: '常用',
-  name: '名称'
-}
-
-/**
- * 命令墙的列数与色条规则收在 lib/commandWall.ts（纯函数，可单测）。
- *
- * 历史结论「写死 3 列保空间记忆」的前提是用户从不拖宽度；实际命令栏被拖到过
- * 340 下限，写死 3 列只会让每张卡缩到 60px、名字全变省略号。现在按容器宽度
- * 在 3 / 4 / 5 列之间切换，键盘 ↑↓ 的步长同步取实际列数。
- */
-
-/**
- * 空数组哨兵（模块级常量）。
- *
- * 不能写成 hook 里的 `?? []`：那样每次渲染都会分配一个新数组，
- * 作为 useMemo 依赖时永远不相等 —— 记忆化等于没有，且会在每次 render 重算。
- * 这个问题是 ESLint 的 react-hooks/exhaustive-deps 抓出来的。
- */
-const EMPTY_IDS: string[] = []
 
 export function CommandPanel({
   onEdit,
@@ -95,6 +74,13 @@ export function CommandPanel({
   /** 头部「折叠」按钮回调；不传则不显示该按钮 */
   onCollapse?: () => void
 }): React.JSX.Element {
+  const { lang, t } = useI18n()
+  const sortLabel: Record<SortMode, string> = {
+    smart: t('cmd.sort.smart'),
+    recent: t('cmd.sort.recent'),
+    frequent: t('cmd.sort.frequent'),
+    name: t('cmd.sort.name')
+  }
   const horizontal = layout === 'horizontal'
   const commands = useCommandStore((s) => s.commands)
   const keyword = useCommandStore((s) => s.keyword)
@@ -192,9 +178,10 @@ export function CommandPanel({
     if (!filtered)
       return groupCommands(commands, keyword, extraGroups ?? [], groupOrder ?? [], env)
 
+    const defaultGroup = translate('cmd.defaultGroup', lang)
     const map = new Map<string, Command[]>()
     for (const r of ranked) {
-      const key = r.command.group || '默认'
+      const key = r.command.group || defaultGroup
       const list = map.get(key)
       if (list) list.push(r.command)
       else map.set(key, [r.command])
@@ -202,13 +189,13 @@ export function CommandPanel({
     // 搜索态下高亮分区也有意义：命中密集的组排前面
     const score = new Map<string, number>()
     for (const r of ranked) {
-      const key = r.command.group || '默认'
+      const key = r.command.group || defaultGroup
       score.set(key, Math.max(score.get(key) ?? 0, r.score))
     }
     return [...map.keys()]
       .sort((a, b) => (score.get(b) ?? 0) - (score.get(a) ?? 0))
       .map((group) => ({ group, items: map.get(group) ?? [] }))
-  }, [filtered, commands, keyword, extraGroups, groupOrder, ranked, env])
+  }, [filtered, commands, keyword, extraGroups, groupOrder, ranked, env, lang])
 
   /** 扁平化的结果顺序，用于键盘 ↑↓ 导航 */
   const flat = useMemo(
@@ -251,31 +238,31 @@ export function CommandPanel({
     const last = allGroupNames.length - 1
     return [
       {
-        label: '移到最前',
+        label: t('cmd.panel.groupMoveTop'),
         icon: <ArrowUpToLine size={12} />,
         disabled: idx <= 0,
         onClick: () => moveGroupTo(group, 0)
       },
       {
-        label: '上移',
+        label: t('cmd.panel.groupMoveUp'),
         icon: <ArrowUp size={12} />,
         disabled: idx <= 0,
         onClick: () => moveGroupTo(group, idx - 1)
       },
       {
-        label: '下移',
+        label: t('cmd.panel.groupMoveDown'),
         icon: <ArrowDown size={12} />,
         disabled: idx < 0 || idx >= last,
         onClick: () => moveGroupTo(group, idx + 1)
       },
       {
-        label: '移到最后',
+        label: t('cmd.panel.groupMoveBottom'),
         icon: <ArrowDownToLine size={12} />,
         disabled: idx < 0 || idx >= last,
         onClick: () => moveGroupTo(group, last)
       },
       {
-        label: '只看这个分组',
+        label: t('cmd.panel.groupFilterOnly'),
         icon: <Search size={12} />,
         separatorBefore: true,
         onClick: () => {
@@ -284,13 +271,13 @@ export function CommandPanel({
         }
       },
       {
-        label: '在此分组新建命令',
+        label: t('cmd.panel.groupNewCmd'),
         icon: <Plus size={12} />,
         onClick: () => onEdit(null, group)
       },
-      { label: '重命名分组', icon: <Pencil size={12} />, onClick: () => setRenamingGroup(group) },
+      { label: t('cmd.panel.groupRename'), icon: <Pencil size={12} />, onClick: () => setRenamingGroup(group) },
       {
-        label: '删除分组',
+        label: t('cmd.panel.groupDelete'),
         icon: <Trash2 size={12} />,
         danger: true,
         separatorBefore: true,
@@ -328,7 +315,7 @@ export function CommandPanel({
 
   const handleNewGroup = (name: string): void => {
     void createGroup(name).then((ok) => {
-      if (ok) useToastStore.getState().push({ kind: 'success', title: `已新建分组「${name.trim()}」` })
+      if (ok) useToastStore.getState().push({ kind: 'success', title: t('cmd.panel.groupCreated', { name: name.trim() }) })
     })
   }
 
@@ -368,26 +355,26 @@ export function CommandPanel({
    */
   const emptyTitle =
     commands.length === 0
-      ? '还没有常用命令'
+      ? t('cmd.panel.emptyLibrary')
       : visibleCount === 0 && !searching
-        ? '当前环境下没有可用命令'
-        : '没有匹配的命令'
+        ? t('cmd.panel.emptyEnv')
+        : t('cmd.panel.emptySearch')
   const emptyHint =
     commands.length === 0
-      ? '点右上角 + 新建一条；也可以按 Ctrl+K 打开命令中心'
+      ? t('cmd.panel.emptyLibraryHint')
       : visibleCount === 0 && !searching
-        ? '这个会话的连接类型过滤掉了全部命令；其余命令标记为仅 SSH 适用'
-        : '换个关键字，或按 Ctrl+K 在命令中心里全局检索'
+        ? t('cmd.panel.emptyEnvHint')
+        : t('cmd.panel.emptySearchHint')
   const emptyHintShort =
     commands.length === 0
-      ? '点右上角 + 新建一条'
+      ? t('cmd.panel.emptyLibraryShort')
       : visibleCount === 0 && !searching
-        ? '其余命令仅适用于 SSH 会话'
-        : '换个关键字试试'
+        ? t('cmd.panel.emptyEnvShort')
+        : t('cmd.panel.emptySearchShort')
 
   const duplicate = async (c: Command): Promise<void> => {
     await save({
-      name: `${c.name} 副本`,
+      name: t('cmd.panel.copySuffix', { name: c.name }),
       command: c.command,
       description: c.description,
       group: c.group,
@@ -402,21 +389,21 @@ export function CommandPanel({
   const menuItems = (c: Command): MenuEntry[] => {
     const pinned = pinnedIds.includes(c.id)
     return [
-      { label: '执行', icon: <Play size={12} />, onClick: () => runCommand(c) },
-      { label: '编辑', icon: <Pencil size={12} />, onClick: () => onEdit(c) },
+      { label: t('cmd.action.run'), icon: <Play size={12} />, onClick: () => runCommand(c) },
+      { label: t('cmd.action.edit'), icon: <Pencil size={12} />, onClick: () => onEdit(c) },
       {
-        label: pinned ? '取消收藏' : '收藏置顶',
+        label: pinned ? t('cmd.card.unpin') : t('cmd.card.pin'),
         icon: <Pin size={12} />,
         onClick: () => void togglePin(c.id)
       },
-      { label: '复制一条', icon: <Copy size={12} />, onClick: () => void duplicate(c) },
+      { label: t('cmd.panel.duplicate'), icon: <Copy size={12} />, onClick: () => void duplicate(c) },
       {
-        label: '在命令中心中查找',
+        label: t('cmd.panel.findInCenter'),
         icon: <Search size={12} />,
         onClick: () => openCommandCenter(c.name)
       },
       {
-        label: '删除',
+        label: t('cmd.action.delete'),
         icon: <Trash2 size={12} />,
         danger: true,
         separatorBefore: true,
@@ -456,43 +443,45 @@ export function CommandPanel({
   }
 
   const scopes: Array<{ scope: Scope; label: string; icon: React.JSX.Element }> = [
-    { scope: { kind: 'all' }, label: '全部', icon: <Braces size={10} /> },
-    { scope: { kind: 'pinned' }, label: '收藏', icon: <Star size={10} /> },
-    { scope: { kind: 'recent' }, label: '最近', icon: <Clock3 size={10} /> }
+    { scope: { kind: 'all' }, label: t('cmd.panel.scopeAll'), icon: <Braces size={10} /> },
+    { scope: { kind: 'pinned' }, label: t('cmd.panel.scopePinned'), icon: <Star size={10} /> },
+    { scope: { kind: 'recent' }, label: t('cmd.panel.scopeRecent'), icon: <Clock3 size={10} /> }
   ]
 
   return (
     <div className="flex h-full flex-col" onKeyDown={onKeyDown} data-testid="command-panel">
-      {/* ---------- 头部：标题 + 常用操作 ----------
-          命令栏现在常驻在窗口右侧（默认 380px），比原来的 280px 侧栏宽，
-          并且不再和连接/文件面板抢位置。头部只留「搜索 / 新建 / 更多 / 收起」
-          四个高频动作，导入导出之类的低频操作收进 ⋯ 菜单 —— 宽度够了也不该
-          把头部塞成一排难点的方阵。 */}
+      {/*
+       * ---------- 头部：标题 + 常用操作 ----------
+       * 命令栏现在常驻在窗口右侧（默认 380px），比原来的 280px 侧栏宽，
+       * 并且不再和连接/文件面板抢位置。头部只留「搜索 / 新建 / 更多 / 收起」
+       * 四个高频动作，导入导出之类的低频操作收进 ⋯ 菜单 —— 宽度够了也不该
+       * 把头部塞成一排难点的方阵。
+       */}
       <div className="panel-head">
         <Play size={13} className="shrink-0 text-ink-3" />
-        <span className="panel-title">常用命令</span>
+        <span className="panel-title">{t('cmd.panel.title')}</span>
         <span className="panel-count">{visibleCount}</span>
         <span className="flex-1" />
         <button
           className="btn-icon h-6 w-6"
-          title="搜索全部命令 (Ctrl+K)"
-          aria-label="打开命令中心"
+          title={t('cmd.panel.searchAllTitle')}
+          aria-label={t('cmd.panel.openCenter')}
           onClick={() => openCommandCenter(keyword)}
         >
           <Search size={13} />
         </button>
         <button
           className="btn-icon h-6 w-6"
-          title="新建命令"
-          aria-label="新建命令"
+          title={t('cmd.center.newCommand')}
+          aria-label={t('cmd.center.newCommand')}
           onClick={() => onEdit(null)}
         >
           <Plus size={14} />
         </button>
         <button
           className="btn-icon h-6 w-6"
-          title="更多操作"
-          aria-label="更多操作"
+          title={t('cmd.panel.moreActions')}
+          aria-label={t('cmd.panel.moreActions')}
           onClick={(e) => moreMenu.openMenu(e, 'more')}
         >
           <MoreHorizontal size={14} />
@@ -500,8 +489,8 @@ export function CommandPanel({
         {onCollapse && (
           <button
             className="btn-icon h-6 w-6"
-            title="收起命令栏 (Ctrl+Alt+B)"
-            aria-label="收起命令栏"
+            title={t('cmd.panel.collapse')}
+            aria-label={t('cmd.panel.collapseAria')}
             onClick={onCollapse}
           >
             {horizontal ? <ChevronDown size={13} /> : <PanelRightClose size={13} />}
@@ -509,7 +498,9 @@ export function CommandPanel({
         )}
       </div>
 
-      {/* ---------- 搜索：常驻一行 ---------- */}
+      {/*
+       * ---------- 搜索：常驻一行 ----------
+       */}
       <div className={cn('shrink-0 px-2 pb-1.5 pt-2', horizontal && 'pb-0')}>
         <div className="relative">
           <Search
@@ -518,7 +509,7 @@ export function CommandPanel({
           />
           <input
             className="input h-7 pl-7 pr-6 text-xs"
-            placeholder="搜索命令 / 描述 / 分组…"
+            placeholder={t('cmd.panel.searchPlaceholder')}
             value={keyword}
             onChange={(e) => {
               setKeyword(e.target.value)
@@ -549,7 +540,7 @@ export function CommandPanel({
           {keyword && (
             <button
               className="btn-icon absolute right-0.5 top-1/2 h-5 w-5 -translate-y-1/2"
-              title="清空搜索"
+              title={t('cmd.center.clearSearch')}
               onClick={() => setKeyword('')}
             >
               <X size={11} />
@@ -558,7 +549,9 @@ export function CommandPanel({
         </div>
       </div>
 
-      {/* ---------- 筛选 chip + 排序：做成一个分段控件，视觉上合并成一条 ---------- */}
+      {/*
+       * ---------- 筛选 chip + 排序：做成一个分段控件，视觉上合并成一条 ----------
+       */}
       <div className="flex shrink-0 items-center gap-1 px-2 pb-1.5">
         <div className="flex items-center gap-0.5 rounded-md bg-raised p-0.5">
           {scopes.map((s) => {
@@ -585,8 +578,8 @@ export function CommandPanel({
         </div>
         <span className="flex-1" />
         <button
-          className="flex h-[22px] items-center gap-1 rounded px-1.5 text-2xs text-ink-3 transition-colors duration-150 hover:bg-hover hover:text-ink-2"
-          title={`当前排序：${SORT_LABEL[sort]}（点击切换）`}
+          className="flex h-[22px] items-center gap-1 rounded-sm px-1.5 text-2xs text-ink-3 transition-colors duration-150 hover:bg-hover hover:text-ink-2"
+          title={t('cmd.panel.sortTitle', { label: sortLabel[sort] })}
           onClick={() =>
             pickSort(sort === 'smart' ? 'recent' : sort === 'recent' ? 'frequent' : 'smart')
           }
@@ -598,7 +591,7 @@ export function CommandPanel({
           ) : (
             <TrendingUp size={11} />
           )}
-          {SORT_LABEL[sort]}
+          {sortLabel[sort]}
         </button>
       </div>
 
@@ -626,7 +619,7 @@ export function CommandPanel({
                 className="mt-1 rounded-md border border-edge-soft px-2 py-1 text-2xs text-ink-2 transition-colors hover:border-edge hover:bg-hover hover:text-ink"
                 onClick={() => openCommandCenter(keyword)}
               >
-                打开命令中心 <span className="kbd ml-0.5">Ctrl K</span>
+                {t('cmd.panel.openCenter')} <span className="kbd ml-0.5">Ctrl K</span>
               </button>
             </div>
           ))}
@@ -682,7 +675,7 @@ export function CommandPanel({
                   setGroupDrop(null)
                 }}
                 onContextMenu={(e) => groupMenu.openMenu(e, group)}
-                title={searching ? undefined : '拖动可调整分组顺序，右键更多操作'}
+                title={searching ? undefined : t('cmd.panel.groupHeaderTitle')}
               >
                 {!searching && (
                   <GripVertical
@@ -703,21 +696,21 @@ export function CommandPanel({
                 <span className="flex shrink-0 items-center gap-0.5 pr-0.5 opacity-0 transition-opacity group-hover/hdr:opacity-100">
                   <button
                     className="btn-icon h-5 w-5"
-                    title={`在「${group}」分组中新建命令`}
+                    title={t('cmd.panel.groupNewCmdTitle', { group })}
                     onClick={() => onEdit(null, group)}
                   >
                     <Plus size={11} />
                   </button>
                   <button
                     className="btn-icon h-5 w-5"
-                    title={`重命名分组「${group}」`}
+                    title={t('cmd.panel.groupRenameTitle', { group })}
                     onClick={() => setRenamingGroup(group)}
                   >
                     <Pencil size={11} />
                   </button>
                   <button
                     className="btn-icon h-5 w-5 text-danger/70 hover:text-danger"
-                    title={`删除分组「${group}」及其所有命令`}
+                    title={t('cmd.panel.groupDeleteTitle', { group })}
                     onClick={() => setPendingDeleteGroup(group)}
                   >
                     <Trash2 size={11} />
@@ -810,19 +803,25 @@ export function CommandPanel({
         })}
       </div>
 
-      {/* ---------- 底部状态：提示键盘用法 ---------- */}
+      {/*
+       * ---------- 底部状态：提示键盘用法 ----------
+       */}
       {!horizontal && (
         <div className="flex shrink-0 items-center gap-2 border-t border-edge-soft px-2 py-1 text-2xs text-ink-3">
           <span className="truncate">
-            {scope.kind === 'all' ? '↑↓ 选择 · ↵ 执行' : scope.kind === 'pinned' ? '已收藏' : '最近使用'}
+            {scope.kind === 'all'
+              ? t('cmd.panel.footerHint')
+              : scope.kind === 'pinned'
+                ? t('cmd.scope.pinned')
+                : t('cmd.scope.recent')}
           </span>
           <span className="flex-1" />
           <button
-            className="flex items-center gap-0.5 rounded px-1 text-2xs text-ink-3 transition-colors hover:text-accent"
-            title="打开命令中心"
+            className="flex items-center gap-0.5 rounded-sm px-1 text-2xs text-ink-3 transition-colors hover:text-accent"
+            title={t('cmd.panel.openCenter')}
             onClick={() => openCommandCenter(keyword)}
           >
-            命令中心
+            {t('cmd.panel.centerLink')}
             <ChevronRight size={10} />
           </button>
         </div>
@@ -832,21 +831,23 @@ export function CommandPanel({
         <ContextMenu x={menu.x} y={menu.y} items={menuItems(menu.target)} onClose={closeMenu} />
       )}
 
-      {/* 头部的「更多」：导入/导出/新建分组这些低频动作收在这里 */}
+      {/*
+       * 头部的「更多」：导入/导出/新建分组这些低频动作收在这里
+       */}
       {moreMenu.menu && (
         <ContextMenu
           x={moreMenu.menu.x}
           y={moreMenu.menu.y}
           items={[
             {
-              label: '新建分组',
+              label: t('cmd.panel.newGroup'),
               icon: <FolderPlus size={12} />,
               onClick: () => setNewGroupDialog(true)
             },
-            { label: '导入命令 JSON…', icon: <Upload size={12} />, onClick: () => void importJson('merge') },
-            { label: '导出命令 JSON…', icon: <Download size={12} />, onClick: () => void exportJson() },
+            { label: t('cmd.panel.importJson'), icon: <Upload size={12} />, onClick: () => void importJson('merge') },
+            { label: t('cmd.panel.exportJson'), icon: <Download size={12} />, onClick: () => void exportJson() },
             {
-              label: '打开命令中心',
+              label: t('cmd.panel.openCenter'),
               icon: <Search size={12} />,
               separatorBefore: true,
               onClick: () => openCommandCenter(keyword)
@@ -867,8 +868,8 @@ export function CommandPanel({
 
       <PromptDialog
         open={newGroupDialog}
-        title="新建分组"
-        label="分组名称"
+        title={t('cmd.panel.newGroup')}
+        label={t('cmd.panel.groupNameLabel')}
         defaultValue=""
         onCancel={() => setNewGroupDialog(false)}
         onConfirm={(name) => {
@@ -879,8 +880,8 @@ export function CommandPanel({
 
       <PromptDialog
         open={renamingGroup !== null}
-        title="重命名分组"
-        label="新名称"
+        title={t('cmd.panel.groupRename')}
+        label={t('cmd.panel.newNameLabel')}
         defaultValue={renamingGroup ?? ''}
         onCancel={() => setRenamingGroup(null)}
         onConfirm={(name) => {
@@ -892,16 +893,18 @@ export function CommandPanel({
 
       <ConfirmDialog
         open={pendingDeleteGroup !== null}
-        title="删除分组"
+        title={t('cmd.panel.groupDelete')}
         danger
-        confirmText="删除"
+        confirmText={t('cmd.action.delete')}
         message={
           <>
-            确定删除分组
+            {t('cmd.panel.deleteGroupPrefix')}
             <span className="font-medium text-ink">「{pendingDeleteGroup}」</span>
             {(() => {
-              const n = commands.filter((c) => (c.group || '默认') === pendingDeleteGroup).length
-              return n > 0 ? `及其下 ${n} 条命令吗？此操作不可恢复。` : '吗？（空分组）'
+              const n = commands.filter((c) => (c.group || t('cmd.defaultGroup')) === pendingDeleteGroup).length
+              return n > 0
+                ? t('cmd.panel.deleteGroupWithCount', { count: n })
+                : t('cmd.panel.deleteGroupEmpty')
             })()}
           </>
         }
@@ -912,20 +915,21 @@ export function CommandPanel({
           if (g)
             void deleteGroup(g).then((n) => {
               if (n !== null)
-                useToastStore.getState().push({ kind: 'success', title: `已删除分组「${g}」` })
+                useToastStore.getState().push({ kind: 'success', title: t('cmd.panel.groupDeleted', { group: g }) })
             })
         }}
       />
 
       <ConfirmDialog
         open={pendingDelete !== null}
-        title="删除常用命令"
+        title={t('cmd.panel.deleteCmdTitle')}
         danger
-        confirmText="删除"
+        confirmText={t('cmd.action.delete')}
         message={
           <>
-            确定删除
-            <span className="font-medium text-ink">「{pendingDelete?.name}」</span>吗？
+            {t('cmd.panel.deleteCmdPrefix')}
+            <span className="font-medium text-ink">「{pendingDelete?.name}」</span>
+            {t('cmd.panel.deleteCmdSuffix')}
             <div className="mt-2 selectable font-mono text-2xs text-ink-3">
               {pendingDelete?.command}
             </div>
@@ -938,7 +942,10 @@ export function CommandPanel({
           if (!target) return
           void remove(target.id).then((ok) => {
             if (ok) {
-              useToastStore.getState().push({ kind: 'success', title: `已删除「${target.name}」` })
+              useToastStore.getState().push({
+                kind: 'success',
+                title: t('cmd.toast.deleted', { name: target.name })
+              })
             }
           })
         }}

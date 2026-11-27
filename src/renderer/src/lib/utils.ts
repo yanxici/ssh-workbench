@@ -1,5 +1,7 @@
 /** 通用小工具 */
 
+import { tNow } from '../i18n/core'
+
 export function cn(...parts: Array<string | false | null | undefined>): string {
   return parts.filter(Boolean).join(' ')
 }
@@ -15,12 +17,12 @@ export function uid(): string {
 
 /** 相对时间展示：刚刚 / N 分钟前 / N 小时前 / N 天前 / yyyy-MM-dd */
 export function formatRelativeTime(ts?: number): string {
-  if (!ts) return '从未使用'
+  if (!ts) return tNow('common.time.never')
   const diff = Date.now() - ts
-  if (diff < 60_000) return '刚刚'
-  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)} 分钟前`
-  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)} 小时前`
-  if (diff < 30 * 86_400_000) return `${Math.floor(diff / 86_400_000)} 天前`
+  if (diff < 60_000) return tNow('common.time.justNow')
+  if (diff < 3_600_000) return tNow('common.time.minutesAgo', { n: Math.floor(diff / 60_000) })
+  if (diff < 86_400_000) return tNow('common.time.hoursAgo', { n: Math.floor(diff / 3_600_000) })
+  if (diff < 30 * 86_400_000) return tNow('common.time.daysAgo', { n: Math.floor(diff / 86_400_000) })
   const d = new Date(ts)
   const pad = (n: number): string => String(n).padStart(2, '0')
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`

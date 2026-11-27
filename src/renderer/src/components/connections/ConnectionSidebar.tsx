@@ -45,7 +45,7 @@ import {
  */
 
 /** 未分组连接的默认分组名（数据值，不参与 i18n：它是连接数据里的 group 字段） */
-const DEFAULT_GROUP = '默认'
+const DEFAULT_GROUP = '\u9ed8\u8ba4'
 
 /** 分组色标候选：和连接色标同一套语义色，深浅都够辨识 */
 const GROUP_PALETTE = [
@@ -80,6 +80,7 @@ function BatchTagsEditor({
   onClose: () => void
   onConfirm: () => void
 }): React.JSX.Element {
+  const { t } = useI18n()
   const updateTags = useConnectionStore((s) => s.updateTags)
   const selectedConns = connections.filter((c) => selectedIds.has(c.id))
   const existingTags = Array.from(new Set(selectedConns.flatMap((c) => c.tags)))
@@ -88,13 +89,13 @@ function BatchTagsEditor({
   const [addMode, setAddMode] = useState<'replace' | 'append'>('append')
 
   return (
-    <Modal open title={`批量编辑标签（${selectedIds.size} 条连接）`} onClose={onClose}>
+    <Modal open title={t('conn.ui.sidebar.batchTagsTitle', { count: selectedIds.size })} onClose={onClose}>
       <div className="space-y-3">
         <div>
-          <label className="mb-1 block text-xs text-ink-2">标签（英文逗号分隔）</label>
+          <label className="mb-1 block text-xs text-ink-2">{t('conn.ui.sidebar.batchTagsLabel')}</label>
           <input
             className="input w-full"
-            placeholder="例如：生产,充电桩,现场"
+            placeholder={t('conn.ui.sidebar.batchTagsPlaceholder')}
             value={tagsInput}
             onChange={(e) => setTagsInput(e.target.value)}
           />
@@ -106,7 +107,7 @@ function BatchTagsEditor({
               checked={addMode === 'append'}
               onChange={() => setAddMode('append')}
             />
-            <span>追加到现有标签</span>
+            <span>{t('conn.ui.sidebar.batchTagsAppend')}</span>
           </label>
           <label className="flex items-center gap-1.5">
             <input
@@ -114,17 +115,17 @@ function BatchTagsEditor({
               checked={addMode === 'replace'}
               onChange={() => setAddMode('replace')}
             />
-            <span>替换所有标签</span>
+            <span>{t('conn.ui.sidebar.batchTagsReplace')}</span>
           </label>
         </div>
         {existingTags.length > 0 && addMode === 'append' && (
           <div className="text-2xs text-ink-3">
-            当前标签：{existingTags.join(', ')}
+            {t('conn.ui.sidebar.batchTagsCurrent', { tags: existingTags.join(', ') })}
           </div>
         )}
         <div className="flex justify-end gap-2 pt-2">
           <button className="btn" onClick={onClose}>
-            取消
+            {t('conn.ui.cancel')}
           </button>
           <button
             className="btn btn-primary"
@@ -152,7 +153,7 @@ function BatchTagsEditor({
               })
             }}
           >
-            确定
+            {t('conn.ui.confirm')}
           </button>
         </div>
       </div>
@@ -175,6 +176,7 @@ export function ConnectionSidebar({
   onEdit: (initial: Connection | null, preset?: Partial<ConnectionInput>) => void
 }): React.JSX.Element {
   const { t } = useI18n()
+  const displayGroup = (g: string): string => (g === DEFAULT_GROUP ? t('conn.ui.defaultGroup') : g)
   /* 设计 token 灰度（阶段 1）：行高/动效收到新口径 */
   const tokensOn = useTokenFlag('connections')
   const connections = useConnectionStore((s) => s.connections)
@@ -326,7 +328,7 @@ export function ConnectionSidebar({
 
   const duplicateConnection = async (c: Connection): Promise<void> => {
     const saved = await save({
-      name: `${c.name} 副本`,
+      name: t('conn.ui.sidebar.copyNameSuffix', { name: c.name }),
       host: c.host,
       port: c.port,
       username: c.username,
@@ -349,8 +351,8 @@ export function ConnectionSidebar({
     if (saved) {
       useToastStore.getState().push({
         kind: 'success',
-        title: '已复制连接',
-        detail: '出于安全考虑，密码不会随连接复制，请编辑副本补全凭据'
+        title: t('conn.ui.sidebar.duplicatedTitle'),
+        detail: t('conn.ui.sidebar.duplicatedDetail')
       })
     }
   }
@@ -360,8 +362,8 @@ export function ConnectionSidebar({
     if (!parsed || !parsed.ok) {
       useToastStore.getState().push({
         kind: 'warning',
-        title: '剪贴板里没有可识别的 ssh 命令',
-        detail: '支持的格式示例：ssh root@192.168.1.10 -p 2222 -i ~/.ssh/id_rsa'
+        title: t('conn.ui.sidebar.clipNoSsh'),
+        detail: t('conn.ui.sidebar.clipExample')
       })
       return
     }
@@ -378,27 +380,34 @@ export function ConnectionSidebar({
   /** 分组右键菜单：新建 / 重命名 / 删除 */
   const groupMenuItems = (group: string): MenuEntry[] => [
     {
-      label: '在此分组新建连接',
+      label: t('conn.ui.sidebar.menu.newInGroup'),
       icon: <Plus size={12} />,
       onClick: () => onEdit(null, { group })
     },
     {
-      label: '重命名分组',
+      label: t('conn.ui.sidebar.menu.renameGroup'),
       icon: <Pencil size={12} />,
       onClick: () => setRenamingGroup(group)
     },
-    { label: '新建分组…', icon: <FolderPlus size={12} />, onClick: () => setNewGroupOpen(true) },
     {
-      label: onlyGroup === group ? '取消只看这组' : '只看这组',
+      label: t('conn.ui.sidebar.menu.newGroupEllipsis'),
+      icon: <FolderPlus size={12} />,
+      onClick: () => setNewGroupOpen(true)
+    },
+    {
+      label:
+        onlyGroup === group
+          ? t('conn.ui.sidebar.menu.unfocusGroup')
+          : t('conn.ui.sidebar.menu.focusGroup'),
       onClick: () => setOnlyGroup(onlyGroup === group ? null : group)
     },
     {
-      label: '设置分组色标…',
+      label: t('conn.ui.sidebar.menu.groupColor'),
       separatorBefore: true,
       onClick: () => setColorForState(group)
     },
     {
-      label: '删除分组',
+      label: t('conn.ui.sidebar.menu.deleteGroup'),
       icon: <Trash2 size={12} />,
       danger: true,
       separatorBefore: true,
@@ -429,7 +438,7 @@ export function ConnectionSidebar({
     if (batch) {
       return [
         {
-          label: `已选 ${batch.length} 条 · 移到分组`,
+          label: t('conn.ui.sidebar.menu.batchMove', { count: batch.length }),
           icon: <FolderInput size={12} />,
           // 菜单会在 onClick 之前先关掉，坐标得在这里抢先存下来
           onClick: () => {
@@ -437,18 +446,18 @@ export function ConnectionSidebar({
           }
         },
         {
-          label: `批量编辑标签（${batch.length} 条）`,
+          label: t('conn.ui.sidebar.menu.batchTags', { count: batch.length }),
           icon: <Pencil size={12} />,
           onClick: () => setBatchTagsOpen(true)
         },
         {
-          label: `删除选中的 ${batch.length} 条`,
+          label: t('conn.ui.sidebar.menu.batchDelete', { count: batch.length }),
           icon: <Trash2 size={12} />,
           danger: true,
           onClick: () => setPendingBatchDelete(true)
         },
         {
-          label: '取消选择',
+          label: t('conn.ui.sidebar.menu.clearSelection'),
           separatorBefore: true,
           onClick: () => setSelectedIds(new Set())
         }
@@ -456,22 +465,26 @@ export function ConnectionSidebar({
     }
 
     return [
-      { label: '连接', icon: <Plug size={12} />, onClick: () => openConnection(c) },
-      { label: '编辑', icon: <Pencil size={12} />, onClick: () => onEdit(c) },
-      { label: '复制连接', icon: <Copy size={12} />, onClick: () => void duplicateConnection(c) },
+      { label: t('conn.ui.sidebar.menu.connect'), icon: <Plug size={12} />, onClick: () => openConnection(c) },
+      { label: t('conn.ui.sidebar.menu.edit'), icon: <Pencil size={12} />, onClick: () => onEdit(c) },
       {
-        label: '新建同组连接',
+        label: t('conn.ui.sidebar.menu.duplicate'),
+        icon: <Copy size={12} />,
+        onClick: () => void duplicateConnection(c)
+      },
+      {
+        label: t('conn.ui.sidebar.menu.newSameGroup'),
         icon: <FolderPlus size={12} />,
         onClick: () => onEdit(null, { group: c.group })
       },
       {
-        label: '移到分组',
+        label: t('conn.ui.sidebar.menu.moveToGroup'),
         icon: <FolderInput size={12} />,
         disabled: allGroupNames.length === 0,
         onClick: () => setMovingConn(c)
       },
       {
-        label: '删除',
+        label: t('conn.ui.delete'),
         icon: <Trash2 size={12} />,
         danger: true,
         separatorBefore: true,
@@ -482,47 +495,51 @@ export function ConnectionSidebar({
 
   return (
     <div className="flex h-full flex-col">
-      {/* 头部：标题 + 总数 + 全局操作（图标化，省一行高度） */}
+      {
+        /* 头部：标题 + 总数 + 全局操作（图标化，省一行高度） */
+      }
       <div className="panel-head">
         <Plug size={13} className="shrink-0 text-ink-3" />
-        <span className="panel-title">连接</span>
+        <span className="panel-title">{t('conn.ui.sidebar.title')}</span>
         <span className="panel-count">{connections.length}</span>
         <span className="flex-1" />
         <button
           className="btn-icon h-6 w-6"
-          title="导出 / 导入连接（发给同事直接可用）"
-          aria-label="导入导出"
+          title={t('conn.ui.sidebar.transferTitle')}
+          aria-label={t('conn.ui.sidebar.transferAria')}
           onClick={(e) => transferMenu.openMenu(e, 'transfer')}
         >
           <ArrowDownUp size={13} />
         </button>
         <button
           className="btn-icon h-6 w-6"
-          title="从剪贴板识别 ssh 命令并新建连接"
-          aria-label="剪贴板导入"
+          title={t('conn.ui.sidebar.clipboardTitle')}
+          aria-label={t('conn.ui.sidebar.clipboardAria')}
           onClick={() => void importFromClipboard()}
         >
           <ClipboardPaste size={13} />
         </button>
         <button
           className="btn-icon h-6 w-6"
-          title="新建分组"
-          aria-label="新建分组"
+          title={t('conn.ui.sidebar.newGroup')}
+          aria-label={t('conn.ui.sidebar.newGroup')}
           onClick={() => setNewGroupOpen(true)}
         >
           <FolderPlus size={13} />
         </button>
         <button
           className="btn-icon h-6 w-6"
-          title="新建连接 (Ctrl+N)"
-          aria-label="新建连接"
+          title={t('conn.ui.sidebar.newConnTitle')}
+          aria-label={t('conn.ui.sidebar.newConnAria')}
           onClick={() => onEdit(null)}
         >
           <Plus size={14} />
         </button>
       </div>
 
-      {/* 搜索：独占一行，宽度足够看清长主机名 */}
+      {
+        /* 搜索：独占一行，宽度足够看清长主机名 */
+      }
       <div className="panel-toolbar">
         <div className="relative flex-1">
           <Search size={12} className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-ink-3" />
@@ -534,8 +551,8 @@ export function ConnectionSidebar({
           />
           {keyword && (
             <button
-              className="absolute right-1 top-1/2 flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded text-ink-3 hover:text-ink"
-              title="清空搜索"
+              className="absolute right-1 top-1/2 flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded-sm text-ink-3 hover:text-ink"
+              title={t('conn.ui.sidebar.clearSearch')}
               onClick={() => setKeyword('')}
             >
               <X size={12} />
@@ -544,7 +561,9 @@ export function ConnectionSidebar({
         </div>
       </div>
 
-      {/* 「只看这组」明显状态条：双击分组标题触发，避免用户以为其它分组莫名消失 */}
+      {
+        /* 「只看这组」明显状态条：双击分组标题触发，避免用户以为其它分组莫名消失 */
+      }
       {onlyGroup && (
         <div
           data-testid="only-group-banner"
@@ -553,7 +572,7 @@ export function ConnectionSidebar({
           <div className="flex items-center gap-1.5">
             <Filter size={11} className="shrink-0 text-accent" />
             <span className="min-w-0 flex-1 truncate font-medium text-ink">
-              {t('conn.onlyGroup.banner', { group: onlyGroup })}
+              {t('conn.onlyGroup.banner', { group: displayGroup(onlyGroup) })}
             </span>
             <button
               type="button"
@@ -579,22 +598,29 @@ export function ConnectionSidebar({
           if (e.target === e.currentTarget) setSelectedIds(new Set())
         }}
       >
-        {/* 搜索命中但被分页截断时给个提示，否则用户以为结果就这么点 */}
+        {
+          /* 搜索命中但被分页截断时给个提示，否则用户以为结果就这么点 */
+        }
         {deferredKeyword.trim().length > 0 && matchedTotal > 0 && (
           <div className="px-2 py-1 text-3xs text-ink-3">
-            命中 {matchedTotal} 条
-            {matchedTotal > PAGE_SIZE && "（每组先显示 " + PAGE_SIZE + " 条，滚到底可继续展开）"}
+            {t('conn.ui.sidebar.matchedCount', { count: matchedTotal })}
+            {matchedTotal > PAGE_SIZE &&
+              t('conn.ui.sidebar.matchedPaged', { pageSize: PAGE_SIZE })}
           </div>
         )}
 
         {groups.length === 0 && (
           <EmptyState
             icon={<SquareTerminal size={26} />}
-            title={connections.length === 0 ? '还没有连接' : '没有匹配的连接'}
+            title={
+              connections.length === 0
+                ? t('conn.ui.sidebar.emptyTitle')
+                : t('conn.ui.sidebar.emptySearchTitle')
+            }
             hint={
               connections.length === 0
-                ? '点击右上角 + 新建，或复制 ssh 命令后用剪贴板按钮一键填充'
-                : '换个关键字试试'
+                ? t('conn.ui.sidebar.emptyHint')
+                : t('conn.ui.sidebar.emptySearchHint')
             }
           />
         )}
@@ -649,8 +675,11 @@ export function ConnectionSidebar({
                   void moveToGroup(ids, group).then((n) => {
                     if (n > 0) {
                       useToastStore.getState().push({
-                        kind: "success",
-                        title: `已把 ${n} 条连接移入「${group}」`
+                        kind: 'success',
+                        title: t('conn.ui.sidebar.movedMany', {
+                          count: n,
+                          group: displayGroup(group)
+                        })
                       })
                       setSelectedIds(new Set())
                     }
@@ -666,7 +695,9 @@ export function ConnectionSidebar({
                 setDraggingGroup(null)
               }}
             >
-              {/* 分组头做成 sticky：几千条连接往下滚时，永远知道自己在哪个组 */}
+              {
+                /* 分组头做成 sticky：几千条连接往下滚时，永远知道自己在哪个组 */
+              }
               <button
                 className={cn(
                   'group/gh sticky top-0 z-10 flex w-full cursor-default items-center gap-1 rounded-md bg-panel px-1.5 py-1 text-2xs font-semibold text-ink-3 transition-colors hover:text-ink-2',
@@ -674,7 +705,9 @@ export function ConnectionSidebar({
                   onlyGroup === group && 'bg-accent/10 text-ink ring-1 ring-inset ring-accent/25'
                 )}
                 draggable
-                title={`右键管理分组；拖拽可排序；双击只看这一组${onlyGroup === group ? "（再双击取消）" : ""}`}
+                title={t('conn.ui.sidebar.groupHeaderTitle', {
+                  dblOff: onlyGroup === group ? t('conn.ui.sidebar.groupHeaderDblOff') : ''
+                })}
                 onClick={() => {
                   if (searching) {
                     setSearchFolded((prev) => ({ ...prev, [group]: !isCollapsed }))
@@ -700,11 +733,14 @@ export function ConnectionSidebar({
                     style={{ background: groupColors[group] }}
                   />
                 )}
+                {
+                  /* 同一个图标旋转 90°，不进 180° 的另一个图标：互切没有中间态，看起来是跳变 */
+                }
                 <ChevronRight
                   size={11}
                   className={cn('chev-rot shrink-0', !isCollapsed && 'rotate-90')}
                 />
-                <span className="truncate">{group}</span>
+                <span className="truncate">{displayGroup(group)}</span>
                 <span className="font-mono font-normal text-ink-3/60">{items.length}</span>
                 <span className="flex-1" />
                 {onlyGroup === group ? (
@@ -862,7 +898,9 @@ export function ConnectionSidebar({
                             )}
                           </div>
 
-                          {/* 主机信息：等宽字体，单行省略，悬停看完整地址 */}
+                          {
+                            /* 主机信息：等宽字体，单行省略，悬停看完整地址 */
+                          }
                           <div
                             className="mt-0.5 truncate font-mono text-2xs text-ink-3"
                             title={connectionAddress(c)}
@@ -896,7 +934,7 @@ export function ConnectionSidebar({
                          */}
                         <button
                           className="btn-icon absolute right-1 top-1/2 h-6 w-6 -translate-y-1/2 opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-visible:opacity-100"
-                          title="打开连接"
+                          title={t('conn.ui.sidebar.openConn')}
                           tabIndex={-1}
                           onClick={(e) => {
                             e.stopPropagation()
@@ -910,7 +948,9 @@ export function ConnectionSidebar({
                   )
                 })}
 
-              {/* 分页尾巴：一次只铺 60 条，剩下的一次点一下补一屏 */}
+              {
+                /* 分页尾巴：一次只铺 60 条，剩下的一次点一下补一屏 */
+              }
               {!isCollapsed && rest > 0 && (
                 <button
                   className="mb-1 mt-0.5 flex w-full items-center justify-center gap-1 rounded-md border border-dashed border-edge-soft py-1 text-2xs text-ink-3 transition-colors hover:border-edge hover:bg-hover hover:text-ink-2"
@@ -919,7 +959,7 @@ export function ConnectionSidebar({
                   }
                 >
                   <ChevronDown size={11} />
-                  还有 {rest} 条，继续展开
+                  {t('conn.ui.sidebar.showMore', { rest })}
                 </button>
               )}
             </div>
@@ -939,7 +979,11 @@ export function ConnectionSidebar({
       )}
 
       {colorFor && (
-        <Modal open title={`分组色标 · ${colorFor}`} onClose={() => setColorForState(null)}>
+        <Modal
+          open
+          title={t('conn.ui.sidebar.groupColorTitle', { group: displayGroup(colorFor) })}
+          onClose={() => setColorForState(null)}
+        >
           <div className="flex flex-wrap gap-2 py-2">
             {GROUP_PALETTE.map((c) => (
               <button
@@ -962,10 +1006,10 @@ export function ConnectionSidebar({
                 setColorForState(null)
               }}
             >
-              清除色标
+              {t('conn.ui.sidebar.clearColor')}
             </button>
             <button className="btn" onClick={() => setColorForState(null)}>
-              取消
+              {t('conn.ui.cancel')}
             </button>
           </div>
         </Modal>
@@ -973,9 +1017,9 @@ export function ConnectionSidebar({
 
       <PromptDialog
         open={newGroupOpen}
-        title="新建分组"
-        label="分组名称"
-        placeholder="例如：机器人 / 充电桩 / 现场设备"
+        title={t('conn.ui.sidebar.newGroup')}
+        label={t('conn.ui.sidebar.newGroupLabel')}
+        placeholder={t('conn.ui.sidebar.newGroupPlaceholder')}
         onCancel={() => {
           setNewGroupOpen(false)
           setPendingMoveIds(null)
@@ -987,19 +1031,25 @@ export function ConnectionSidebar({
           void createGroup(name).then(async (ok) => {
             if (!ok) return
             if (!waitMove || waitMove.length === 0) {
-              useToastStore.getState().push({ kind: 'success', title: `已新建分组「${name}」` })
+              useToastStore.getState().push({
+                kind: 'success',
+                title: t('conn.ui.sidebar.groupCreated', { name })
+              })
               return
             }
             const n = await moveToGroup(waitMove, name.trim())
             if (n > 0) {
               useToastStore.getState().push({
                 kind: 'success',
-                title: `已新建分组「${name}」并移入 ${n} 条连接`
+                title: t('conn.ui.sidebar.groupCreatedMoved', { name, count: n })
               })
               setSelectedIds(new Set())
             } else {
               // 组建好了但一条都没搬过去（连接已被别处删掉等），也得说清楚
-              useToastStore.getState().push({ kind: 'warning', title: `已新建分组「${name}」但没有连接被移入，请手动拖拽` })
+              useToastStore.getState().push({
+                kind: 'warning',
+                title: t('conn.ui.sidebar.groupCreatedNoMove', { name })
+              })
             }
           })
         }}
@@ -1007,8 +1057,8 @@ export function ConnectionSidebar({
 
       <PromptDialog
         open={renamingGroup !== null}
-        title="重命名分组"
-        label="新名称"
+        title={t('conn.ui.sidebar.menu.renameGroup')}
+        label={t('conn.ui.sidebar.newNameLabel')}
         defaultValue={renamingGroup ?? ''}
         onCancel={() => setRenamingGroup(null)}
         onConfirm={(name) => {
@@ -1017,7 +1067,10 @@ export function ConnectionSidebar({
           if (!old) return
           void renameGroup(old, name).then((ok) => {
             if (ok) {
-              useToastStore.getState().push({ kind: 'success', title: `已重命名为「${name}」` })
+              useToastStore.getState().push({
+                kind: 'success',
+                title: t('conn.ui.sidebar.groupRenamed', { name })
+              })
             }
           })
         }}
@@ -1025,16 +1078,19 @@ export function ConnectionSidebar({
 
       <ConfirmDialog
         open={pendingDeleteGroup !== null}
-        title="删除分组"
+        title={t('conn.ui.sidebar.menu.deleteGroup')}
         danger
-        confirmText="删除"
+        confirmText={t('conn.ui.delete')}
         message={
           <>
-            确定删除分组
-            <span className="font-medium text-ink">「{pendingDeleteGroup}」</span>
-            及其下全部连接吗？
+            {t('conn.ui.sidebar.deleteGroupConfirmPrefix')}
+            <span className="font-medium text-ink">
+              {' '}
+              「{pendingDeleteGroup ? displayGroup(pendingDeleteGroup) : ''}」{' '}
+            </span>
+            {t('conn.ui.sidebar.deleteGroupConfirmSuffix')}
             <div className="mt-2 text-2xs text-ink-3">
-              该分组内共
+              {t('conn.ui.sidebar.deleteGroupCountPrefix')}
               <span className="font-medium text-ink">
                 {' '}
                 {/*
@@ -1043,7 +1099,7 @@ export function ConnectionSidebar({
                  */}
                 {connections.filter((c) => (c.group || DEFAULT_GROUP) === pendingDeleteGroup).length}{' '}
               </span>
-              条连接，删除后已保存的密码会一并从凭据保险箱移除，操作不可撤销。
+              {t('conn.ui.sidebar.deleteGroupCountSuffix')}
             </div>
           </>
         }
@@ -1054,22 +1110,28 @@ export function ConnectionSidebar({
           if (!target) return
           void deleteGroup(target).then((n) => {
             if (n !== null) {
-              useToastStore
-                .getState()
-                .push({ kind: 'success', title: `已删除分组「${target}」及 ${n} 条连接` })
+              useToastStore.getState().push({
+                kind: 'success',
+                title: t('conn.ui.sidebar.groupDeleted', {
+                  group: displayGroup(target),
+                  count: n
+                })
+              })
             }
           })
         }}
       />
 
-      {/* 移到分组：列出全部分组，点一个就迁过去 */}
+      {
+        /* 移到分组：列出全部分组，点一个就迁过去 */
+      }
       {movingConn && (
         <ContextMenu
           x={window.innerWidth / 2 - 90}
           y={window.innerHeight / 2 - 120}
           items={[
             ...allGroupNames.map((g) => ({
-              label: g,
+              label: displayGroup(g),
               disabled: (movingConn.group || DEFAULT_GROUP) === g,
               onClick: () => {
                 const target = movingConn
@@ -1077,15 +1139,16 @@ export function ConnectionSidebar({
                 if (!target) return
                 void moveToGroup([target.id], g).then((n) => {
                   if (n > 0) {
-                    useToastStore
-                      .getState()
-                      .push({ kind: 'success', title: `已移到分组「${g}」` })
+                    useToastStore.getState().push({
+                      kind: 'success',
+                      title: t('conn.ui.sidebar.movedOne', { group: displayGroup(g) })
+                    })
                   }
                 })
               }
             })),
             {
-              label: '新建分组并移入…',
+              label: t('conn.ui.sidebar.menu.newGroupAndMove'),
               separatorBefore: true,
               onClick: () => {
                 if (movingConn) setPendingMoveIds([movingConn.id])
@@ -1104,26 +1167,32 @@ export function ConnectionSidebar({
           y={transferMenu.menu.y}
           items={[
             {
-              label: '导出连接…',
+              label: t('conn.ui.sidebar.menu.export'),
               icon: <FileDown size={12} />,
               disabled: connections.length === 0,
               onClick: () => setTransfer('export')
             },
-            { label: '导入连接…', icon: <FileUp size={12} />, onClick: () => setTransfer('import') }
+            {
+              label: t('conn.ui.sidebar.menu.import'),
+              icon: <FileUp size={12} />,
+              onClick: () => setTransfer('import')
+            }
           ]}
           onClose={transferMenu.closeMenu}
         />
       )}
       <ConnTransferDialog mode={transfer} onClose={() => setTransfer(null)} />
 
-      {/* 批量移到分组：从右键菜单的批量项触发，在原右键位置弹出分组列表 */}
+      {
+        /* 批量移到分组：从右键菜单的批量项触发，在原右键位置弹出分组列表 */
+      }
       {batchMove && (
         <ContextMenu
           x={batchMove.x}
           y={batchMove.y}
           items={[
             ...allGroupNames.map((g) => ({
-              label: g,
+              label: displayGroup(g),
               onClick: () => {
                 const ids = batchMove.ids
                 setBatchMove(null)
@@ -1132,8 +1201,11 @@ export function ConnectionSidebar({
                 void moveToGroup(ids, g).then((n) => {
                   if (n > 0) {
                     useToastStore.getState().push({
-                      kind: "success",
-                      title: `已把 ${n} 条连接移入「${g}」`
+                      kind: 'success',
+                      title: t('conn.ui.sidebar.movedMany', {
+                        count: n,
+                        group: displayGroup(g)
+                      })
                     })
                     setSelectedIds(new Set())
                   }
@@ -1141,7 +1213,7 @@ export function ConnectionSidebar({
               }
             })),
             {
-              label: "新建分组并移入…",
+              label: t('conn.ui.sidebar.menu.newGroupAndMove'),
               separatorBefore: true,
               onClick: () => {
                 setPendingMoveIds(batchMove.ids ?? [])
@@ -1157,17 +1229,15 @@ export function ConnectionSidebar({
 
       <ConfirmDialog
         open={pendingBatchDelete}
-        title="删除选中的连接"
+        title={t('conn.ui.sidebar.batchDeleteTitle')}
         danger
-        confirmText="全部删除"
+        confirmText={t('conn.ui.sidebar.batchDeleteConfirmBtn')}
         message={
           <>
-            确定删除选中的
+            {t('conn.ui.sidebar.batchDeleteConfirmPrefix')}
             <span className="font-medium text-ink"> {selectedIds.size} </span>
-            条连接吗？
-            <div className="mt-2 text-2xs text-ink-3">
-              已保存的密码会一并从凭据保险箱移除，该操作不可撤销。
-            </div>
+            {t('conn.ui.sidebar.batchDeleteConfirmSuffix')}
+            <div className="mt-2 text-2xs text-ink-3">{t('conn.ui.sidebar.secretsRemoveNote')}</div>
           </>
         }
         onCancel={() => setPendingBatchDelete(false)}
@@ -1184,8 +1254,8 @@ export function ConnectionSidebar({
             // 0 条要么是全失败，要么本来就一条都没匹配上 —— 都不该报成功
             if (n <= 0) return
             useToastStore.getState().push({
-              kind: "success",
-              title: `已删除 ${n} 条连接`
+              kind: 'success',
+              title: t('conn.ui.sidebar.deletedMany', { count: n })
             })
           })
         }}
@@ -1193,16 +1263,16 @@ export function ConnectionSidebar({
 
       <ConfirmDialog
         open={pendingDelete !== null}
-        title="删除连接"
+        title={t('conn.ui.sidebar.deleteConnTitle')}
         danger
-        confirmText="删除"
+        confirmText={t('conn.ui.delete')}
         message={
           <>
-            确定删除连接 <span className="font-medium text-ink">「{pendingDelete?.name}」</span>
-            （{pendingDelete ? connectionAddress(pendingDelete) : ''}）吗？
-            <div className="mt-2 text-2xs text-ink-3">
-              删除后已保存的密码会一并从凭据保险箱移除，该操作不可撤销。
-            </div>
+            {t('conn.ui.sidebar.deleteConnPrefix')}
+            <span className="font-medium text-ink">「{pendingDelete?.name}」</span>
+            ({pendingDelete ? connectionAddress(pendingDelete) : ''})
+            {t('conn.ui.sidebar.deleteConnSuffix')}
+            <div className="mt-2 text-2xs text-ink-3">{t('conn.ui.sidebar.deleteConnNote')}</div>
           </>
         }
         onCancel={() => setPendingDelete(null)}
@@ -1212,7 +1282,10 @@ export function ConnectionSidebar({
           if (!target) return
           void remove(target.id).then((ok) => {
             if (ok) {
-              useToastStore.getState().push({ kind: 'success', title: `已删除「${target.name}」` })
+              useToastStore.getState().push({
+                kind: 'success',
+                title: t('conn.ui.sidebar.deletedOne', { name: target.name })
+              })
             }
           })
         }}

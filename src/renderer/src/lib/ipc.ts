@@ -1,5 +1,6 @@
 import type { IpcResult } from '@shared/types'
 import { useToastStore } from '@/stores/toastStore'
+import { tNow } from '../i18n/core'
 
 /**
  * 统一 IPC 调用助手：把 IpcResult 解包，失败时自动弹 toast。
@@ -15,7 +16,7 @@ export async function call<T>(
     if (!options.silent) {
       useToastStore.getState().push({
         kind: 'error',
-        title: options.errorTitle ?? '操作失败',
+        title: options.errorTitle ?? tNow('common.ipc.errorTitle'),
         detail: res.error
       })
     }
@@ -24,7 +25,7 @@ export async function call<T>(
     if (!options.silent) {
       useToastStore.getState().push({
         kind: 'error',
-        title: options.errorTitle ?? '操作失败',
+        title: options.errorTitle ?? tNow('common.ipc.errorTitle'),
         detail: err instanceof Error ? err.message : String(err)
       })
     }

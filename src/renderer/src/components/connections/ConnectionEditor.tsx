@@ -41,8 +41,11 @@ import { useToastStore } from '@/stores/toastStore'
 import { COLORS } from '@/lib/icons'
 import { cn } from '@/lib/utils'
 import { call } from '@/lib/ipc'
-import { useI18n } from '@/i18n'
+import { useI18n, type I18nKey } from '@/i18n'
 import { Combobox, Field, Modal, Toggle } from '@/components/ui'
+
+/** 未分组连接的内部数据分组名（与主进程/JSON 存储一致，不随界面语言改变） */
+const DEFAULT_GROUP = '\u9ed8\u8ba4'
 
 interface FormState {
   /**
@@ -118,7 +121,7 @@ const EMPTY: FormState = {
   password: '',
   privateKeyPath: '',
   passphrase: '',
-  group: '默认',
+  group: DEFAULT_GROUP,
   tags: '',
   color: '',
   remark: '',
@@ -143,10 +146,10 @@ const EMPTY: FormState = {
   serialPnp: ''
 }
 
-const AUTH_OPTIONS: Array<{ value: AuthType; label: string }> = [
-  { value: 'password', label: '密码' },
-  { value: 'privateKey', label: '私钥文件' },
-  { value: 'agent', label: 'SSH Agent' }
+const AUTH_OPTIONS: Array<{ value: AuthType; labelKey: I18nKey }> = [
+  { value: 'password', labelKey: 'conn.ui.editor.auth.password' },
+  { value: 'privateKey', labelKey: 'conn.ui.editor.auth.privateKey' },
+  { value: 'agent', labelKey: 'conn.ui.editor.auth.agent' }
 ]
 
 /** 常用波特率。Console 口绝大多数是 115200 或 9600，其余留着能手输 */
@@ -161,8 +164,8 @@ const BAUD_PRESETS = ['9600', '19200', '38400', '57600', '115200', '230400', '46
  * 现场看到的是乱码，比没预设更难排查。
  */
 const SERIAL_PRESETS: Array<{
-  label: string
-  hint: string
+  labelKey: I18nKey
+  hintKey: I18nKey
   apply: Pick<
     FormState,
     | 'serialBaud'
@@ -175,8 +178,8 @@ const SERIAL_PRESETS: Array<{
   >
 }> = [
   {
-    label: '7628 U-Boot 控制台',
-    hint: '57600 8N1 · 无流控 · CR',
+    labelKey: 'conn.ui.editor.serialPreset.7628.label',
+    hintKey: 'conn.ui.editor.serialPreset.7628.hint',
     apply: {
       serialBaud: '57600',
       serialDataBits: 8,
@@ -197,18 +200,18 @@ const STOP_BITS_OPTIONS: Array<{ value: SerialStopBits; label: string }> = [
   { value: 2, label: '2' }
 ]
 
-const PARITY_OPTIONS: Array<{ value: SerialParity; label: string }> = [
-  { value: 'none', label: '无 (N)' },
-  { value: 'even', label: '偶 (E)' },
-  { value: 'odd', label: '奇 (O)' },
-  { value: 'mark', label: '标记 (M)' },
-  { value: 'space', label: '空格 (S)' }
+const PARITY_OPTIONS: Array<{ value: SerialParity; labelKey: I18nKey }> = [
+  { value: 'none', labelKey: 'conn.ui.editor.parity.none' },
+  { value: 'even', labelKey: 'conn.ui.editor.parity.even' },
+  { value: 'odd', labelKey: 'conn.ui.editor.parity.odd' },
+  { value: 'mark', labelKey: 'conn.ui.editor.parity.mark' },
+  { value: 'space', labelKey: 'conn.ui.editor.parity.space' }
 ]
 
-const FLOW_OPTIONS: Array<{ value: SerialFlowControl; label: string }> = [
-  { value: 'none', label: '无' },
-  { value: 'hardware', label: '硬件 (RTS/CTS)' },
-  { value: 'software', label: '软件 (XON/XOFF)' }
+const FLOW_OPTIONS: Array<{ value: SerialFlowControl; labelKey: I18nKey }> = [
+  { value: 'none', labelKey: 'conn.ui.editor.flow.none' },
+  { value: 'hardware', labelKey: 'conn.ui.editor.flow.hardware' },
+  { value: 'software', labelKey: 'conn.ui.editor.flow.software' }
 ]
 
 const CHARSET_OPTIONS: Array<{ value: SerialCharset; label: string }> = [
@@ -223,10 +226,10 @@ const NEWLINE_OPTIONS: Array<{ value: SerialNewline; label: string; hint: string
   { value: 'crlf', label: 'CRLF', hint: '\\r\\n' }
 ]
 
-const PROXY_OPTIONS: Array<{ value: FormState['proxyType']; label: string }> = [
-  { value: 'none', label: '不使用代理' },
-  { value: 'socks5', label: 'SOCKS5' },
-  { value: 'http', label: 'HTTP CONNECT' }
+const PROXY_OPTIONS: Array<{ value: FormState['proxyType']; labelKey: I18nKey }> = [
+  { value: 'none', labelKey: 'conn.ui.editor.proxy.none' },
+  { value: 'socks5', labelKey: 'conn.ui.editor.proxy.socks5' },
+  { value: 'http', labelKey: 'conn.ui.editor.proxy.http' }
 ]
 
 /**
@@ -354,41 +357,45 @@ export function ConnectionEditor({
   const [picking, setPicking] = useState(false)
   const pickKey = async (): Promise<void> => {
     setPicking(true)
-    const res = await call(window.api.conn.pickPrivateKey(), { errorTitle: '导入私钥失败' })
+    const res = await call(window.api.conn.pickPrivateKey(), {
+      errorTitle: t('conn.ui.editor.pickKeyFailed')
+    })
     setPicking(false)
     if (!res || res.canceled || !res.path) return
     set('privateKeyPath', res.path)
     setTestResult(null)
     useToastStore.getState().push({
       kind: 'success',
-      title: `已导入私钥（${res.type}）`,
-      detail: res.encrypted ? '该私钥已加密，请在下方填写私钥口令' : '私钥未加密，口令留空即可'
+      title: t('conn.ui.editor.keyImported', { type: res.type ?? '' }),
+      detail: res.encrypted ? t('conn.ui.editor.keyEncrypted') : t('conn.ui.editor.keyUnencrypted')
     })
   }
 
   /* ---------- 校验与保存 ---------- */
   const validate = (): string | null => {
-    if (!form.name.trim()) return '请填写连接名称'
+    if (!form.name.trim()) return t('conn.ui.editor.errName')
 
     if (form.kind === 'serial') {
-      if (!form.serialPath.trim()) return '请选择串口端口'
+      if (!form.serialPath.trim()) return t('conn.ui.editor.errSerialPath')
       const baud = Number(form.serialBaud)
-      if (!Number.isInteger(baud) || baud <= 0) return '波特率必须是正整数'
+      if (!Number.isInteger(baud) || baud <= 0) return t('conn.ui.editor.errBaudInt')
       // 上限不是协议要求，只是防手滑（输成 1152000 会 open 失败且报错很难懂）
-      if (baud > 4000000) return '波特率过大（上限 4000000）'
+      if (baud > 4000000) return t('conn.ui.editor.errBaudMax')
       return null
     }
 
-    if (!form.host.trim()) return '请填写主机地址'
-    if (!form.username.trim()) return '请填写用户名'
+    if (!form.host.trim()) return t('conn.ui.editor.errHost')
+    if (!form.username.trim()) return t('conn.ui.editor.errUsername')
     const port = Number(form.port)
-    if (!Number.isInteger(port) || port <= 0 || port > 65535) return '端口无效（1-65535）'
-    if (form.authType === 'privateKey' && !form.privateKeyPath.trim()) return '请指定私钥文件路径'
+    if (!Number.isInteger(port) || port <= 0 || port > 65535) return t('conn.ui.editor.errPort')
+    if (form.authType === 'privateKey' && !form.privateKeyPath.trim()) {
+      return t('conn.ui.editor.errKeyPath')
+    }
     if (form.proxyType !== 'none') {
-      if (!form.proxyHost.trim()) return '请填写代理服务器地址'
+      if (!form.proxyHost.trim()) return t('conn.ui.editor.errProxyHost')
       const proxyPort = Number(form.proxyPort)
       if (!Number.isInteger(proxyPort) || proxyPort <= 0 || proxyPort > 65535) {
-        return '代理端口无效（1-65535）'
+        return t('conn.ui.editor.errProxyPort')
       }
     }
     return null
@@ -467,7 +474,7 @@ export function ConnectionEditor({
     authType: form.kind === 'serial' ? 'password' : form.authType,
     privateKeyPath: form.kind === 'serial' ? undefined : form.privateKeyPath.trim() || undefined,
     serial: buildSerial(),
-    group: form.group.trim() || '默认',
+    group: form.group.trim() || DEFAULT_GROUP,
     tags: form.tags
       .split(/[,，]/)
       .map((t) => t.trim())
@@ -505,7 +512,7 @@ export function ConnectionEditor({
       )
       if (sameName) {
         const ok = window.confirm(
-          `已存在名为「${form.name.trim()}」的连接。\n仍要另存为新设备吗？（两条连接同名，可稍后重命名区分）`
+          t('conn.ui.editor.saveAsConfirm', { name: form.name.trim() })
         )
         if (!ok) return
       }
@@ -527,10 +534,12 @@ export function ConnectionEditor({
       })
       useToastStore.getState().push({
         kind: 'success',
-        title: asNew ? `已另存为新设备「${saved.name}」并连接` : `正在连接「${saved.name}」`,
+        title: asNew
+          ? t('conn.ui.editor.savedAsAndConnect', { name: saved.name })
+          : t('conn.ui.editor.connectingTo', { name: saved.name }),
         detail: asNew
-          ? `原连接「${initial?.name ?? ''}」保持不变` +
-            (hasSecret ? '，已沿用其保存的凭据' : '')
+          ? t('conn.ui.editor.originUnchanged', { name: initial?.name ?? '' }) +
+            (hasSecret ? t('conn.ui.editor.secretReused') : '')
           : undefined
       })
       onClose()
@@ -539,7 +548,10 @@ export function ConnectionEditor({
 
     useToastStore.getState().push({
       kind: 'success',
-      title: initial && !asNew ? `已更新「${saved.name}」` : `已创建「${saved.name}」`
+      title:
+        initial && !asNew
+          ? t('conn.ui.editor.updated', { name: saved.name })
+          : t('conn.ui.editor.created', { name: saved.name })
     })
     onClose()
   }
@@ -567,7 +579,10 @@ export function ConnectionEditor({
       setHasSecret(false)
       set('password', '')
       set('passphrase', '')
-      useToastStore.getState().push({ kind: 'success', title: '已清除该连接保存的凭据' })
+      useToastStore.getState().push({
+        kind: 'success',
+        title: t('conn.ui.editor.secretCleared')
+      })
     }
   }
 
@@ -592,7 +607,9 @@ export function ConnectionEditor({
       proxy: buildProxy(),
       legacyAlgorithms: form.legacyAlgorithms || undefined
     }
-    const res = await call(window.api.conn.test(input), { errorTitle: '测试连接异常' })
+    const res = await call(window.api.conn.test(input), {
+      errorTitle: t('conn.ui.editor.testError')
+    })
     if (res) setTestResult(res)
     setTesting(false)
   }
@@ -608,13 +625,13 @@ export function ConnectionEditor({
     try {
       const saved = await call(
         window.api.knownHosts.refresh(form.host.trim(), Number(form.port), mismatch.actual),
-        { errorTitle: '更新主机指纹失败' }
+        { errorTitle: t('conn.ui.editor.updateHostKeyFailed') }
       )
       if (!saved) return
       useToastStore.getState().push({
         kind: 'success',
-        title: '已更新主机指纹',
-        detail: `下次连接按新指纹校验：${mismatch.actual.slice(0, 24)}…`
+        title: t('conn.ui.editor.hostKeyUpdated'),
+        detail: t('conn.ui.editor.hostKeyNextHint', { fp: mismatch.actual.slice(0, 24) })
       })
       await runTest()
     } finally {
@@ -630,12 +647,12 @@ export function ConnectionEditor({
     try {
       const saved = await call(
         window.api.knownHosts.refresh(form.host.trim(), Number(form.port), fp),
-        { errorTitle: '更新主机指纹失败' }
+        { errorTitle: t('conn.ui.editor.updateHostKeyFailed') }
       )
       if (saved) {
         useToastStore.getState().push({
           kind: 'success',
-          title: '本地指纹记录已对齐设备当前密钥'
+          title: t('conn.ui.editor.hostKeySynced')
         })
       }
     } finally {
@@ -682,8 +699,12 @@ export function ConnectionEditor({
       open={open}
       title={
         initial
-          ? `编辑${form.kind === 'serial' ? '串口' : ''}连接 · ${initial.name}`
-          : `新建${form.kind === 'serial' ? '串口' : ''}连接`
+          ? form.kind === 'serial'
+            ? t('conn.ui.editor.titleEditSerial', { name: initial.name })
+            : t('conn.ui.editor.titleEditSsh', { name: initial.name })
+          : form.kind === 'serial'
+            ? t('conn.ui.editor.titleNewSerial')
+            : t('conn.ui.editor.titleNewSsh')
       }
       onClose={onClose}
       width="max-w-xl"
@@ -691,10 +712,10 @@ export function ConnectionEditor({
         <>
           <div className="mr-auto flex items-center gap-2">
             {/*
-              串口没有"测试连接"这回事：open 一次端口就等于连上了，
-              而反复开关端口会触发 DTR 电平变化（接 EN 脚的板子会重启）。
-              想验就保存后直接连，断开再改。
-            */}
+             * 串口没有"测试连接"这回事：open 一次端口就等于连上了，
+             * 而反复开关端口会触发 DTR 电平变化（接 EN 脚的板子会重启）。
+             * 想验就保存后直接连，断开再改。
+             */}
             {form.kind === 'ssh' && (
               <button className="btn" onClick={() => void runTest()} disabled={testing}>
                 {testing ? (
@@ -702,7 +723,7 @@ export function ConnectionEditor({
                 ) : (
                   <FlaskConical size={13} />
                 )}
-                测试连接
+                {t('conn.ui.editor.testBtn')}
               </button>
             )}
             {testResult && (
@@ -714,7 +735,8 @@ export function ConnectionEditor({
               >
                 {testResult.ok ? (
                   <>
-                    <CheckCircle2 size={12} /> 成功 · {testResult.durationMs} ms
+                    <CheckCircle2 size={12} />{' '}
+                    {t('conn.ui.editor.testSuccess', { ms: testResult.durationMs })}
                   </>
                 ) : (
                   <span className="max-w-[300px] truncate">{testResult.error}</span>
@@ -723,27 +745,27 @@ export function ConnectionEditor({
             )}
           </div>
           <button className="btn" onClick={onClose}>
-            取消
+            {t('conn.ui.cancel')}
           </button>
           {initial && (
             <button
               className="btn"
-              title="保留原连接不动，把当前填写的信息另存为一条新设备并立即连接"
+              title={t('conn.ui.editor.saveAsTitle')}
               onClick={() => void submit({ asNew: true, connect: true })}
               disabled={saving}
             >
               {saving ? <Loader2 size={13} className="animate-spin" /> : <Plug size={13} />}
-              另存为新设备并连接
+              {t('conn.ui.editor.saveAsBtn')}
             </button>
           )}
           <button
             className="btn btn-primary"
-            title={initial ? '保存修改并连接该设备' : '保存后立即连接该设备'}
+            title={initial ? t('conn.ui.editor.connectTitleEdit') : t('conn.ui.editor.connectTitleNew')}
             onClick={() => void submit({ connect: true })}
             disabled={saving}
           >
             {saving ? <Loader2 size={13} className="animate-spin" /> : <Plug size={13} />}
-            连接设备
+            {t('conn.ui.editor.connectBtn')}
           </button>
         </>
       }
@@ -752,30 +774,27 @@ export function ConnectionEditor({
         {initial && (
           <div className="col-span-2 flex items-start gap-2 rounded-lg border border-edge-soft bg-app/60 px-3 py-2 text-2xs leading-relaxed text-ink-3">
             <Plug size={12} className="mt-0.5 shrink-0" />
-            <span>
-              「连接设备」＝保存修改后立即连接；若只是想把这台设备的地址/账号另存一份（原连接保持不动），
-              用「另存为新设备并连接」。
-            </span>
+            <span>{t('conn.ui.editor.editTip')}</span>
           </div>
         )}
 
-        <Field label="名称" className="col-span-2">
+        <Field label={t('conn.ui.editor.name')} className="col-span-2">
           <input
             className="input selectable"
             value={form.name}
             onChange={(e) => set('name', e.target.value)}
-            placeholder="例如：A机房-边缘网关"
+            placeholder={t('conn.ui.editor.namePlaceholder')}
           />
         </Field>
 
         {/*
-          连接类型。只在新建时可自由切换：已有连接改了 kind 等于换了台设备，
-          在编辑器里"顺手改一下"会让原设备的凭据/档案挂到新记录上，
-          真要从串口改成 SSH，删掉重建更清楚。
-        */}
+         * 连接类型。只在新建时可自由切换：已有连接改了 kind 等于换了台设备，
+         * 在编辑器里"顺手改一下"会让原设备的凭据/档案挂到新记录上，
+         * 真要从串口改成 SSH，删掉重建更清楚。
+         */}
         <Field
-          label="类型"
-          hint={initial ? '已保存的连接不能改类型，请新建一条' : undefined}
+          label={t('conn.ui.editor.kind')}
+          hint={initial ? t('conn.ui.editor.kindHintEdit') : undefined}
           className="col-span-2"
         >
           <div className="flex gap-1">
@@ -791,7 +810,7 @@ export function ConnectionEditor({
                 initial && 'cursor-not-allowed opacity-60'
               )}
             >
-              SSH 远程登录
+              {t('conn.ui.editor.kindSsh')}
             </button>
             <button
               type="button"
@@ -805,24 +824,26 @@ export function ConnectionEditor({
                 initial && 'cursor-not-allowed opacity-60'
               )}
             >
-              串口 Console
+              {t('conn.ui.editor.kindSerial')}
             </button>
           </div>
         </Field>
 
-        {/* SSH 专属字段：串口连接不需要主机/端口/账号/认证/代理，它们以空串落库 */}
+        {
+          /* SSH 专属字段：串口连接不需要主机/端口/账号/认证/代理，它们以空串落库 */
+        }
         {isSsh && (
           <>
-            <Field label="主机地址">
+            <Field label={t('conn.ui.editor.host')}>
               <input
                 className="input selectable"
                 value={form.host}
                 onChange={(e) => set('host', e.target.value)}
-                placeholder="192.168.1.10 或 hostname"
+                placeholder={t('conn.ui.editor.hostPlaceholder')}
               />
             </Field>
 
-            <Field label="端口">
+            <Field label={t('conn.ui.editor.port')}>
               <input
                 className="input selectable"
                 type="number"
@@ -833,7 +854,7 @@ export function ConnectionEditor({
               />
             </Field>
 
-            <Field label="用户名">
+            <Field label={t('conn.ui.editor.username')}>
               <input
                 className="input selectable"
                 value={form.username}
@@ -841,7 +862,7 @@ export function ConnectionEditor({
               />
             </Field>
 
-            <Field label="认证方式">
+            <Field label={t('conn.ui.editor.authType')}>
               <div className="flex gap-1">
                 {AUTH_OPTIONS.map((opt) => (
                   <button
@@ -855,7 +876,7 @@ export function ConnectionEditor({
                         : 'border-edge bg-raised text-ink-3 hover:text-ink-2'
                     )}
                   >
-                    {opt.label}
+                    {t(opt.labelKey)}
                   </button>
                 ))}
               </div>
@@ -864,8 +885,8 @@ export function ConnectionEditor({
             {form.authType === 'password' && (
               <>
                 <Field
-                  label="密码"
-                  hint={initial && hasSecret ? '已保存，留空则不修改' : undefined}
+                  label={t('conn.ui.editor.password')}
+                  hint={initial && hasSecret ? t('conn.ui.editor.keepSecretHint') : undefined}
                   className="col-span-2"
                 >
                   <div className="flex gap-1.5">
@@ -874,7 +895,11 @@ export function ConnectionEditor({
                       type={showPassword ? 'text' : 'password'}
                       value={form.password}
                       onChange={(e) => set('password', e.target.value)}
-                      placeholder={initial && hasSecret ? '••••••••（留空保持原密码）' : '登录密码'}
+                      placeholder={
+                        initial && hasSecret
+                          ? t('conn.ui.editor.passwordKeepPlaceholder')
+                          : t('conn.ui.editor.passwordPlaceholder')
+                      }
                       autoComplete="new-password"
                     />
                     <button
@@ -882,7 +907,7 @@ export function ConnectionEditor({
                       className="btn shrink-0"
                       onClick={() => setShowPassword((v) => !v)}
                     >
-                      {showPassword ? '隐藏' : '显示'}
+                      {showPassword ? t('conn.ui.editor.hide') : t('conn.ui.editor.show')}
                     </button>
                   </div>
                 </Field>
@@ -893,7 +918,7 @@ export function ConnectionEditor({
                     onClick={() => void clearSecret()}
                   >
                     <Trash2 size={11} />
-                    清除已保存的凭据
+                    {t('conn.ui.editor.clearSecret')}
                   </button>
                 )}
               </>
@@ -902,8 +927,8 @@ export function ConnectionEditor({
             {form.authType === 'privateKey' && (
               <>
                 <Field
-                  label="私钥文件路径"
-                  hint="可手动填写，或点「选择文件」从本地导入"
+                  label={t('conn.ui.editor.keyPath')}
+                  hint={t('conn.ui.editor.keyPathHint')}
                   className="col-span-2"
                 >
                   <div className="flex gap-2">
@@ -920,13 +945,17 @@ export function ConnectionEditor({
                       disabled={picking}
                     >
                       {picking ? <Loader2 size={13} className="animate-spin" /> : <FolderOpen size={13} />}
-                      选择文件
+                      {t('conn.ui.editor.pickFile')}
                     </button>
                   </div>
                 </Field>
                 <Field
-                  label="私钥口令"
-                  hint={initial && hasSecret ? '已保存，留空则不修改' : '私钥未加密则留空'}
+                  label={t('conn.ui.editor.passphrase')}
+                  hint={
+                    initial && hasSecret
+                      ? t('conn.ui.editor.keepSecretHint')
+                      : t('conn.ui.editor.passphraseHintNew')
+                  }
                   className="col-span-2"
                 >
                   <input
@@ -943,16 +972,13 @@ export function ConnectionEditor({
             {form.authType === 'agent' && (
               <div className="col-span-2 flex items-start gap-2 rounded-lg border border-edge-soft bg-app px-3 py-2.5 text-2xs leading-relaxed text-ink-3">
                 <KeyRound size={13} className="mt-0.5 shrink-0" />
-                <span>
-                  使用系统 SSH Agent 中的密钥认证。Windows 需启用 OpenSSH Authentication
-                  Agent 服务并已 ssh-add 导入密钥；Linux/macOS 需保证 SSH_AUTH_SOCK 可用。
-                </span>
+                <span>{t('conn.ui.editor.agentHint')}</span>
               </div>
             )}
 
             <Field
-              label="代理"
-              hint="经 SOCKS5 / HTTP 代理建立连接（配置了跳板链时作用于第一跳）"
+              label={t('conn.ui.editor.proxy')}
+              hint={t('conn.ui.editor.proxyHint')}
               className="col-span-2"
             >
               <div className="space-y-2">
@@ -969,7 +995,7 @@ export function ConnectionEditor({
                           : 'border-edge bg-raised text-ink-3 hover:text-ink-2'
                       )}
                     >
-                      {opt.label}
+                      {t(opt.labelKey)}
                     </button>
                   ))}
                 </div>
@@ -979,7 +1005,7 @@ export function ConnectionEditor({
                       className="input selectable"
                       value={form.proxyHost}
                       onChange={(e) => set('proxyHost', e.target.value)}
-                      placeholder="代理地址，如 192.168.1.2"
+                      placeholder={t('conn.ui.editor.proxyHostPlaceholder')}
                     />
                     <input
                       className="input selectable font-mono"
@@ -991,14 +1017,14 @@ export function ConnectionEditor({
                       className="input selectable"
                       value={form.proxyUsername}
                       onChange={(e) => set('proxyUsername', e.target.value)}
-                      placeholder="用户名（可选）"
+                      placeholder={t('conn.ui.editor.proxyUserPlaceholder')}
                     />
                     <input
                       className="input selectable"
                       type="password"
                       value={form.proxyPassword}
                       onChange={(e) => set('proxyPassword', e.target.value)}
-                      placeholder="密码（编辑时留空 = 保持不变）"
+                      placeholder={t('conn.ui.editor.proxyPassPlaceholder')}
                     />
                   </div>
                 )}
@@ -1026,17 +1052,19 @@ export function ConnectionEditor({
           </>
         )}
 
-        {/* 串口专属字段：只有 Console 救急需要的几个参数，其余 SSH 字段不显示 */}
+        {
+          /* 串口专属字段：只有 Console 救急需要的几个参数，其余 SSH 字段不显示 */
+        }
         {!isSsh && (
           <>
             <Field
-              label="串口端口"
+              label={t('conn.ui.editor.serialPort')}
               hint={
                 ports.length === 0
                   ? portsLoading
-                    ? '正在枚举…'
-                    : '没有检测到串口设备，插上 USB 转串口后点「刷新」'
-                  : `已检测到 ${ports.length} 个端口`
+                    ? t('conn.ui.editor.serialEnumerating')
+                    : t('conn.ui.editor.serialNone')
+                  : t('conn.ui.editor.serialCount', { count: ports.length })
               }
               className="col-span-2"
             >
@@ -1045,7 +1073,11 @@ export function ConnectionEditor({
                   value={form.serialPath}
                   onChange={pickPort}
                   options={portOptions}
-                  placeholder={portsLoading ? '正在枚举…' : 'COM3 或 /dev/ttyUSB0'}
+                  placeholder={
+                    portsLoading
+                      ? t('conn.ui.editor.serialEnumerating')
+                      : t('conn.ui.editor.serialPortPlaceholder')
+                  }
                   className="min-w-0 flex-1"
                 />
                 <button
@@ -1059,59 +1091,63 @@ export function ConnectionEditor({
                   ) : (
                     <RefreshCw size={13} />
                   )}
-                  刷新
+                  {t('conn.ui.editor.refresh')}
                 </button>
               </div>
             </Field>
 
-            {/* 选中端口的身份信息：热插拔后靠它把连接找回同一台设备，值得让人看见 */}
+            {
+              /* 选中端口的身份信息：热插拔后靠它把连接找回同一台设备，值得让人看见 */
+            }
             {selectedPort && (
               <div className="col-span-2 -mt-2 flex flex-wrap items-center gap-x-3 gap-y-0.5 font-mono text-3xs text-ink-3">
                 {selectedPort.manufacturer && <span>{selectedPort.manufacturer}</span>}
                 {selectedPort.serialNumber && <span>SN {selectedPort.serialNumber}</span>}
                 {selectedPort.pnpId && <span className="truncate">{selectedPort.pnpId}</span>}
                 {!selectedPort.serialNumber && !selectedPort.pnpId && (
-                  <span className="text-warning">
-                    该设备没有 USB 身份信息，拔插后只能按端口号找回
-                  </span>
+                  <span className="text-warning">{t('conn.ui.editor.noUsbIdentity')}</span>
                 )}
               </div>
             )}
 
             {/*
-              端口待确认：导入别人的连接、或设备拔掉后按 USB 身份找不回来时置位。
-              不说清楚的话，用户点「连接」只会看到一句原生层的 open failed，
-              完全不知道是端口号对不上。
-            */}
+             * 端口待确认：导入别人的连接、或设备拔掉后按 USB 身份找不回来时置位。
+             * 不说清楚的话，用户点「连接」只会看到一句原生层的 open failed，
+             * 完全不知道是端口号对不上。
+             */}
             {initial?.serial?.pathPending && (
               <div className="col-span-2 -mt-1 flex items-start gap-2 rounded-md border border-warning/40 bg-warning/10 px-2.5 py-2">
                 <AlertTriangle size={13} className="mt-0.5 shrink-0 text-warning" />
                 <div className="text-2xs leading-relaxed text-ink-2">
-                  端口待确认：这条连接的端口来自别的机器（或设备已拔走），本机没有
-                  <span className="mx-0.5 font-mono">{form.serialPath || '该端口'}</span>。
-                  插好设备后点「刷新」，从上面重新选一次端口再保存。
+                  {t('conn.ui.editor.pathPendingPrefix')}
+                  <span className="mx-0.5 font-mono">
+                    {form.serialPath || t('conn.ui.editor.pathPendingFallback')}
+                  </span>
+                  {t('conn.ui.editor.pathPendingSuffix')}
                 </div>
               </div>
             )}
 
-            {/* 一键套用已知设备的串口参数：省掉"57600 还是 115200"的试错 */}
+            {
+              /* 一键套用已知设备的串口参数：省掉"57600 还是 115200"的试错 */
+            }
             <div className="col-span-2 -mb-1 flex flex-wrap items-center gap-1.5">
-              <span className="text-2xs text-ink-3">常用预设</span>
+              <span className="text-2xs text-ink-3">{t('conn.ui.editor.presets')}</span>
               {SERIAL_PRESETS.map((preset) => (
                 <button
-                  key={preset.label}
+                  key={preset.labelKey}
                   type="button"
                   className="btn h-6 px-2 text-2xs"
                   onClick={() => setForm((f) => ({ ...f, ...preset.apply }))}
-                  title={`套用 ${preset.hint}`}
+                  title={t('conn.ui.editor.applyPresetTitle', { hint: t(preset.hintKey) })}
                 >
-                  {preset.label}
+                  {t(preset.labelKey)}
                 </button>
               ))}
-              <span className="text-3xs text-ink-3">套用后仍可逐项修改</span>
+              <span className="text-3xs text-ink-3">{t('conn.ui.editor.presetEditableHint')}</span>
             </div>
 
-            <Field label="波特率" hint="多数 Console 口是 115200，老设备常见 9600">
+            <Field label={t('conn.ui.editor.baudRate')} hint={t('conn.ui.editor.baudRateHint')}>
               <Combobox
                 value={form.serialBaud}
                 onChange={(v) => set('serialBaud', v)}
@@ -1120,7 +1156,7 @@ export function ConnectionEditor({
               />
             </Field>
 
-            <Field label="数据位">
+            <Field label={t('conn.ui.editor.dataBits')}>
               <div className="flex gap-1">
                 {DATA_BITS_OPTIONS.map((bits) => (
                   <button
@@ -1140,7 +1176,7 @@ export function ConnectionEditor({
               </div>
             </Field>
 
-            <Field label="校验位" className="col-span-2">
+            <Field label={t('conn.ui.editor.parity')} className="col-span-2">
               <div className="flex gap-1">
                 {PARITY_OPTIONS.map((opt) => (
                   <button
@@ -1154,13 +1190,13 @@ export function ConnectionEditor({
                         : 'border-edge bg-raised text-ink-3 hover:text-ink-2'
                     )}
                   >
-                    {opt.label}
+                    {t(opt.labelKey)}
                   </button>
                 ))}
               </div>
             </Field>
 
-            <Field label="停止位">
+            <Field label={t('conn.ui.editor.stopBits')}>
               <div className="flex gap-1">
                 {STOP_BITS_OPTIONS.map((opt) => (
                   <button
@@ -1180,7 +1216,7 @@ export function ConnectionEditor({
               </div>
             </Field>
 
-            <Field label="流控">
+            <Field label={t('conn.ui.editor.flowControl')}>
               <div className="flex gap-1">
                 {FLOW_OPTIONS.map((opt) => (
                   <button
@@ -1194,16 +1230,13 @@ export function ConnectionEditor({
                         : 'border-edge bg-raised text-ink-3 hover:text-ink-2'
                     )}
                   >
-                    {opt.label}
+                    {t(opt.labelKey)}
                   </button>
                 ))}
               </div>
             </Field>
 
-            <Field
-              label={t('editor.encoding')}
-              hint="设备输出是 GBK 时选 GBK，否则中文会是乱码"
-            >
+            <Field label={t('editor.encoding')} hint={t('conn.ui.editor.charsetHint')}>
               <div className="flex gap-1">
                 {CHARSET_OPTIONS.map((opt) => (
                   <button
@@ -1223,7 +1256,7 @@ export function ConnectionEditor({
               </div>
             </Field>
 
-            <Field label="换行符" hint="回车键发出的换行，选错设备会把一条命令执行两遍">
+            <Field label={t('conn.ui.editor.newline')} hint={t('conn.ui.editor.newlineHint')}>
               <div className="flex gap-1">
                 {NEWLINE_OPTIONS.map((opt) => (
                   <button
@@ -1245,8 +1278,8 @@ export function ConnectionEditor({
             </Field>
 
             <Field
-              label="打开时复位设备（DTR）"
-              hint="拉低 DTR 会让 ESP32/STM32 重启。只是看日志时保持关闭"
+              label={t('conn.ui.editor.autoReset')}
+              hint={t('conn.ui.editor.autoResetHint')}
               className="col-span-2"
             >
               <div className="flex items-center gap-2 pt-0.5">
@@ -1255,15 +1288,14 @@ export function ConnectionEditor({
                   onChange={(v) => set('serialAutoReset', v)}
                 />
                 <span className="text-2xs text-ink-3">
-                  {form.serialAutoReset ? '连接时发送一次复位脉冲' : '不碰 DTR，设备保持当前状态'}
+                  {form.serialAutoReset
+                    ? t('conn.ui.editor.autoResetOn')
+                    : t('conn.ui.editor.autoResetOff')}
                 </span>
               </div>
             </Field>
 
-            <Field
-              label="每字符间隔"
-              hint="逐字符发送的停顿。粘贴长命令被设备吞字节时调大"
-            >
+            <Field label={t('conn.ui.editor.charDelay')} hint={t('conn.ui.editor.charDelayHint')}>
               <div className="flex items-center gap-1.5">
                 <input
                   className="input w-16 text-center"
@@ -1278,10 +1310,7 @@ export function ConnectionEditor({
               </div>
             </Field>
 
-            <Field
-              label="换行后间隔"
-              hint="每行发完停一下。AT 通道、bootloader 菜单需要"
-            >
+            <Field label={t('conn.ui.editor.lineDelay')} hint={t('conn.ui.editor.lineDelayHint')}>
               <div className="flex items-center gap-1.5">
                 <input
                   className="input w-16 text-center"
@@ -1309,40 +1338,40 @@ export function ConnectionEditor({
                       charset: form.serialCharset,
                       newline: form.serialNewline
                     })
-                  : '选择端口后这里显示会话名称'}
+                  : t('conn.ui.editor.serialPreviewEmpty')}
               </div>
               {/*
-                发送节奏是「隐性行为」，标签上看不出来。放在这里让用户保存前
-                就确认自己确实加上了延迟 —— 否则下次粘贴命令还是被吞。
-              */}
+               * 发送节奏是「隐性行为」，标签上看不出来。放在这里让用户保存前
+               * 就确认自己确实加上了延迟 —— 否则下次粘贴命令还是被吞。
+               */}
               {pacingPreview !== '' && <div className="mt-0.5 text-warning">{pacingPreview}</div>}
             </div>
           </>
         )}
 
-        <Field label="分组" hint="用于左侧列表归类">
+        <Field label={t('conn.ui.editor.group')} hint={t('conn.ui.editor.groupHint')}>
           <Combobox
             value={form.group}
             onChange={(v) => set('group', v)}
             options={groupOptions}
-            placeholder="默认"
+            placeholder={t('conn.ui.defaultGroup')}
           />
         </Field>
 
-        <Field label="标签" hint="逗号分隔，用于搜索">
+        <Field label={t('conn.ui.editor.tags')} hint={t('conn.ui.editor.tagsHint')}>
           <input
             className="input selectable"
             value={form.tags}
             onChange={(e) => set('tags', e.target.value)}
-            placeholder="A机房, 网关, arm64"
+            placeholder={t('conn.ui.editor.tagsPlaceholder')}
           />
         </Field>
 
-        <Field label="色标" className="col-span-2">
+        <Field label={t('conn.ui.editor.color')} className="col-span-2">
           <div className="flex items-center gap-2 pt-0.5">
             <button
               type="button"
-              title="不使用色标"
+              title={t('conn.ui.editor.noColor')}
               onClick={() => set('color', '')}
               className={cn(
                 'flex h-5 w-5 items-center justify-center rounded-full border text-2xs text-ink-3',
@@ -1366,12 +1395,12 @@ export function ConnectionEditor({
           </div>
         </Field>
 
-        <Field label="备注" className="col-span-2">
+        <Field label={t('conn.ui.editor.remark')} className="col-span-2">
           <textarea
             className="input scroll-thin h-16 resize-none selectable py-1.5"
             value={form.remark}
             onChange={(e) => set('remark', e.target.value)}
-            placeholder="现场联系人、设备用途、注意事项…"
+            placeholder={t('conn.ui.editor.remarkPlaceholder')}
           />
         </Field>
 
@@ -1381,10 +1410,12 @@ export function ConnectionEditor({
             {testResult.hostKeyMismatch && (
               <div className="mt-2 space-y-1.5 border-t border-danger/20 pt-2">
                 <div className="font-mono text-3xs text-ink-3">
-                  记录中：{testResult.hostKeyMismatch.known ?? '（无记录）'}
+                  {t('conn.ui.editor.knownKey', {
+                    value: testResult.hostKeyMismatch.known ?? t('conn.ui.editor.knownKeyNone')
+                  })}
                 </div>
                 <div className="selectable break-all font-mono text-3xs text-ink-2">
-                  设备当前：{testResult.hostKeyMismatch.actual}
+                  {t('conn.ui.editor.actualKey', { value: testResult.hostKeyMismatch.actual })}
                 </div>
                 <button
                   className="btn h-6 px-2 text-2xs"
@@ -1396,7 +1427,7 @@ export function ConnectionEditor({
                   ) : (
                     <Fingerprint size={11} />
                   )}
-                  更新主机指纹并重测
+                  {t('conn.ui.editor.trustHostKey')}
                 </button>
               </div>
             )}
@@ -1410,7 +1441,7 @@ export function ConnectionEditor({
               <button
                 className="mt-1 flex items-center gap-1 font-sans text-2xs text-accent transition-colors hover:text-ink"
                 disabled={updatingKey}
-                title="把该设备当前的指纹写进已知主机记录（设备重装/固件升级后用它对齐）"
+                title={t('conn.ui.editor.syncHostKeyTitle')}
                 onClick={() => void syncCurrentHostKey()}
               >
                 {updatingKey ? (
@@ -1418,7 +1449,7 @@ export function ConnectionEditor({
                 ) : (
                   <Fingerprint size={10} />
                 )}
-                用此指纹更新本地记录
+                {t('conn.ui.editor.syncHostKey')}
               </button>
             )}
           </div>

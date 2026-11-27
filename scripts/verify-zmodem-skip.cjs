@@ -658,7 +658,7 @@ async function runBatchSz({ lib, files, confirmResult = true }) {
       'utf8'
     )
     const i18nSrc = fs.readFileSync(
-      path.join(ROOT, 'src/renderer/src/i18n/index.ts'),
+      path.join(ROOT, 'src/renderer/src/i18n/locales/settings.ts'),
       'utf8'
     )
     check(

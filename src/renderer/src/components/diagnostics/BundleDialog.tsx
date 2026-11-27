@@ -2,6 +2,7 @@ import type * as React from 'react'
 import { useEffect, useState } from 'react'
 import { FolderOpen, Loader2, Package, Sparkles } from 'lucide-react'
 import type { BundlePreview } from '@shared/types'
+import { tNow, useI18n } from '@/i18n'
 import { call } from '@/lib/ipc'
 import { cn, formatBytes } from '@/lib/utils'
 import { Modal, Toggle } from '@/components/ui'
@@ -18,6 +19,7 @@ export function BundleDialog({
   reportId: string
   onClose: () => void
 }): React.JSX.Element {
+  const { t } = useI18n()
   const [preview, setPreview] = useState<BundlePreview | null>(null)
   const [includeLogs, setIncludeLogs] = useState(true)
   const [includeHistory, setIncludeHistory] = useState(true)
@@ -32,50 +34,50 @@ export function BundleDialog({
   const [previewFailed, setPreviewFailed] = useState(false)
   useEffect(() => {
     setPreviewFailed(false)
-    void call(window.api.diag.bundlePreview(reportId), { errorTitle: '读取打包信息失败' }).then(
-      (p) => {
-        if (p) setPreview(p)
-        else setPreviewFailed(true)
-      }
-    )
+    void call(window.api.diag.bundlePreview(reportId), {
+      errorTitle: tNow('panel.bundle.previewError')
+    }).then((p) => {
+      if (p) setPreview(p)
+      else setPreviewFailed(true)
+    })
   }, [reportId])
 
   const runExport = async (): Promise<void> => {
     setExporting(true)
     const res = await call(
       window.api.diag.bundleExport(reportId, { includeLogs, includeHistory, includeBackups }),
-      { errorTitle: '打包失败' }
+      { errorTitle: t('panel.bundle.exportError') }
     )
     setExporting(false)
     if (res && !res.canceled && res.path) {
       setResult({ path: res.path, size: res.size ?? 0, entries: res.entries ?? 0 })
-      useToastStore.getState().push({ kind: 'success', title: '诊断打包已导出' })
+      useToastStore.getState().push({ kind: 'success', title: t('panel.bundle.exported') })
     }
   }
 
   return (
     <Modal
       open
-      title={result ? '打包完成' : '一键打包'}
+      title={result ? t('panel.bundle.doneTitle') : t('panel.bundle.title')}
       onClose={onClose}
       footer={
         result ? (
           <>
             <button className="btn h-7 px-3 text-xs" onClick={onClose}>
-              关闭
+              {t('panel.bundle.close')}
             </button>
             <button
               className="btn btn-primary h-7 px-3.5 text-xs"
               onClick={() => void call(window.api.diag.bundleReveal(result.path), { silent: true })}
             >
               <FolderOpen size={12} />
-              在文件夹中显示
+              {t('panel.bundle.reveal')}
             </button>
           </>
         ) : (
           <>
             <button className="btn h-7 px-3 text-xs" onClick={onClose}>
-              取消
+              {t('panel.bundle.cancel')}
             </button>
             <button
               className="btn btn-primary h-7 px-3.5 text-xs"
@@ -83,7 +85,7 @@ export function BundleDialog({
               onClick={() => void runExport()}
             >
               {exporting ? <Loader2 size={12} className="animate-spin" /> : <Package size={12} />}
-              {exporting ? '打包中…' : '导出 zip'}
+              {exporting ? t('panel.bundle.exporting') : t('panel.bundle.exportZip')}
             </button>
           </>
         )
@@ -94,71 +96,85 @@ export function BundleDialog({
           <div className="flex items-center gap-2 rounded-lg border border-success/40 bg-success/5 px-3 py-2.5">
             <Sparkles size={14} className="shrink-0 text-success" />
             <div className="min-w-0 text-xs text-ink">
-              已导出 {result.entries} 个文件（{formatBytes(result.size)}）
+              {t('panel.bundle.exportedCount', {
+                entries: result.entries,
+                size: formatBytes(result.size)
+              })}
             </div>
           </div>
           <div className="selectable break-all rounded-md border border-edge bg-app px-2.5 py-2 font-mono text-2xs text-ink-3">
             {result.path}
           </div>
           <div className="text-2xs leading-relaxed text-ink-3">
-            包内包含：诊断报告（Markdown + HTML）、设备信息、以及勾选的日志/历史/配置备份。
-            直接把 zip 发给研发或客户即可复现现场。
+            {t('panel.bundle.resultHint')}
           </div>
         </div>
       ) : previewFailed ? (
         <div className="rounded-md border border-warning/40 bg-warning/5 px-3 py-2.5 text-2xs leading-relaxed text-ink-3">
-          读取打包信息失败，无法统计包内内容。可以关掉窗口重试，或用上方诊断报告单独导出。
+          {t('panel.bundle.previewFailedHint')}
         </div>
       ) : !preview ? (
         <div className="flex items-center justify-center gap-2 py-6 text-2xs text-ink-3">
           <Loader2 size={12} className="animate-spin" />
-          正在统计可打包内容…
+          {t('panel.bundle.loading')}
         </div>
       ) : (
         <div className="space-y-3">
           <div className="rounded-md border border-edge bg-app px-3 py-2 text-2xs leading-relaxed text-ink-3">
-            报告：<span className="text-ink-2">{preview.reportTitle}</span>
+            {t('panel.bundle.reportLabel')}
+            <span className="text-ink-2">{preview.reportTitle}</span>
             <br />
-            设备：{preview.connectionName}（{preview.host}）
+            {t('panel.bundle.deviceLabel')}
+            {t('panel.bundle.deviceValue', {
+              name: preview.connectionName,
+              host: preview.host
+            })}
             {preview.profileName && (
               <>
-                {' '}
-                · 档案：<span className="text-ink-2">{preview.profileName}</span>
+                {t('panel.bundle.profilePrefix')}
+                <span className="text-ink-2">{preview.profileName}</span>
               </>
             )}
           </div>
 
           <BundleRow
-            label="诊断报告 + 设备信息"
-            detail="始终包含（Markdown / HTML / 连接与档案信息）"
+            label={t('panel.bundle.rowReportLabel')}
+            detail={t('panel.bundle.rowReportDetail')}
             checked
             disabled
             onChange={() => undefined}
           />
           <BundleRow
-            label="会话日志"
+            label={t('panel.bundle.rowLogsLabel')}
             detail={
               preview.logFiles > 0
-                ? `${preview.logFiles} 个录制文件 · ${formatBytes(preview.logBytes)}`
-                : '该设备暂无会话日志'
+                ? t('panel.bundle.rowLogsDetail', {
+                    count: preview.logFiles,
+                    size: formatBytes(preview.logBytes)
+                  })
+                : t('panel.bundle.rowLogsEmpty')
             }
             checked={includeLogs && preview.logFiles > 0}
             disabled={preview.logFiles === 0}
             onChange={setIncludeLogs}
           />
           <BundleRow
-            label="命令历史"
+            label={t('panel.bundle.rowHistoryLabel')}
             detail={
-              preview.historyCount > 0 ? `${preview.historyCount} 条命令` : '该设备暂无命令历史'
+              preview.historyCount > 0
+                ? t('panel.bundle.rowHistoryDetail', { count: preview.historyCount })
+                : t('panel.bundle.rowHistoryEmpty')
             }
             checked={includeHistory && preview.historyCount > 0}
             disabled={preview.historyCount === 0}
             onChange={setIncludeHistory}
           />
           <BundleRow
-            label="配置备份"
+            label={t('panel.bundle.rowBackupsLabel')}
             detail={
-              preview.backups > 0 ? `${preview.backups} 份配置备份` : '该设备暂无配置备份'
+              preview.backups > 0
+                ? t('panel.bundle.rowBackupsDetail', { count: preview.backups })
+                : t('panel.bundle.rowBackupsEmpty')
             }
             checked={includeBackups && preview.backups > 0}
             disabled={preview.backups === 0}

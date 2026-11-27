@@ -27,6 +27,7 @@ import { useTrzszStore } from '@/stores/trzszStore'
 import { amountText, basename, locateKind, parentOf } from '@/lib/transferFormat'
 import { getZmodemRecordProgress, watchZmodem, type ZmodemProgress } from '@/lib/zmodem'
 import { closePanelsExcept } from '@/lib/panels'
+import { type I18nKey, tNow, useI18n } from '@/i18n'
 
 /**
  * 传输记录面板（覆盖主区域，与其它工具面板同一套外壳）。
@@ -36,6 +37,7 @@ import { closePanelsExcept } from '@/lib/panels'
  * 面板负责翻旧账 —— 两边不重叠，也就不用同步状态。
  */
 export function TransferPanel(): React.JSX.Element | null {
+  const { t } = useI18n()
   const open = useTransferStore((s) => s.panelOpen)
   const close = (): void => useTransferStore.setState({ panelOpen: false })
   // 面板按钮上写着「关闭 (Esc)」，这里必须真的响应 Esc
@@ -46,10 +48,10 @@ export function TransferPanel(): React.JSX.Element | null {
     <div className="panel-shell fixed inset-x-0 z-30 flex flex-col bg-app">
       <div className="flex h-9 shrink-0 items-center gap-2 border-b border-edge bg-panel px-3">
         <Clock size={14} className="text-accent" />
-        <span className="text-xs font-semibold">传输记录</span>
-        <span className="text-2xs text-ink-3">上传 / 下载 / ZMODEM 的历史账本，点行可定位文件</span>
+        <span className="text-xs font-semibold">{t('files.ui.transfer.panelTitle')}</span>
+        <span className="text-2xs text-ink-3">{t('files.ui.transfer.panelSubtitle')}</span>
         <span className="flex-1" />
-        <button className="btn-icon" title="关闭 (Esc)" onClick={close}>
+        <button className="btn-icon" title={t('files.ui.closeEsc')} onClick={close}>
           <X size={14} />
         </button>
       </div>
@@ -58,14 +60,15 @@ export function TransferPanel(): React.JSX.Element | null {
   )
 }
 
-const FILTERS: Array<{ key: RecordFilter; label: string }> = [
-  { key: 'all', label: '全部' },
-  { key: 'upload', label: '上传' },
-  { key: 'download', label: '下载' },
-  { key: 'failed', label: '失败' }
+const FILTERS: Array<{ key: RecordFilter; labelKey: I18nKey }> = [
+  { key: 'all', labelKey: 'files.ui.transfer.filterAll' },
+  { key: 'upload', labelKey: 'files.ui.transfer.filterUpload' },
+  { key: 'download', labelKey: 'files.ui.transfer.filterDownload' },
+  { key: 'failed', labelKey: 'files.ui.transfer.filterFailed' }
 ]
 
 function Body(): React.JSX.Element {
+  const { t } = useI18n()
   const records = useTransferStore((s) => s.records)
   const loading = useTransferStore((s) => s.loading)
   const filter = useTransferStore((s) => s.filter)
@@ -115,7 +118,7 @@ function Body(): React.JSX.Element {
               className={cn('seg-item', filter === f.key && 'seg-item-active')}
               onClick={() => setFilter(f.key)}
             >
-              {f.label}
+              {t(f.labelKey)}
               {f.key === 'failed' && counts.failed > 0 && (
                 <span className="font-mono text-3xs text-danger">{counts.failed}</span>
               )}
@@ -133,14 +136,14 @@ function Body(): React.JSX.Element {
           />
           <input
             className="input h-6 w-56 pl-6 text-2xs"
-            placeholder="筛选文件名 / 路径 / 连接"
+            placeholder={t('files.ui.transfer.searchPlaceholder')}
             value={keyword}
             onChange={(e) => setKeyword(e.target.value)}
           />
         </div>
         <button
           className="btn-icon"
-          title="重新读取"
+          title={t('files.ui.transfer.reloadShort')}
           onClick={() => void load()}
           disabled={loading}
         >
@@ -153,10 +156,10 @@ function Body(): React.JSX.Element {
           <div className="flex h-full flex-col items-center justify-center gap-1.5 text-center">
             <Clock size={22} className="text-ink-3/40" />
             <div className="text-xs text-ink-2">
-              {records.length === 0 ? '还没有传输记录' : '没有符合条件的记录'}
+              {records.length === 0 ? t('files.ui.transfer.empty') : t('files.ui.transfer.noMatch')}
             </div>
             <div className="max-w-[320px] text-2xs leading-relaxed text-ink-3">
-              记录只在传输开始与结束时各写一条；进度不落盘，所以这里看不到中间过程。
+              {t('files.ui.transfer.panelEmptyHint')}
             </div>
           </div>
         ) : (
@@ -176,6 +179,7 @@ function Body(): React.JSX.Element {
  * ------------------------------------------------------------------ */
 
 function RecordRow({ record }: { record: TransferRecord }): React.JSX.Element {
+  const { t } = useI18n()
   const expanded = useTransferStore((s) => s.expanded === record.id)
   const toggleExpanded = useTransferStore((s) => s.toggleExpanded)
   const retry = useTransferStore((s) => s.retry)
@@ -184,17 +188,20 @@ function RecordRow({ record }: { record: TransferRecord }): React.JSX.Element {
 
   const live = record.status === 'running' || record.status === 'pending'
   const hasDetail = (record.failures?.length ?? 0) > 0
-  const name = record.fileName || basename(record.remotePath || record.localPath) || '（未知文件）'
+  const name =
+    record.fileName || basename(record.remotePath || record.localPath) || t('files.ui.transfer.unknownFile')
   const where = locateKind(record)
 
   return (
     <div className="px-3 py-1.5 transition-colors hover:bg-raised/40">
       <div className="flex items-center gap-2">
-        {/* 展开箭头：有明细才可点，没有就留白保持对齐 */}
+        {/*
+         * 展开箭头：有明细才可点，没有就留白保持对齐
+         */}
         {hasDetail ? (
           <button
             className="flex w-3 shrink-0 items-center text-ink-3 hover:text-ink"
-            title={expanded ? '收起失败明细' : '展开失败明细'}
+            title={expanded ? t('files.ui.transfer.collapseFailure') : t('files.ui.transfer.expandFailure')}
             onClick={() => toggleExpanded(record.id)}
           >
             {expanded ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
@@ -214,7 +221,7 @@ function RecordRow({ record }: { record: TransferRecord }): React.JSX.Element {
         </span>
 
         <span className="min-w-0 flex-1 truncate text-2xs text-ink-3" title={record.target ?? ''}>
-          {record.connectionName || record.target || '未知连接'}
+          {record.connectionName || record.target || t('files.ui.transfer.unknownConn')}
         </span>
 
         <span className="w-24 shrink-0 font-mono text-3xs text-ink-3">
@@ -231,11 +238,13 @@ function RecordRow({ record }: { record: TransferRecord }): React.JSX.Element {
 
         <StatusChip record={record} />
 
-        {/* 定位：能定位就实心按钮，不能就直说，不猜路径 */}
+        {/*
+         * 定位：能定位就实心按钮，不能就直说，不猜路径
+         */}
         {where === 'local-file' && (
           <button
             className="btn-icon"
-            title="在文件管理器中显示"
+            title={t('files.ui.dock.revealLocal')}
             onClick={() => void reveal(record.localPath)}
           >
             <ExternalLink size={11} />
@@ -244,7 +253,7 @@ function RecordRow({ record }: { record: TransferRecord }): React.JSX.Element {
         {where === 'local-dir' && (
           <button
             className="btn-icon"
-            title="打开所在文件夹"
+            title={t('files.ui.transfer.openContainingDir')}
             onClick={() => void openDir(record.localPath)}
           >
             <FolderOpen size={11} />
@@ -252,8 +261,8 @@ function RecordRow({ record }: { record: TransferRecord }): React.JSX.Element {
         )}
         {where === 'remote' && <RemoteLocate record={record} />}
         {where === 'none' && (
-          <span className="shrink-0 text-3xs text-ink-3/70" title="这条传输没有记录可定位的路径">
-            原始位置未记录
+          <span className="shrink-0 text-3xs text-ink-3/70" title={t('files.ui.transfer.unrecordedPathHint')}>
+            {t('files.ui.transfer.unrecordedPath')}
           </span>
         )}
 
@@ -264,10 +273,10 @@ function RecordRow({ record }: { record: TransferRecord }): React.JSX.Element {
             disabled={record.via !== 'sftp'}
             title={
               record.via !== 'sftp'
-                ? 'trzsz / ZMODEM 由远端发起，需回终端重新操作'
+                ? t('files.ui.transfer.remoteRetryHint')
                 : record.retriedBy
-                  ? `已被新任务重试过（${record.retriedBy}）`
-                  : '按原路径重试'
+                  ? t('files.ui.transfer.retriedByTitle', { id: record.retriedBy })
+                  : t('files.ui.transfer.retryPath')
             }
             onClick={() => void retry(record)}
           >
@@ -278,7 +287,7 @@ function RecordRow({ record }: { record: TransferRecord }): React.JSX.Element {
 
       {record.retriedBy && (
         <div className="mt-0.5 pl-[38px] text-3xs text-ink-3">
-          已被新任务重试 → {record.retriedBy}
+          {t('files.ui.transfer.retriedByRow', { id: record.retriedBy })}
         </div>
       )}
 
@@ -307,6 +316,7 @@ function RecordRow({ record }: { record: TransferRecord }): React.JSX.Element {
  * 不要画一个假的 0%。
  */
 function LiveAmount({ record }: { record: TransferRecord }): React.JSX.Element {
+  const { t } = useI18n()
   const task = useSftpStore((s) =>
     record.via === 'sftp' ? s.transfers.find((t) => t.id === record.id) : undefined
   )
@@ -343,7 +353,11 @@ function LiveAmount({ record }: { record: TransferRecord }): React.JSX.Element {
     const total = trzsz.files?.total
     const index = trzsz.files?.index
     const text =
-      total && index ? `${index} / ${total} 个文件` : trzsz.percent !== undefined ? `${trzsz.percent}%` : '进行中'
+      total && index
+        ? t('files.ui.transfer.filesCount', { done: index, total })
+        : trzsz.percent !== undefined
+          ? `${trzsz.percent}%`
+          : t('files.ui.transfer.status.running')
     return (
       <span className="w-24 shrink-0 text-right font-mono text-3xs text-accent" title={trzsz.file ?? ''}>
         {text}
@@ -352,8 +366,11 @@ function LiveAmount({ record }: { record: TransferRecord }): React.JSX.Element {
   }
   if (!task) {
     return (
-      <span className="w-24 shrink-0 text-right text-3xs text-ink-3" title="进程已重启或记录来自上次会话">
-        进行中 · 进度未知
+      <span
+        className="w-24 shrink-0 text-right text-3xs text-ink-3"
+        title={t('files.ui.transfer.progressUnknownTitle')}
+      >
+        {t('files.ui.transfer.progressUnknown')}
       </span>
     )
   }
@@ -365,6 +382,7 @@ function LiveAmount({ record }: { record: TransferRecord }): React.JSX.Element {
 }
 
 function RemoteLocate({ record }: { record: TransferRecord }): React.JSX.Element {
+  const { t } = useI18n()
   const online = useSessionStore((s) =>
     s.sessions.some((x) => x.connectionId === record.connectionId && x.status === 'connected')
   )
@@ -387,7 +405,7 @@ function RemoteLocate({ record }: { record: TransferRecord }): React.JSX.Element
   return (
     <button
       className="btn-icon disabled:opacity-40"
-      title={online ? '打开文件管理并进入该目录' : '该连接当前未建立'}
+      title={online ? t('files.ui.transfer.openInManager') : t('files.ui.transfer.disconnected')}
       disabled={!online}
       onClick={onClick}
     >
@@ -397,15 +415,16 @@ function RemoteLocate({ record }: { record: TransferRecord }): React.JSX.Element
 }
 
 function FailureDetails({ record }: { record: TransferRecord }): React.JSX.Element {
+  const { t } = useI18n()
   return (
     <div className="ml-[38px] mt-1 space-y-1 rounded-sm bg-raised/60 p-1.5">
       <div className="text-3xs text-ink-3">
-        共 {record.failureCount ?? 0} 个文件失败，按原因归并：
+        {t('files.ui.transfer.failureSummary', { count: record.failureCount ?? 0 })}
       </div>
       {(record.failures ?? []).map((g) => (
         <div key={g.message} className="text-3xs leading-4">
           <div className="text-ink-2">
-            {g.message}：{g.count} 个文件
+            {t('files.ui.transfer.failureReasonCount', { message: g.message, count: g.count })}
           </div>
           <div className="mt-0.5 space-y-0.5 pl-2 font-mono text-ink-3">
             {g.sample.slice(0, 50).map((p) => (
@@ -414,7 +433,9 @@ function FailureDetails({ record }: { record: TransferRecord }): React.JSX.Eleme
               </div>
             ))}
             {g.count > g.sample.length && (
-              <div className="text-ink-3/70">还有 {g.count - g.sample.length} 个未列出</div>
+              <div className="text-ink-3/70">
+                {t('files.ui.transfer.failureMore', { count: g.count - g.sample.length })}
+              </div>
             )}
           </div>
         </div>
@@ -428,13 +449,14 @@ function FailureDetails({ record }: { record: TransferRecord }): React.JSX.Eleme
  * ------------------------------------------------------------------ */
 
 function StatusChip({ record }: { record: TransferRecord }): React.JSX.Element {
+  const { t } = useI18n()
   const map: Record<TransferRecord['status'], { label: string; cls: string; icon: React.JSX.Element }> = {
-    pending: { label: '排队中', cls: 'text-ink-3', icon: <Loader2 size={10} /> },
-    running: { label: '进行中', cls: 'text-accent', icon: <Loader2 size={10} className="animate-spin" /> },
-    done: { label: '完成', cls: 'text-success', icon: <CheckCircle2 size={10} /> },
-    error: { label: '失败', cls: 'text-danger', icon: <AlertTriangle size={10} /> },
-    canceled: { label: '已取消', cls: 'text-ink-3', icon: <Ban size={10} /> },
-    interrupted: { label: '已中断', cls: 'text-warning', icon: <AlertTriangle size={10} /> }
+    pending: { label: t('files.ui.transfer.status.pending'), cls: 'text-ink-3', icon: <Loader2 size={10} /> },
+    running: { label: t('files.ui.transfer.status.running'), cls: 'text-accent', icon: <Loader2 size={10} className="animate-spin" /> },
+    done: { label: t('files.ui.transfer.status.done'), cls: 'text-success', icon: <CheckCircle2 size={10} /> },
+    error: { label: t('files.ui.transfer.status.error'), cls: 'text-danger', icon: <AlertTriangle size={10} /> },
+    canceled: { label: t('files.ui.transfer.status.canceled'), cls: 'text-ink-3', icon: <Ban size={10} /> },
+    interrupted: { label: t('files.ui.transfer.status.interrupted'), cls: 'text-warning', icon: <AlertTriangle size={10} /> }
   }
   const m = map[record.status]
   return (
@@ -446,8 +468,13 @@ function StatusChip({ record }: { record: TransferRecord }): React.JSX.Element {
 }
 
 function progressText(t: TransferTask): string {
-  if (t.unit === 'files') return `${Math.min(t.transferred, t.total)} / ${t.total} 个文件`
-  if (t.total <= 0) return t.speedBps ? `${formatBytes(t.speedBps)}/s` : '计算中…'
+  if (t.unit === 'files') {
+    return tNow('files.ui.transfer.filesCount', {
+      done: Math.min(t.transferred, t.total),
+      total: t.total
+    })
+  }
+  if (t.total <= 0) return t.speedBps ? `${formatBytes(t.speedBps)}/s` : tNow('files.ui.dock.calculating')
   const pct = Math.min(100, Math.round((t.transferred / t.total) * 100))
   return `${pct}%${t.speedBps ? ` · ${formatBytes(t.speedBps)}/s` : ''}`
 }

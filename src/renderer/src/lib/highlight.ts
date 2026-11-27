@@ -29,6 +29,8 @@
  *    这里的语义是：\r 丢弃当前缓冲（那一行还没结束），\n 结束一行。
  */
 
+import { tNow } from '../i18n/core'
+
 /** 单条规则的最大 pattern 长度：再长必然是机器生成的，不是人手写的 */
 export const MAX_PATTERN_LENGTH = 512
 /** 规则条数上限：50 条已经能染出一个「圣诞树」，再多只会拖慢每一行 */
@@ -88,7 +90,9 @@ export interface RuleError {
 export const DEFAULT_RULES: HighlightRule[] = [
   {
     id: 'builtin-error',
-    name: '错误 / 失败',
+    get name() {
+      return tNow('common.highlight.builtinError')
+    },
     pattern: '\\b(error|fail(ed|ure)?|fatal|panic|exception|denied|refused)\\b',
     flags: 'i',
     enabled: true,
@@ -97,7 +101,9 @@ export const DEFAULT_RULES: HighlightRule[] = [
   },
   {
     id: 'builtin-warn',
-    name: '警告',
+    get name() {
+      return tNow('common.highlight.builtinWarn')
+    },
     pattern: '\\b(warn(ing)?|deprecated|timeout|timed out)\\b',
     flags: 'i',
     enabled: true,
@@ -344,14 +350,17 @@ export function compileRules(rules: HighlightRule[] | undefined): {
     if (!rule || rule.enabled === false) continue
     const name = rule.name || rule.pattern || rule.id
     if (!rule.pattern) {
-      errors.push({ id: rule.id, name, message: '正则为空' })
+      errors.push({ id: rule.id, name, message: tNow('common.highlight.emptyPattern') })
       continue
     }
     if (rule.pattern.length > MAX_PATTERN_LENGTH) {
       errors.push({
         id: rule.id,
         name,
-        message: '正则过长（' + rule.pattern.length + ' > ' + MAX_PATTERN_LENGTH + '）'
+        message: tNow('common.highlight.patternTooLong', {
+          len: rule.pattern.length,
+          max: MAX_PATTERN_LENGTH
+        })
       })
       continue
     }
@@ -409,10 +418,12 @@ export interface PatternRisk {
 export function assessPattern(pattern: string): PatternRisk {
   const reasons: string[] = []
   if (!pattern) return { level: 'ok', reasons }
-  if (/\([^()]*[+*][^()]*\)[+*]/.test(pattern)) reasons.push('分组内的量词又被外层量词修饰，回溯可能指数增长')
-  if (/\(\.[^()]*\*[^()]*\)[+*]/.test(pattern)) reasons.push('.* 被分组后重复，回溯可能爆炸')
-  if (/\.\*[^()]{0,20}\.\*/.test(pattern)) reasons.push('多个 .* 串联')
-  if (/\([^()]*\?[^()]*\)[+*]/.test(pattern)) reasons.push('可选组被重复')
+  if (/\([^()]*[+*][^()]*\)[+*]/.test(pattern))
+    reasons.push(tNow('common.highlight.riskNestedQuantifier'))
+  if (/\(\.[^()]*\*[^()]*\)[+*]/.test(pattern)) reasons.push(tNow('common.highlight.riskDotStarGroup'))
+  if (/\.\*[^()]{0,20}\.\*/.test(pattern)) reasons.push(tNow('common.highlight.riskMultipleDotStar'))
+  if (/\([^()]*\?[^()]*\)[+*]/.test(pattern))
+    reasons.push(tNow('common.highlight.riskOptionalGroupRepeat'))
   return { level: reasons.length > 0 ? 'warn' : 'ok', reasons }
 }
 

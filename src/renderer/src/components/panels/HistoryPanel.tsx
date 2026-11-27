@@ -6,6 +6,7 @@ import { useCommandStore } from '@/stores/commandStore'
 import { useConnectionStore } from '@/stores/connectionStore'
 import { useExecutionStore } from '@/stores/executionStore'
 import { useToastStore } from '@/stores/toastStore'
+import { useI18n } from '@/i18n'
 import { call } from '@/lib/ipc'
 import { formatRelativeTime } from '@/lib/utils'
 import { ConfirmDialog, EmptyState } from '@/components/ui'
@@ -15,6 +16,7 @@ import { ConfirmDialog, EmptyState } from '@/components/ui'
  * 全局搜索所有会话的历史命令，可一键重新执行或收藏为常用命令。
  */
 export function HistoryPanel(): React.JSX.Element {
+  const { t } = useI18n()
   const connections = useConnectionStore((s) => s.connections)
   const [entries, setEntries] = useState<CommandHistoryEntry[]>([])
   const [keyword, setKeyword] = useState('')
@@ -48,7 +50,7 @@ export function HistoryPanel(): React.JSX.Element {
 
   const rerun = (e: CommandHistoryEntry): void => {
     useExecutionStore.getState().requestRun({
-      name: '历史命令',
+      name: t('panel.history.rerunName'),
       template: e.command,
       variables: [],
       confirmRequired: false,
@@ -62,34 +64,36 @@ export function HistoryPanel(): React.JSX.Element {
       window.api.command.save({
         name,
         command: e.command,
-        description: `来自 ${e.connectionName} 的历史命令`,
-        group: '收藏',
+        description: t('panel.history.favoriteDesc', { name: e.connectionName }),
+        group: t('panel.history.favoriteGroup'),
         confirmRequired: false,
         variables: []
       }),
-      { errorTitle: '收藏失败' }
+      { errorTitle: t('panel.history.favoriteError') }
     )
     if (saved) {
       await useCommandStore.getState().load()
       useToastStore.getState().push({
         kind: 'success',
-        title: '已收藏为常用命令',
-        detail: '可在「常用命令」面板的「收藏」分组中找到'
+        title: t('panel.history.favoriteSuccess'),
+        detail: t('panel.history.favoriteSuccessDetail')
       })
     }
   }
 
   return (
     <div className="flex h-full flex-col">
-      {/* 头部：和连接/命令/日志面板对齐成同一高度，切面板时内容不跳 */}
+      {/*
+       * 头部：和连接/命令/日志面板对齐成同一高度，切面板时内容不跳
+       */}
       <div className="panel-head">
         <History size={13} className="shrink-0 text-ink-3" />
-        <span className="panel-title">命令历史</span>
+        <span className="panel-title">{t('panel.history.title')}</span>
         <span className="panel-count">{entries.length}</span>
         <span className="flex-1" />
         <button
           className="btn-icon h-6 w-6"
-          title="清空历史"
+          title={t('panel.history.clearTitle')}
           onClick={() => setConfirmClear(true)}
         >
           <Eraser size={13} />
@@ -104,7 +108,7 @@ export function HistoryPanel(): React.JSX.Element {
           />
           <input
             className="input h-7 pl-7 text-xs"
-            placeholder="搜索历史命令…"
+            placeholder={t('panel.history.searchPlaceholder')}
             value={keyword}
             onChange={(e) => setKeyword(e.target.value)}
           />
@@ -113,9 +117,9 @@ export function HistoryPanel(): React.JSX.Element {
           className="input h-7 w-[104px] shrink-0 text-2xs"
           value={connectionId}
           onChange={(e) => setConnectionId(e.target.value)}
-          title="按连接过滤"
+          title={t('panel.history.filterByConn')}
         >
-          <option value="">全部连接</option>
+          <option value="">{t('panel.history.allConns')}</option>
           {connections.map((c) => (
             <option key={c.id} value={c.id}>
               {c.name}
@@ -128,8 +132,8 @@ export function HistoryPanel(): React.JSX.Element {
         {entries.length === 0 && (
           <EmptyState
             icon={<Play size={24} />}
-            title="暂无历史记录"
-            hint="在终端中执行（或通过常用命令发送）的命令会出现在这里，可收藏为常用命令"
+            title={t('panel.history.emptyTitle')}
+            hint={t('panel.history.emptyHint')}
           />
         )}
 
@@ -147,20 +151,20 @@ export function HistoryPanel(): React.JSX.Element {
               <span className="truncate">{e.connectionName}</span>
               {e.source === 'snippet' && (
                 <span className="rounded-sm border border-accent/30 px-1 text-accent/80">
-                  命令库
+                  {t('panel.history.sourceSnippet')}
                 </span>
               )}
               <span className="flex-1" />
               <button
                 className="btn-icon h-5 w-5 opacity-0 group-hover:opacity-100"
-                title="重新执行"
+                title={t('panel.history.rerun')}
                 onClick={() => rerun(e)}
               >
                 <Play size={11} />
               </button>
               <button
                 className="btn-icon h-5 w-5 opacity-0 group-hover:opacity-100"
-                title="收藏为常用命令"
+                title={t('panel.history.favorite')}
                 onClick={() => void favorite(e)}
               >
                 <Star size={11} />
@@ -172,13 +176,13 @@ export function HistoryPanel(): React.JSX.Element {
 
       <ConfirmDialog
         open={confirmClear}
-        title="清空命令历史"
+        title={t('panel.history.clearDialogTitle')}
         danger
-        confirmText="清空"
+        confirmText={t('panel.history.clearConfirm')}
         message={
-          <>
-            确定要清空{connectionId ? '当前筛选连接' : '全部'}的命令历史吗？该操作不可撤销。
-          </>
+          connectionId
+            ? t('panel.history.clearMessageFiltered')
+            : t('panel.history.clearMessageAll')
         }
         onCancel={() => setConfirmClear(false)}
         onConfirm={() => {

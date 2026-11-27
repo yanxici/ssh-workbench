@@ -491,9 +491,10 @@ export function RemoteEditorDialog({
             </span>
             <span className="font-mono">{t('editor.linesTotal', { count: totalLines })}</span>
             <span>
-              保存时原文件自动备份为 <span className="font-mono">.bak</span>
+              {t('files.ui.editor.bakPrefix')}
+              <span className="font-mono">.bak</span>
             </span>
-            {dirty && <span className="text-warning">● 有未保存修改</span>}
+            {dirty && <span className="text-warning">{t('files.ui.editor.unsaved')}</span>}
             {!dirty && justSaved && <span className="text-success">{t('editor.saved')}</span>}
           </span>
           <button type="button" className="btn" disabled={saving} onClick={requestClose}>

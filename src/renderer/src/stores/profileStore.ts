@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import type { DeviceProfile, DeviceProfileInput } from '@shared/types'
+import { tNow } from '@/i18n/core'
 import { call } from '@/lib/ipc'
 import { useToastStore } from './toastStore'
 
@@ -45,7 +46,9 @@ export const useProfileStore = create<ProfileState>()((set, get) => ({
      * 典型症状是保存后列表回到保存前（新档案「消失」），过几秒又自己回来。
      */
     const seq = ++loadSeq
-    const list = await call(window.api.profiles.list(), { errorTitle: '加载档案失败' })
+    const list = await call(window.api.profiles.list(), {
+      errorTitle: tNow('panel.profiles.loadError')
+    })
     if (seq !== loadSeq) return
     set((s) => {
       const profiles = list ?? []
@@ -56,20 +59,24 @@ export const useProfileStore = create<ProfileState>()((set, get) => ({
   },
 
   save: async (input) => {
-    const saved = await call(window.api.profiles.save(input), { errorTitle: '保存档案失败' })
+    const saved = await call(window.api.profiles.save(input), {
+      errorTitle: tNow('panel.profiles.saveError')
+    })
     if (saved) {
       await get().load()
       set({ selectedId: saved.id })
       useToastStore.getState().push({
         kind: 'success',
-        title: input.id ? '档案已更新' : '档案已创建'
+        title: input.id ? tNow('panel.profiles.updated') : tNow('panel.profiles.created')
       })
     }
     return saved
   },
 
   remove: async (id) => {
-    const ok = await call(window.api.profiles.remove(id), { errorTitle: '删除档案失败' })
+    const ok = await call(window.api.profiles.remove(id), {
+      errorTitle: tNow('panel.profiles.removeError')
+    })
     if (ok !== null) {
       /*
        * 删除后列表是本地摘的，不重新 load。

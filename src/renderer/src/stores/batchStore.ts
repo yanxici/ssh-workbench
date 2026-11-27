@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import type { BatchProgressEvent, BatchSessionResult, BatchStatus } from '@shared/types'
+import { tNow } from '@/i18n/core'
 import { call } from '@/lib/ipc'
 import { uid } from '@/lib/utils'
 import { useToastStore } from './toastStore'
@@ -68,11 +69,11 @@ export const useBatchStore = create<BatchState>()((set, get) => ({
     const { selectedSessionIds, command, timeoutMs, running } = get()
     if (running) return
     if (selectedSessionIds.length === 0) {
-      useToastStore.getState().push({ kind: 'warning', title: '请先勾选要执行的设备会话' })
+      useToastStore.getState().push({ kind: 'warning', title: tNow('panel.batch.needSession') })
       return
     }
     if (!command.trim()) {
-      useToastStore.getState().push({ kind: 'warning', title: '请输入要执行的命令' })
+      useToastStore.getState().push({ kind: 'warning', title: tNow('panel.batch.needCommand') })
       return
     }
 
@@ -88,8 +89,8 @@ export const useBatchStore = create<BatchState>()((set, get) => ({
     if (live.length === 0) {
       useToastStore.getState().push({
         kind: 'warning',
-        title: '勾选的会话都已不在线',
-        detail: '请重新选择设备'
+        title: tNow('panel.batch.allOfflineTitle'),
+        detail: tNow('panel.batch.allOfflineDetail')
       })
       return
     }
@@ -110,7 +111,7 @@ export const useBatchStore = create<BatchState>()((set, get) => ({
     })
 
     const results = await call(window.api.batch.run(runId, live, command, timeoutMs), {
-      errorTitle: '批量执行失败'
+      errorTitle: tNow('panel.batch.runError')
     })
     // 旧批次的收尾不能覆盖刚发起的下一批（runId 是唯一能区分两者的东西）
     if (get().runId !== runId) return
@@ -142,8 +143,8 @@ export const useBatchStore = create<BatchState>()((set, get) => ({
       const firstSess = useSessionStore.getState().sessions.find((s) => s.id === firstId)
       void notifyTask({
         kind: 'batch',
-        title: `批量执行完成：${ok}/${results.length} 台正常返回`,
-        detail: bad === 0 ? undefined : `${bad} 台异常，详见批量面板`,
+        title: tNow('panel.batch.doneTitle', { ok, total: results.length }),
+        detail: bad === 0 ? undefined : tNow('panel.batch.doneFailDetail', { bad }),
         connectionId: firstSess?.connectionId,
         sessionId: firstId
       })

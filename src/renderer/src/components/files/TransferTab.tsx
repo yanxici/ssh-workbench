@@ -20,8 +20,9 @@ import { useSftpStore } from '@/stores/sftpStore'
 import { useSessionStore } from '@/stores/sessionStore'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { useToastStore } from '@/stores/toastStore'
-import { amountText, basename, locateKind, parentOf, STATUS_CLASS, STATUS_LABEL } from '@/lib/transferFormat'
+import { amountText, basename, locateKind, parentOf, STATUS_CLASS, statusLabel } from '@/lib/transferFormat'
 import { getZmodemRecordProgress, watchZmodem, type ZmodemProgress } from '@/lib/zmodem'
+import { type I18nKey, useI18n } from '@/i18n'
 
 /**
  * 侧栏「传输」Tab —— 上传 / 下载的记录，点一行就能定位到文件。
@@ -36,14 +37,15 @@ import { getZmodemRecordProgress, watchZmodem, type ZmodemProgress } from '@/lib
  */
 type TabFilter = 'all' | 'upload' | 'download' | 'failed'
 
-const FILTERS: Array<{ key: TabFilter; label: string }> = [
-  { key: 'all', label: '全部' },
-  { key: 'upload', label: '上传' },
-  { key: 'download', label: '下载' },
-  { key: 'failed', label: '失败' }
+const FILTERS: Array<{ key: TabFilter; labelKey: I18nKey }> = [
+  { key: 'all', labelKey: 'files.ui.transfer.filterAll' },
+  { key: 'upload', labelKey: 'files.ui.transfer.filterUpload' },
+  { key: 'download', labelKey: 'files.ui.transfer.filterDownload' },
+  { key: 'failed', labelKey: 'files.ui.transfer.filterFailed' }
 ]
 
 export function TransferTab(): React.JSX.Element {
+  const { t } = useI18n()
   const records = useTransferStore((s) => s.records)
   const loading = useTransferStore((s) => s.loading)
   const load = useTransferStore((s) => s.load)
@@ -91,7 +93,7 @@ export function TransferTab(): React.JSX.Element {
               )}
               onClick={() => setFilter(f.key)}
             >
-              {f.label}
+              {t(f.labelKey)}
               {f.key === 'all' && counts.live > 0 && (
                 <span className="font-mono text-3xs text-accent">{counts.live}</span>
               )}
@@ -104,7 +106,7 @@ export function TransferTab(): React.JSX.Element {
         <span className="flex-1" />
         <button
           className="btn-icon h-6 w-6"
-          title={loading ? '正在读取…' : '重新读取记录'}
+          title={loading ? t('files.ui.reading') : t('files.ui.transfer.reloadTitle')}
           disabled={loading}
           onClick={() => void load()}
         >
@@ -119,10 +121,10 @@ export function TransferTab(): React.JSX.Element {
           <div className="flex flex-col items-center gap-1 px-4 py-8 text-center">
             <Download size={18} className="text-ink-3/50" />
             <div className="text-2xs text-ink-3">
-              {records.length === 0 ? '还没有传输记录' : '没有符合条件的记录'}
+              {records.length === 0 ? t('files.ui.transfer.empty') : t('files.ui.transfer.noMatch')}
             </div>
             <div className="max-w-[220px] text-3xs leading-4 text-ink-3/70">
-              上传与下载各在这里留一条记录，点行尾的按钮可定位文件
+              {t('files.ui.transfer.tabEmptyHint')}
             </div>
           </div>
         ) : (
@@ -144,6 +146,7 @@ export function TransferTab(): React.JSX.Element {
  * 每次下载手动选目录等于每次多点三次，所以把落点做成可见、可改的一项。
  */
 function DownloadDirRow(): React.JSX.Element {
+  const { t } = useI18n()
   const [dir, setDir] = useState('')
   const [busy, setBusy] = useState(false)
   const downloadDir = useSettingsStore((s) => s.settings.downloadDir)
@@ -161,7 +164,9 @@ function DownloadDirRow(): React.JSX.Element {
 
   const pick = async (): Promise<void> => {
     setBusy(true)
-    const res = await call(window.api.sftp.pickDownloadDir(), { errorTitle: '选择下载目录失败' })
+    const res = await call(window.api.sftp.pickDownloadDir(), {
+      errorTitle: t('files.ui.err.pickDownloadDir')
+    })
     setBusy(false)
     if (!res || res.canceled) return
     // 必须落盘，只 setDir 的话重启就回去了，设置页也永远不显示「恢复默认」
@@ -169,7 +174,7 @@ function DownloadDirRow(): React.JSX.Element {
     setDir(res.dir)
     useToastStore.getState().push({
       kind: 'success',
-      title: '下载目录已更改',
+      title: t('files.ui.toast.downloadDirChanged'),
       detail: res.dir
     })
   }
@@ -178,14 +183,14 @@ function DownloadDirRow(): React.JSX.Element {
     <div className="flex shrink-0 items-center gap-1 border-b border-edge px-2 py-1">
       <Download size={11} className="shrink-0 text-ink-3" />
       <span className="min-w-0 flex-1 truncate font-mono text-3xs text-ink-3" title={dir}>
-        {dir || '读取中…'}
+        {dir || t('files.ui.reading')}
       </span>
       <button
         className="shrink-0 rounded-sm px-1 py-0.5 text-3xs text-ink-3 transition-colors hover:bg-hover hover:text-ink disabled:opacity-40"
         disabled={busy}
         onClick={() => void pick()}
       >
-        更改
+        {t('files.ui.transfer.changeDir')}
       </button>
     </div>
   )
@@ -196,13 +201,15 @@ function DownloadDirRow(): React.JSX.Element {
  * ------------------------------------------------------------------ */
 
 function TabRow({ record }: { record: TransferRecord }): React.JSX.Element {
+  const { t } = useI18n()
   const retry = useTransferStore((s) => s.retry)
   const reveal = useTransferStore((s) => s.reveal)
   const openDir = useTransferStore((s) => s.openDir)
   const live = isLiveRecord(record)
   const zm = useZmodemLive(record, live)
   const where = locateKind(record)
-  const name = record.fileName || basename(record.remotePath || record.localPath) || '（未知文件）'
+  const name =
+    record.fileName || basename(record.remotePath || record.localPath) || t('files.ui.transfer.unknownFile')
 
   return (
     <div className="group flex items-start gap-1.5 px-2 py-1 transition-colors hover:bg-hover/60">
@@ -221,7 +228,7 @@ function TabRow({ record }: { record: TransferRecord }): React.JSX.Element {
         </div>
         <div className="flex items-center gap-1 text-3xs text-ink-3">
           <span className="min-w-0 flex-1 truncate" title={record.connectionName ?? record.target ?? ''}>
-            {record.connectionName || record.target || '未知连接'}
+            {record.connectionName || record.target || t('files.ui.transfer.unknownConn')}
           </span>
           <span className="shrink-0 font-mono">{live ? <LiveAmount record={record} zm={zm} /> : amountText(record)}</span>
           <span className="shrink-0">{formatRelativeTime(record.finishedAt ?? record.startedAt)}</span>
@@ -240,15 +247,25 @@ function TabRow({ record }: { record: TransferRecord }): React.JSX.Element {
         )}
       </div>
 
-      {/* 行内动作：平时藏起来，hover 才出现，避免 280px 宽度里全是图标 */}
+      {/*
+       * 行内动作：平时藏起来，hover 才出现，避免 280px 宽度里全是图标
+       */}
       <div className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
         {where === 'local-file' && (
-          <button className="btn-icon h-5 w-5" title="在文件管理器中显示" onClick={() => void reveal(record.localPath)}>
+          <button
+            className="btn-icon h-5 w-5"
+            title={t('files.ui.dock.revealLocal')}
+            onClick={() => void reveal(record.localPath)}
+          >
             <FolderOpen size={11} />
           </button>
         )}
         {where === 'local-dir' && (
-          <button className="btn-icon h-5 w-5" title="打开所在文件夹" onClick={() => void openDir(record.localPath)}>
+          <button
+            className="btn-icon h-5 w-5"
+            title={t('files.ui.transfer.openContainingDir')}
+            onClick={() => void openDir(record.localPath)}
+          >
             <FolderOpen size={11} />
           </button>
         )}
@@ -259,8 +276,8 @@ function TabRow({ record }: { record: TransferRecord }): React.JSX.Element {
             disabled={record.via !== 'sftp'}
             title={
               record.via !== 'sftp'
-                ? 'trzsz / ZMODEM 由远端发起，需回终端重新操作'
-                : '按原路径重试'
+                ? t('files.ui.transfer.remoteRetryHint')
+                : t('files.ui.transfer.retryPath')
             }
             onClick={() => void retry(record)}
           >
@@ -313,6 +330,7 @@ function LiveAmount({
   record: TransferRecord
   zm: ZmodemProgress | null
 }): React.JSX.Element {
+  const { t } = useI18n()
   const task = useSftpStore((s) =>
     record.via === 'sftp' ? s.transfers.find((t) => t.id === record.id) : undefined
   )
@@ -324,9 +342,26 @@ function LiveAmount({
     const pct = Math.min(100, Math.round((zm.bytesDone / zm.bytesTotal) * 100))
     return <span className="text-accent">{batch}{pct}%</span>
   }
-  if (!task) return <span title={STATUS_LABEL[record.status]}>进行中</span>
-  if (task.unit === 'files') return <span>{Math.min(task.transferred, task.total)} / {task.total} 个</span>
-  if (task.total <= 0) return <span>{task.speedBps ? `${Math.round(task.speedBps / 1024)} KB/s` : '计算中'}</span>
+  if (!task) return <span title={statusLabel(record.status)}>{t('files.ui.transfer.status.running')}</span>
+  if (task.unit === 'files') {
+    return (
+      <span>
+        {t('files.ui.transfer.liveCountShort', {
+          done: Math.min(task.transferred, task.total),
+          total: task.total
+        })}
+      </span>
+    )
+  }
+  if (task.total <= 0) {
+    return (
+      <span>
+        {task.speedBps
+          ? `${Math.round(task.speedBps / 1024)} KB/s`
+          : t('files.ui.dock.calculatingShort')}
+      </span>
+    )
+  }
   return <span>{Math.min(100, Math.round((task.transferred / task.total) * 100))}%</span>
 }
 
@@ -358,6 +393,7 @@ function LiveProgressBar({
 }
 
 function RemoteLocate({ record }: { record: TransferRecord }): React.JSX.Element {
+  const { t } = useI18n()
   const online = useSessionStore((s) =>
     s.sessions.some((x) => x.connectionId === record.connectionId && x.status === 'connected')
   )
@@ -374,7 +410,7 @@ function RemoteLocate({ record }: { record: TransferRecord }): React.JSX.Element
   return (
     <button
       className="btn-icon h-5 w-5 disabled:opacity-30"
-      title={online ? '在远端打开该目录' : '该连接当前未建立'}
+      title={online ? t('files.ui.transfer.openRemoteDir') : t('files.ui.transfer.disconnected')}
       disabled={!online}
       onClick={onClick}
     >

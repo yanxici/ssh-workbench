@@ -288,16 +288,16 @@ export function ZmodemOverlay(): React.JSX.Element | null {
 
   const label =
     progress.phase === 'detected'
-      ? '等待确认'
+      ? t('term.zmodem.waitConfirm')
       : progress.phase === 'done'
-        ? progress.message || '传输完成'
+        ? progress.message || t('term.zmodem.done')
         : progress.phase === 'error'
-          ? progress.message || '传输失败'
+          ? progress.message || t('term.zmodem.failed')
           : progress.phase === 'canceled'
-            ? progress.message || '已取消'
+            ? progress.message || t('term.zmodem.canceled')
             : receiving
-            ? '接收中'
-            : '发送中'
+              ? t('term.zmodem.receiving')
+              : t('term.zmodem.sending')
 
   const abort = (): void => {
     if (activeId) abortZmodem(activeId)
@@ -338,7 +338,7 @@ export function ZmodemOverlay(): React.JSX.Element | null {
 
         <div className="mt-1.5 flex items-center justify-between text-3xs text-ink-3">
           <span>{formatBytes(progress.bytesDone)}</span>
-          <span>{total > 0 ? formatBytes(total) : '未知大小'}</span>
+          <span>{total > 0 ? formatBytes(total) : t('term.zmodem.unknownSize')}</span>
         </div>
 
         {progress.message && progress.phase !== 'error' && progress.phase !== 'canceled' && (
@@ -355,16 +355,16 @@ export function ZmodemOverlay(): React.JSX.Element | null {
                 onClick={() => {
                   if (activeId) void chooseZmodemSaveDir(activeId)
                 }}
-                title="重新选择保存到哪个文件夹"
+                title={t('term.zmodem.pickDirTitle')}
               >
                 <FolderOpen size={12} />
-                选择文件夹
+                {t('term.zmodem.pickDir')}
               </button>
             )}
             {canAbort && (
-              <button className="btn" onClick={abort} title="中断当前传输（Esc）">
+              <button className="btn" onClick={abort} title={t('term.zmodem.abortTitle')}>
                 <XCircle size={12} />
-                中断
+                {t('term.zmodem.abort')}
               </button>
             )}
           </div>
@@ -373,7 +373,7 @@ export function ZmodemOverlay(): React.JSX.Element | null {
         {progress.phase === 'detected' && receiving && (
           <div className="mt-1 flex items-center gap-1 text-3xs text-ink-3">
             <FolderOpen size={11} />
-            正在等待保存文件夹与远端起始帧…
+            {t('term.zmodem.waitingDirAndHeader')}
           </div>
         )}
       </div>

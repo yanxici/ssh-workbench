@@ -5,6 +5,7 @@ import type { ErrorEntry } from '@shared/types'
 import { call } from '@/lib/ipc'
 import { useToastStore } from '@/stores/toastStore'
 import { cn } from '@/lib/utils'
+import { useI18n } from '@/i18n'
 
 /**
  * 错误日志面板（设置 → 错误日志）。
@@ -15,6 +16,7 @@ import { cn } from '@/lib/utils'
  * - 一键复制单条 / 导出全部，方便贴给同事或提 issue。
  */
 export function ErrorLogSection(): React.JSX.Element {
+  const { t } = useI18n()
   const [entries, setEntries] = useState<ErrorEntry[]>([])
   const [loading, setLoading] = useState(false)
   const [keyword, setKeyword] = useState('')
@@ -62,9 +64,9 @@ export function ErrorLogSection(): React.JSX.Element {
   const copyOne = async (e: ErrorEntry): Promise<void> => {
     const text = [
       `[${e.level}] ${fmt(e.at)} ×${e.count}`,
-      `来源：${e.source}`,
-      `标题：${e.title}`,
-      e.detail ? `详情：${e.detail}` : ''
+      t('settings.ext.errorLog.copySource', { source: e.source }),
+      t('settings.ext.errorLog.copyTitle', { title: e.title }),
+      e.detail ? t('settings.ext.errorLog.copyDetail', { detail: e.detail }) : ''
     ]
       .filter(Boolean)
       .join('\n')
@@ -78,7 +80,10 @@ export function ErrorLogSection(): React.JSX.Element {
     const ok = await call(window.api.clip.write(text), { silent: true })
     useToastStore.getState().push({
       kind: ok === null ? 'warning' : 'success',
-      title: ok === null ? '复制失败，请手动选择文本' : '已复制到剪贴板'
+      title:
+        ok === null
+          ? t('settings.ext.errorLog.copyFailed')
+          : t('settings.ext.errorLog.copied')
     })
   }
 
@@ -92,7 +97,7 @@ export function ErrorLogSection(): React.JSX.Element {
           />
           <input
             className="input h-7 py-0 pl-6 pr-6 text-xs"
-            placeholder="搜索标题 / 来源 / 详情…"
+            placeholder={t('settings.ext.errorLog.searchPlaceholder')}
             value={keyword}
             onChange={(e) => setKeyword(e.target.value)}
           />
@@ -100,25 +105,31 @@ export function ErrorLogSection(): React.JSX.Element {
             <button
               className="absolute right-1 top-1/2 flex h-5 w-5 -translate-y-1/2 items-center justify-center text-ink-3 hover:text-ink"
               onClick={() => setKeyword('')}
-              title="清空"
+              title={t('settings.ext.errorLog.clearInput')}
             >
               <X size={11} />
             </button>
           )}
         </div>
-        <button className="btn-icon h-7 w-7" title="刷新" onClick={reload}>
+        <button
+          className="btn-icon h-7 w-7"
+          title={t('settings.ext.errorLog.refresh')}
+          onClick={reload}
+        >
           <RefreshCw size={12} className={cn(loading && 'animate-spin')} />
         </button>
         <button
           className="btn-icon h-7 w-7"
-          title="导出为文本文件"
+          title={t('settings.ext.errorLog.exportTitle')}
           disabled={entries.length === 0}
           onClick={() => {
-            void call(window.api.errors.export(), { errorTitle: '导出失败' }).then((res) => {
+            void call(window.api.errors.export(), {
+              errorTitle: t('settings.ext.errorLog.exportFailed')
+            }).then((res) => {
               if (res && res.canceled === false) {
                 useToastStore.getState().push({
                   kind: 'success',
-                  title: '已导出错误日志',
+                  title: t('settings.ext.errorLog.exported'),
                   detail: res.path
                 })
               }
@@ -128,18 +139,20 @@ export function ErrorLogSection(): React.JSX.Element {
           <FileDown size={12} />
         </button>
         {/*
-          诊断包：不依赖具体会话，连不上 / 闪退 / 更新失败都能导。
-          与「导出错误日志」的分工是这个多带了版本、系统、设置、启动日志。
-        */}
+         * 诊断包：不依赖具体会话，连不上 / 闪退 / 更新失败都能导。
+         * 与「导出错误日志」的分工是这个多带了版本、系统、设置、启动日志。
+         */}
         <button
           className="btn-icon h-7 w-7"
-          title="导出诊断包（应用信息 + 错误日志 + 设置 + 启动日志）"
+          title={t('settings.ext.errorLog.exportBundleTitle')}
           onClick={() => {
-            void call(window.api.support.exportBundle(), { errorTitle: '导出失败' }).then((res) => {
+            void call(window.api.support.exportBundle(), {
+              errorTitle: t('settings.ext.errorLog.exportFailed')
+            }).then((res) => {
               if (res && res.canceled === false) {
                 useToastStore.getState().push({
                   kind: 'success',
-                  title: '诊断包已导出',
+                  title: t('settings.ext.errorLog.exportBundleDone'),
                   detail: res.path
                 })
               }
@@ -150,17 +163,21 @@ export function ErrorLogSection(): React.JSX.Element {
         </button>
         <button
           className="btn-icon h-7 w-7 hover:text-danger"
-          title="清空全部错误日志"
+          title={t('settings.ext.errorLog.clearAllTitle')}
           disabled={entries.length === 0}
           onClick={() => {
             // call() 失败返回 null 并已弹错误提示；这里不能只 .then，
             // 否则清空失败也会把本地列表抹掉并报「已清空」
-            void call(window.api.errors.clear(), { errorTitle: '清空失败' }).then((ok) => {
+            void call(window.api.errors.clear(), {
+              errorTitle: t('settings.ext.errorLog.clearFailed')
+            }).then((ok) => {
               // call() 成功时返回 res.data —— clearErrors 是 void，成功即 undefined，
               // 所以只能用 ok === null 判失败，!ok 会把成功也当成失败。
               if (ok === null) return
               setEntries([])
-              useToastStore.getState().push({ kind: 'success', title: '已清空错误日志' })
+              useToastStore
+                .getState()
+                .push({ kind: 'success', title: t('settings.ext.errorLog.cleared') })
             })
           }}
         >
@@ -170,9 +187,9 @@ export function ErrorLogSection(): React.JSX.Element {
 
       <div className="text-3xs text-ink-3">
         {entries.length === 0
-          ? '暂无错误记录。出现异常时这里会自动收集；要反馈问题点右侧「诊断包」图标，连版本和环境一起打包。'
-          : `${filtered.length} 类 / 累计 ${totalCount} 次` +
-            (keyword ? `（已按「${keyword}」筛选）` : '')}
+          ? t('settings.ext.errorLog.empty')
+          : t('settings.ext.errorLog.summary', { types: filtered.length, total: totalCount }) +
+            (keyword ? t('settings.ext.errorLog.filtered', { keyword }) : '')}
       </div>
 
       <div className="space-y-1">
@@ -194,7 +211,7 @@ export function ErrorLogSection(): React.JSX.Element {
                 <button
                   className="min-w-0 flex-1 text-left"
                   onClick={() => toggle(e.id)}
-                  title="点击展开/收起详情"
+                  title={t('settings.ext.errorLog.toggleDetail')}
                 >
                   <div className="flex items-center gap-1.5">
                     <span className="truncate text-xs text-ink">{e.title}</span>
@@ -217,14 +234,14 @@ export function ErrorLogSection(): React.JSX.Element {
                 </button>
                 <button
                   className="btn-icon h-5 w-5 shrink-0"
-                  title="复制这条"
+                  title={t('settings.ext.errorLog.copyOne')}
                   onClick={() => copyOne(e)}
                 >
                   <Copy size={10} />
                 </button>
                 <button
                   className="btn-icon h-5 w-5 shrink-0 hover:text-danger"
-                  title="删除这条"
+                  title={t('settings.ext.errorLog.deleteOne')}
                   onClick={() => {
                     void call(window.api.errors.remove(e.id)).then((ok) => {
                       if (ok === null) return

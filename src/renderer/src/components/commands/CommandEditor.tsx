@@ -9,6 +9,7 @@ import { useSettingsStore } from '@/stores/settingsStore'
 import { COLORS, COMMAND_ICONS, DynamicIcon } from '@/lib/icons'
 import { cn } from '@/lib/utils'
 import { Combobox, Field, Modal, Toggle } from '@/components/ui'
+import { useI18n } from '@/i18n'
 
 const VAR_RE = /\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}/g
 
@@ -28,13 +29,14 @@ export function CommandEditor({
   presetGroup?: string
   onClose: () => void
 }): React.JSX.Element {
+  const { t } = useI18n()
   const save = useCommandStore((s) => s.save)
   const commands = useCommandStore((s) => s.commands)
 
   const [name, setName] = useState('')
   const [command, setCommand] = useState('')
   const [description, setDescription] = useState('')
-  const [group, setGroup] = useState('默认')
+  const [group, setGroup] = useState('')
   const [icon, setIcon] = useState('Terminal')
   const [color, setColor] = useState('')
   const [confirmRequired, setConfirmRequired] = useState(false)
@@ -48,13 +50,14 @@ export function CommandEditor({
     setName(initial?.name ?? '')
     setCommand(initial?.command ?? '')
     setDescription(initial?.description ?? '')
-    setGroup(initial?.group ?? presetGroup ?? '默认')
+    setGroup(initial?.group ?? presetGroup ?? t('cmd.defaultGroup'))
     setIcon(initial?.icon ?? 'Terminal')
     setColor(initial?.color ?? '')
     setConfirmRequired(initial?.confirmRequired ?? false)
     setEnvs(normalizeEnvs(initial?.envs))
     setVariables(initial?.variables ?? [])
     setSaving(false)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, initial, presetGroup])
 
   /** 从命令文本提取变量名（按出现顺序去重） */
@@ -84,11 +87,11 @@ export function CommandEditor({
 
   const submit = async (): Promise<void> => {
     if (!name.trim()) {
-      useToastStore.getState().push({ kind: 'warning', title: '请填写命令名称' })
+      useToastStore.getState().push({ kind: 'warning', title: t('cmd.editor.nameRequired') })
       return
     }
     if (!command.trim()) {
-      useToastStore.getState().push({ kind: 'warning', title: '请填写命令内容' })
+      useToastStore.getState().push({ kind: 'warning', title: t('cmd.editor.cmdRequired') })
       return
     }
     setSaving(true)
@@ -97,7 +100,7 @@ export function CommandEditor({
       name: name.trim(),
       command,
       description: description.trim() || undefined,
-      group: group.trim() || '默认',
+      group: group.trim() || t('cmd.defaultGroup'),
       icon,
       color: color || undefined,
       confirmRequired,
@@ -109,7 +112,9 @@ export function CommandEditor({
     if (saved) {
       useToastStore.getState().push({
         kind: 'success',
-        title: initial ? `已更新「${saved.name}」` : `已创建「${saved.name}」`
+        title: initial
+          ? t('cmd.toast.updated', { name: saved.name })
+          : t('cmd.toast.created', { name: saved.name })
       })
       onClose()
     }
@@ -126,64 +131,64 @@ export function CommandEditor({
    */
   const envKey = normalizeEnvs(envs)?.join(',') ?? 'all'
   const ENV_CHOICES: Array<{ key: string; label: string; value: ConnKind[] | undefined }> = [
-    { key: 'all', label: '全部环境', value: undefined },
-    { key: 'ssh', label: '仅 SSH', value: ['ssh'] },
-    { key: 'serial', label: '仅串口', value: ['serial'] }
+    { key: 'all', label: t('cmd.editor.envAll'), value: undefined },
+    { key: 'ssh', label: t('cmd.editor.envSsh'), value: ['ssh'] },
+    { key: 'serial', label: t('cmd.editor.envSerial'), value: ['serial'] }
   ]
 
   return (
     <Modal
       open={open}
-      title={initial ? `编辑命令 · ${initial.name}` : '新建常用命令'}
+      title={initial ? t('cmd.editor.editTitle', { name: initial.name }) : t('cmd.editor.newTitle')}
       onClose={onClose}
       width="max-w-xl"
       footer={
         <>
           <button className="btn" onClick={onClose}>
-            取消
+            {t('cmd.common.cancel')}
           </button>
           <button className="btn btn-primary" onClick={() => void submit()} disabled={saving}>
             {saving ? <Loader2 size={13} className="animate-spin" /> : null}
-            保存
+            {t('cmd.common.save')}
           </button>
         </>
       }
     >
       <div className="grid grid-cols-2 gap-x-3 gap-y-3.5">
-        <Field label="名称">
+        <Field label={t('cmd.editor.nameLabel')}>
           <input
             className="input selectable"
             value={name}
             onChange={(e) => setName(e.target.value)}
-            placeholder="例如：查看 CPU 温度"
+            placeholder={t('cmd.editor.namePlaceholder')}
           />
         </Field>
 
-        <Field label="分组" hint="可用 / 分层">
+        <Field label={t('cmd.editor.groupLabel')} hint={t('cmd.editor.groupHint')}>
           <Combobox
             value={group}
             onChange={setGroup}
             options={groupOptions}
-            placeholder="默认"
+            placeholder={t('cmd.defaultGroup')}
           />
         </Field>
 
-        <Field label="命令内容" hint="用 {{变量名}} 声明占位符" className="col-span-2">
+        <Field label={t('cmd.editor.cmdLabel')} hint={t('cmd.editor.cmdHint')} className="col-span-2">
           <textarea
             className="input scroll-thin h-20 resize-none selectable py-2 font-mono text-xs leading-relaxed"
             value={command}
             onChange={(e) => setCommand(e.target.value)}
-            placeholder={'例如：cd {{path}} && ls -la'}
+            placeholder={t('cmd.editor.cmdPlaceholder')}
             spellCheck={false}
           />
         </Field>
 
-        <Field label="描述" className="col-span-2">
+        <Field label={t('cmd.editor.descLabel')} className="col-span-2">
           <input
             className="input selectable"
             value={description}
             onChange={(e) => setDescription(e.target.value)}
-            placeholder="这条命令是做什么的（显示在名称下方）"
+            placeholder={t('cmd.editor.descPlaceholder')}
           />
         </Field>
 
@@ -191,7 +196,7 @@ export function CommandEditor({
           <div className="col-span-2">
             <div className="field-label flex items-center gap-1">
               <Braces size={11} className="text-accent" />
-              变量（{variables.length}）
+              {t('cmd.editor.varsTitle', { count: variables.length })}
             </div>
             <div className="space-y-1.5">
               {variables.map((v) => (
@@ -202,7 +207,7 @@ export function CommandEditor({
                   <span className="shrink-0 font-mono text-2xs text-accent">{`{{${v.name}}}`}</span>
                   <input
                     className="input h-6 flex-1 text-2xs"
-                    placeholder="默认值（可留空）"
+                    placeholder={t('cmd.editor.varDefaultPlaceholder')}
                     value={v.defaultValue ?? ''}
                     onChange={(e) => updateVar(v.name, { defaultValue: e.target.value })}
                   />
@@ -213,7 +218,7 @@ export function CommandEditor({
                       checked={Boolean(v.required)}
                       onChange={(e) => updateVar(v.name, { required: e.target.checked })}
                     />
-                    必填
+                    {t('cmd.varDialog.required')}
                   </label>
                 </div>
               ))}
@@ -221,7 +226,7 @@ export function CommandEditor({
           </div>
         )}
 
-        <Field label="图标" className="col-span-2">
+        <Field label={t('cmd.editor.iconLabel')} className="col-span-2">
           <div className="flex flex-wrap gap-1 pt-0.5">
             {COMMAND_ICONS.map((ic) => (
               <button
@@ -242,11 +247,11 @@ export function CommandEditor({
           </div>
         </Field>
 
-        <Field label="色点" className="col-span-2">
+        <Field label={t('cmd.editor.colorLabel')} className="col-span-2">
           <div className="flex items-center gap-2 pt-0.5">
             <button
               type="button"
-              title="不使用颜色"
+              title={t('cmd.editor.noColor')}
               onClick={() => setColor('')}
               className={cn(
                 'flex h-5 w-5 items-center justify-center rounded-full border text-2xs text-ink-3',
@@ -271,8 +276,8 @@ export function CommandEditor({
         </Field>
 
         <Field
-          label="适用环境"
-          hint="串口会话里只显示标了「串口」或「全部环境」的命令"
+          label={t('cmd.editor.envLabel')}
+          hint={t('cmd.editor.envHint')}
           className="col-span-2"
         >
           <div className="flex gap-1">
@@ -298,9 +303,9 @@ export function CommandEditor({
           <div className="flex items-start gap-2">
             <AlertTriangle size={13} className="mt-0.5 shrink-0 text-warning" />
             <div>
-              <div className="text-xs text-ink-2">危险命令</div>
+              <div className="text-xs text-ink-2">{t('cmd.editor.dangerLabel')}</div>
               <div className="mt-0.5 text-2xs text-ink-3">
-                开启后每次执行都会先弹出二次确认；命中全局危险关键词的命令也会被拦截确认
+                {t('cmd.editor.dangerHint')}
               </div>
             </div>
           </div>

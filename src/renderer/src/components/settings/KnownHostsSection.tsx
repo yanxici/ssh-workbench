@@ -4,6 +4,7 @@ import { Fingerprint, Loader2, RefreshCw, Trash2 } from 'lucide-react'
 import { ConfirmDialog } from '@/components/ui'
 import { call } from '@/lib/ipc'
 import { useToastStore } from '@/stores/toastStore'
+import { useI18n } from '@/i18n'
 
 /**
  * 设置 → 已知主机指纹。
@@ -48,6 +49,7 @@ async function probeHost(
 }
 
 export function KnownHostsSection(): React.JSX.Element {
+  const { t } = useI18n()
   const [knownHosts, setKnownHosts] = useState<KnownHost[]>([])
   /** 正在探测/更新指纹的 host:port（按钮转圈）；'*' 表示批量 */
   const [probeBusy, setProbeBusy] = useState<string | null>(null)
@@ -73,14 +75,14 @@ export function KnownHostsSection(): React.JSX.Element {
       const probe = await probeHost(h.host, h.port)
       if (!probe.ok) {
         // 失败原因必须落到界面上：silent 的 call() 会把原因吞掉，用户只会看到按钮转一圈
-        setFpError(`${key} 探测失败：${probe.error}`)
+        setFpError(t('settings.ext.knownHosts.probeFailed', { key, error: probe.error }))
         return
       }
       if (probe.fingerprint === h.fingerprint) {
         useToastStore.getState().push({
           kind: 'success',
-          title: '指纹无需更新',
-          detail: `${key} 与设备当前一致`
+          title: t('settings.ext.knownHosts.upToDateTitle'),
+          detail: t('settings.ext.knownHosts.upToDateDetail', { key })
         })
         return
       }
@@ -96,14 +98,16 @@ export function KnownHostsSection(): React.JSX.Element {
     if (targets.length === 0) return
     let done = 0
     let failed = 0
-    for (const t of targets) {
-      const res = await call(window.api.knownHosts.refresh(t.host, t.port, t.to), { silent: true })
+    for (const item of targets) {
+      const res = await call(window.api.knownHosts.refresh(item.host, item.port, item.to), {
+        silent: true
+      })
       if (res) {
         done += 1
         setKnownHosts((prev) =>
           prev.map((x) =>
-            x.host === t.host && x.port === t.port
-              ? { ...x, fingerprint: t.to, addedAt: Date.now() }
+            x.host === item.host && x.port === item.port
+              ? { ...x, fingerprint: item.to, addedAt: Date.now() }
               : x
           )
         )
@@ -113,8 +117,11 @@ export function KnownHostsSection(): React.JSX.Element {
     }
     useToastStore.getState().push({
       kind: failed > 0 ? 'warning' : 'success',
-      title: failed > 0 ? `已更新 ${done} 条，${failed} 条失败` : `已更新 ${done} 条指纹`,
-      detail: '下次连接会按新指纹校验'
+      title:
+        failed > 0
+          ? t('settings.ext.knownHosts.updatedPartial', { done, failed })
+          : t('settings.ext.knownHosts.updatedAll', { done }),
+      detail: t('settings.ext.knownHosts.updatedDetail')
     })
   }
 
@@ -141,8 +148,11 @@ export function KnownHostsSection(): React.JSX.Element {
     if (updates.length === 0) {
       useToastStore.getState().push({
         kind: failed > 0 ? 'warning' : 'success',
-        title: failed > 0 ? `刷新完成，${failed} 台探测失败` : '全部指纹均与设备一致',
-        detail: failed > 0 ? '离线设备/端口不通会探测失败，可单独重试' : undefined
+        title:
+          failed > 0
+            ? t('settings.ext.knownHosts.refreshPartial', { failed })
+            : t('settings.ext.knownHosts.refreshAllMatch'),
+        detail: failed > 0 ? t('settings.ext.knownHosts.refreshPartialDetail') : undefined
       })
       return
     }
@@ -150,15 +160,13 @@ export function KnownHostsSection(): React.JSX.Element {
     setFpUpdates(updates)
     useToastStore.getState().push({
       kind: 'warning',
-      title: `有 ${changed} 台设备的指纹已变化`,
-      detail: '请逐条确认后再更新'
+      title: t('settings.ext.knownHosts.changedTitle', { count: changed }),
+      detail: t('settings.ext.knownHosts.changedDetail')
     })
   }
 
   if (knownHosts.length === 0) {
-    return (
-      <div className="text-2xs text-ink-3">暂无记录。连接过的设备会在严格校验开启时自动记录。</div>
-    )
+    return <div className="text-2xs text-ink-3">{t('settings.ext.knownHosts.empty')}</div>
   }
 
   return (
@@ -167,7 +175,7 @@ export function KnownHostsSection(): React.JSX.Element {
         <button
           className="btn h-6 px-2 text-2xs"
           disabled={probeBusy !== null}
-          title="逐台探测设备当前的主机指纹，只列出真的发生变化的"
+          title={t('settings.ext.knownHosts.checkAllTitle')}
           onClick={() => void refreshAllFingerprints()}
         >
           {probeBusy === '*' ? (
@@ -175,10 +183,10 @@ export function KnownHostsSection(): React.JSX.Element {
           ) : (
             <RefreshCw size={11} />
           )}
-          检查全部更新
+          {t('settings.ext.knownHosts.checkAll')}
         </button>
         <span className="text-3xs leading-relaxed text-ink-3">
-          设备重装或固件升级后指纹会变，连接被拒时在这里更新即可
+          {t('settings.ext.knownHosts.hint')}
         </span>
       </div>
       {fpError && (
@@ -204,7 +212,7 @@ export function KnownHostsSection(): React.JSX.Element {
               </div>
               <button
                 className="btn-icon h-6 w-6 shrink-0 hover:text-accent"
-                title="探测设备当前指纹并更新（会先展示旧值与新值对比）"
+                title={t('settings.ext.knownHosts.probeOneTitle')}
                 disabled={probeBusy !== null}
                 onClick={() => void updateFingerprint(h)}
               >
@@ -216,7 +224,7 @@ export function KnownHostsSection(): React.JSX.Element {
               </button>
               <button
                 className="btn-icon h-6 w-6 shrink-0 hover:text-danger"
-                title="删除该记录（设备重装后需要）"
+                title={t('settings.ext.knownHosts.removeTitle')}
                 onClick={() => {
                   /*
                    * 删失败不能再删本地行了。
@@ -225,7 +233,7 @@ export function KnownHostsSection(): React.JSX.Element {
                    * 实际那条记录还在磁盘上，下次「主机指纹已变更」的告警会莫名其妙冒出来。
                    */
                   void call(window.api.knownHosts.remove(key), {
-                    errorTitle: '删除主机指纹记录失败'
+                    errorTitle: t('settings.ext.knownHosts.removeError')
                   }).then((ok) => {
                     if (ok === null) return
                     setKnownHosts((prev) =>
@@ -233,7 +241,7 @@ export function KnownHostsSection(): React.JSX.Element {
                     )
                     useToastStore
                       .getState()
-                      .push({ kind: 'success', title: '已删除主机指纹记录' })
+                      .push({ kind: 'success', title: t('settings.ext.knownHosts.removed') })
                   })
                 }}
               >
@@ -244,16 +252,17 @@ export function KnownHostsSection(): React.JSX.Element {
         })}
       </div>
 
-      {/* 指纹更新确认：必须让用户看到「旧 → 新」，不能静默信任 */}
+      {/*
+        * 指纹更新确认：必须让用户看到「旧 → 新」，不能静默信任
+        */}
       <ConfirmDialog
         open={fpUpdates.length > 0}
-        title="更新主机指纹"
-        confirmText="确认更新"
+        title={t('settings.ext.knownHosts.confirmTitle')}
+        confirmText={t('settings.ext.knownHosts.confirmBtn')}
         message={
           <div className="space-y-2">
             <div className="text-2xs leading-relaxed text-ink-3">
-              以下设备的指纹与本地记录不一致。如果设备确实重装过系统或升级过固件，可以确认更新；
-              否则说明连接可能被中间人劫持，请先核实。
+              {t('settings.ext.knownHosts.confirmDesc')}
             </div>
             <div className="scroll-thin max-h-52 space-y-1.5 overflow-y-auto">
               {fpUpdates.map((u) => (

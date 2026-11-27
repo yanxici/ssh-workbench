@@ -19,6 +19,7 @@
  */
 
 import type { RemoteFile } from '@shared/types'
+import { tNow } from '../i18n/core'
 
 export interface CachedDir {
   files: RemoteFile[]
@@ -230,7 +231,7 @@ export async function loadDirs(
           seen.add(d)
           stale.push(d)
         }
-      } else errors[d] = '读取目录失败'
+      } else errors[d] = tNow('files.ui.readDirFailed')
     }
     return { files, errors, stale }
   }

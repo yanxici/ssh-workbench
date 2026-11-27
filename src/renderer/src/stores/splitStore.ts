@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import type { PersistedPane, SplitLayoutMap } from '@shared/types'
 import { uid } from '@/lib/utils'
+import { tNow } from '@/i18n/core'
 import { useSessionStore } from './sessionStore'
 import { useSettingsStore } from './settingsStore'
 import { useToastStore } from './toastStore'
@@ -175,8 +176,8 @@ export const useSplitStore = create<SplitState>()((set, get) => ({
     if (countLeaves(base) >= MAX_PANES) {
       useToastStore.getState().push({
         kind: 'warning',
-        title: `最多 ${MAX_PANES} 个分屏`,
-        detail: '再分下去每格宽度不足 300px，先关掉一个再分'
+        title: tNow('term.split.maxTitle', { max: MAX_PANES }),
+        detail: tNow('term.split.maxDetail')
       })
       return null
     }

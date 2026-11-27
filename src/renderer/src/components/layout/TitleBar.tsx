@@ -33,32 +33,38 @@ export function TitleBar(): React.JSX.Element {
 
   return (
     <header className="titlebar drag-region">
-      {/* 左：Logo + 产品名 */}
+      {/*
+        * 左：Logo + 产品名
+        */}
       <div className="no-drag flex shrink-0 items-center gap-2 pl-3 pr-2.5">
         <BrandMark size={18} className="shrink-0" />
         <span className="text-sm font-semibold tracking-[-0.02em] text-ink">Portix</span>
       </div>
       <span className="mr-1 h-3.5 w-px shrink-0 bg-edge" />
 
-      {/* 中：会话标签页（占据全部剩余宽度，过多时横向滚动） */}
+      {/*
+        * 中：会话标签页（占据全部剩余宽度，过多时横向滚动）
+        */}
       <div className="min-w-0 flex-1 self-stretch overflow-hidden">
         <TabBar />
       </div>
 
-      {/* 右：搜索 / 设置 / 窗口控制 */}
+      {/*
+        * 右：搜索 / 设置 / 窗口控制
+        */}
       <div className="no-drag flex shrink-0 items-center gap-1 pl-1 pr-2">
         <button
           className="titlebar-btn"
-          title="搜索（命令中心 Ctrl+K）"
-          aria-label="搜索"
+          title={t('common.titlebar.searchTitle')}
+          aria-label={t('common.titlebar.search')}
           onClick={() => openCommandCenter('')}
         >
           <Search size={14} />
         </button>
         <button
           className="titlebar-btn"
-          title="设置 (Ctrl+,)"
-          aria-label="设置"
+          title={t('common.titlebar.settingsTitle')}
+          aria-label={t('common.titlebar.settings')}
           onClick={() => setSettingsOpen(true)}
         >
           <Settings size={14} />
@@ -81,31 +87,33 @@ export function TitleBar(): React.JSX.Element {
           {zenMode ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
         </button>
 
-        {/* 更新入口：有新版时在设置与窗口控制之间亮出「更新」 */}
+        {/*
+          * 更新入口：有新版时在设置与窗口控制之间亮出「更新」
+          */}
         <UpdateBadge />
 
         <span className="mx-1 h-4 w-px bg-edge" />
 
         <button
           className="titlebar-btn"
-          title="最小化"
-          aria-label="最小化"
+          title={t('common.titlebar.minimize')}
+          aria-label={t('common.titlebar.minimize')}
           onClick={() => void window.api.win.minimize()}
         >
           <Minus size={14} />
         </button>
         <button
           className="titlebar-btn"
-          title="最大化 / 还原"
-          aria-label="最大化或还原"
+          title={t('common.titlebar.maximizeTitle')}
+          aria-label={t('common.titlebar.maximize')}
           onClick={() => void window.api.win.toggleMax()}
         >
           <Square size={10} />
         </button>
         <button
           className={cn('titlebar-btn hover:bg-danger hover:text-white')}
-          title="关闭"
-          aria-label="关闭"
+          title={t('common.titlebar.close')}
+          aria-label={t('common.titlebar.close')}
           onClick={() => void window.api.win.close()}
         >
           <X size={14} />

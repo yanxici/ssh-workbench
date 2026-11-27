@@ -4,6 +4,7 @@ import { FolderOpen } from 'lucide-react'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { call } from '@/lib/ipc'
 import { useToastStore } from '@/stores/toastStore'
+import { useI18n } from '@/i18n'
 import { Row } from './sectionUi'
 
 /**
@@ -18,6 +19,7 @@ import { Row } from './sectionUi'
  * 会校验并回退系统「下载」，这里只负责展示当前生效值，不重复实现回退。
  */
 export function TransferSection(): React.JSX.Element {
+  const { t } = useI18n()
   const settings = useSettingsStore((s) => s.settings)
   const update = useSettingsStore((s) => s.update)
   const [effective, setEffective] = useState('')
@@ -31,7 +33,9 @@ export function TransferSection(): React.JSX.Element {
 
   const pick = async (): Promise<void> => {
     setBusy(true)
-    const res = await call(window.api.sftp.pickDownloadDir(), { errorTitle: '选择下载目录失败' })
+    const res = await call(window.api.sftp.pickDownloadDir(), {
+      errorTitle: t('settings.ext.transfer.pickError')
+    })
     setBusy(false)
     if (!res || res.canceled) return
     /*
@@ -44,7 +48,7 @@ export function TransferSection(): React.JSX.Element {
     setEffective(res.dir)
     useToastStore.getState().push({
       kind: 'success',
-      title: '下载目录已更改',
+      title: t('settings.ext.transfer.changed'),
       detail: res.dir
     })
   }
@@ -57,18 +61,18 @@ export function TransferSection(): React.JSX.Element {
 
   return (
     <Row
-      label="默认下载目录"
+      label={t('settings.ext.transfer.label')}
       hint={
         settings.downloadDir
-          ? `自定义：${settings.downloadDir}`
-          : '未设置时用系统「下载」文件夹；侧栏「传输」页里也能直接改'
+          ? t('settings.ext.transfer.customHint', { dir: settings.downloadDir })
+          : t('settings.ext.transfer.defaultHint')
       }
     >
       <span
         className="max-w-[180px] truncate text-2xs text-ink-3"
         title={effective || undefined}
       >
-        {effective || '读取中…'}
+        {effective || t('settings.ext.transfer.loading')}
       </span>
       <button
         className="btn btn-ghost h-7 px-2 text-2xs"
@@ -76,11 +80,11 @@ export function TransferSection(): React.JSX.Element {
         onClick={() => void pick()}
       >
         <FolderOpen size={12} />
-        选择
+        {t('settings.ext.transfer.choose')}
       </button>
       {settings.downloadDir ? (
         <button className="btn btn-ghost h-7 px-2 text-2xs" onClick={() => void reset()}>
-          恢复默认
+          {t('settings.ext.transfer.reset')}
         </button>
       ) : null}
     </Row>

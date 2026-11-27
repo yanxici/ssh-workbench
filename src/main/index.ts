@@ -21,7 +21,6 @@ import { setSerialWatcher, getSerialWatcher } from './transport/serialWatcherHol
 import { sftpManager } from './ssh/sftpManager'
 import { tunnelManager } from './ssh/portForward'
 import { getMainWindow, sendToMainWindow, setMainWindow } from './windowRef'
-import { runSmoke } from './smoke'
 import { setRecordChangeHandler, sweepStale } from './store/transferRecord'
 import { onTransferProgress } from './window/taskbar'
 import { pickIconPath } from './window/icon'
@@ -75,31 +74,43 @@ bootLog('boot: module loaded')
  *
  * 为什么不改成异步：Electron 在 app ready 之后再调用该 API 会抛错且不生效。
  */
-function readStartupPrefsSync(): { softwareRender: boolean; darkBg: boolean } {
+function readStartupPrefsSync(): {
+  softwareRender: boolean
+  darkBg: boolean
+  terminalRenderer: 'dom' | 'webgl'
+} {
   try {
     const p = join(app.getPath('userData'), 'data', 'settings.json')
     const raw = readFileSync(p, 'utf-8')
     const parsed = JSON.parse(raw) as {
       theme?: string
-      experimental?: { softwareRender?: boolean }
+      experimental?: { softwareRender?: boolean; terminalRenderer?: 'dom' | 'webgl' }
     }
     return {
       softwareRender: parsed?.experimental?.softwareRender === true,
-      darkBg: parsed?.theme === 'dark'
+      darkBg: parsed?.theme === 'dark',
+      terminalRenderer: parsed?.experimental?.terminalRenderer === 'webgl' ? 'webgl' : 'dom'
     }
   } catch {
-    return { softwareRender: false, darkBg: false }
+    return { softwareRender: false, darkBg: false, terminalRenderer: 'dom' }
   }
 }
 
 const startupPrefs = readStartupPrefsSync()
 const softwareRender = startupPrefs.softwareRender
-if (softwareRender) {
+// 默认 DOM 渲染不拉起空转 GPU 进程（可省 ~50-90 MB 内存）；仅显式选择 WebGL 且未强制软渲染时保留硬件加速
+if (softwareRender || startupPrefs.terminalRenderer !== 'webgl') {
   app.disableHardwareAcceleration()
-  bootLog('software render forced by settings.experimental.softwareRender')
-} else {
-  // 默认**不**关加速：终端走 WebGL 需要 GPU。崩溃时由下面的自愈逻辑降级。
+  if (softwareRender) bootLog('software render forced by settings.experimental.softwareRender')
+  else bootLog('hardware acceleration disabled for default DOM renderer')
 }
+
+// 禁用桌面单页应用无需的浏览器特性与磁盘 HTTP 缓存，压低常驻进程与内存开销
+app.commandLine.appendSwitch(
+  'disable-features',
+  'SpareRendererForSitePerProcess,BackForwardCache,Translate,OptimizationHints'
+)
+app.commandLine.appendSwitch('disk-cache-size', '1')
 
 /* ------------------------------------------------------------------ *
  *  窗口
@@ -190,7 +201,9 @@ function createWindow(): void {
     void win.loadFile(join(__dirname, '../renderer/index.html'))
   }
 
-  if (process.argv.includes('--smoke') || process.env.SSHW_SMOKE === '1') runSmoke(win)
+  if (process.argv.includes('--smoke') || process.env.SSHW_SMOKE === '1') {
+    void import('./smoke').then((m) => m.runSmoke(win))
+  }
 }
 
 /* ------------------------------------------------------------------ *

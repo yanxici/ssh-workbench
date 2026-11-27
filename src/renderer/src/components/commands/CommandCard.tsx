@@ -5,6 +5,7 @@ import { Pencil, Pin } from 'lucide-react'
 import type { Command } from '@shared/types'
 import { cn } from '@/lib/utils'
 import { accentClass, accentTone } from '@/lib/commandWall'
+import { useI18n } from '@/i18n'
 import { Highlight } from './Highlight'
 import { CommandCardTip } from './CommandCardTip'
 
@@ -55,6 +56,7 @@ export function CommandCard({
   onDrop: (e: DragEvent<HTMLButtonElement>) => void
   onDragEnd: () => void
 }): React.JSX.Element {
+  const { t } = useI18n()
   const tone = accentTone(c, pinned)
   const [anchor, setAnchor] = useState<{ x: number; y: number; w: number; h: number } | null>(null)
 
@@ -93,10 +95,10 @@ export function CommandCard({
         )}
       >
         {/*
-          名字容器必须 min-w-0 + w-full：button 的 UA 样式是 align-items:flex-start，
-          交叉轴上子项宽度由内容决定，少了 width 基准 line-clamp 的 overflow 不参与收缩，
-          长名字会把卡片撑出边界（旧实现踩过：129 张里 92 张中招）。
-        */}
+         * 名字容器必须 min-w-0 + w-full：button 的 UA 样式是 align-items:flex-start，
+         * 交叉轴上子项宽度由内容决定，少了 width 基准 line-clamp 的 overflow 不参与收缩，
+         * 长名字会把卡片撑出边界（旧实现踩过：129 张里 92 张中招）。
+         */}
         <span className="cmd-title-balance line-clamp-2 w-full min-w-0 break-words text-2xs font-medium leading-[1.3] text-ink">
           <Highlight text={c.name} indices={hit?.nameIndices ?? []} />
         </span>
@@ -108,10 +110,10 @@ export function CommandCard({
         )}
 
         {/*
-          悬停操作槽：收藏 / 编辑。
-          平时完全不可见，不占名字宽度（旧实现用 pr-6 常驻预留 24px）。
-          两个动作都 stopPropagation，否则点收藏会顺带执行命令。
-        */}
+         * 悬停操作槽：收藏 / 编辑。
+         * 平时完全不可见，不占名字宽度（旧实现用 pr-6 常驻预留 24px）。
+         * 两个动作都 stopPropagation，否则点收藏会顺带执行命令。
+         */}
         <span className="pointer-events-none absolute right-0.5 top-0.5 flex items-center gap-px opacity-0 transition-opacity duration-150 group-hover:pointer-events-auto group-hover:opacity-100">
           <span
             role="button"
@@ -120,7 +122,7 @@ export function CommandCard({
               'flex h-[16px] w-[16px] items-center justify-center rounded bg-app/85 text-ink-3 hover:text-warning',
               pinned && 'text-warning'
             )}
-            title={pinned ? '取消收藏' : '收藏置顶'}
+            title={pinned ? t('cmd.card.unpin') : t('cmd.card.pin')}
             onClick={(e) => {
               e.stopPropagation()
               onTogglePin()
@@ -131,8 +133,8 @@ export function CommandCard({
           <span
             role="button"
             tabIndex={-1}
-            className="flex h-[16px] w-[16px] items-center justify-center rounded bg-app/85 text-ink-3 hover:text-ink"
-            title="编辑此命令"
+            className="flex h-[16px] w-[16px] items-center justify-center rounded-sm bg-app/85 text-ink-3 hover:text-ink"
+            title={t('cmd.card.edit')}
             onClick={(e) => {
               e.stopPropagation()
               onEdit()
@@ -144,9 +146,9 @@ export function CommandCard({
       </button>
 
       {/*
-        浮层挂到 body：<button> 里塞 <div> 是非法嵌套，且卡片 overflow-hidden 会裁掉它。
-        portal 出来的节点不参与卡片的层叠与裁剪，滚动时随 hover 结束自然消失。
-      */}
+       * 浮层挂到 body：<button> 里塞 <div> 是非法嵌套，且卡片 overflow-hidden 会裁掉它。
+       * portal 出来的节点不参与卡片的层叠与裁剪，滚动时随 hover 结束自然消失。
+       */}
       {anchor &&
         createPortal(
           <CommandCardTip

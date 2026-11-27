@@ -1,6 +1,7 @@
 import type * as React from 'react'
 import { Copy, Plug, Radar, RefreshCw, Search, Wifi, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { useI18n } from '@/i18n'
 import { call } from '@/lib/ipc'
 import { useOverlayEscape } from '@/lib/overlayKeys'
 import { guessVendor } from '@shared/arpVendor'
@@ -31,6 +32,7 @@ function pickPort(openPorts: number[]): number {
 }
 
 export function DiscoveryPanel(): React.JSX.Element | null {
+  const { t } = useI18n()
   const panelOpen = useDiscoveryStore((s) => s.panelOpen)
   const tab = useDiscoveryStore((s) => s.tab)
 
@@ -43,28 +45,28 @@ export function DiscoveryPanel(): React.JSX.Element | null {
     <div className="panel-shell fixed inset-x-0 z-30 flex flex-col bg-app">
       <div className="flex h-9 shrink-0 items-center gap-2 border-b border-edge bg-panel px-3">
         <Radar size={14} className="text-accent" />
-        <span className="text-xs font-semibold">设备发现</span>
+        <span className="text-xs font-semibold">{t('panel.discovery.title')}</span>
         <div className="ml-3 flex items-center gap-0.5 rounded-md border border-edge bg-app p-0.5">
           {(
             [
-              { key: 'scan', label: '网段扫描' },
-              { key: 'mdns', label: 'mDNS 服务' }
+              { key: 'scan', label: t('panel.discovery.tabScan') },
+              { key: 'mdns', label: t('panel.discovery.tabMdns') }
             ] as const
-          ).map((t) => (
+          ).map((item) => (
             <button
-              key={t.key}
+              key={item.key}
               className={cn(
-                'rounded px-2.5 py-1 text-2xs transition-colors',
-                tab === t.key ? 'bg-accent/15 text-accent' : 'text-ink-3 hover:text-ink-2'
+                'rounded-sm px-2.5 py-1 text-2xs transition-colors',
+                tab === item.key ? 'bg-accent/15 text-accent' : 'text-ink-3 hover:text-ink-2'
               )}
-              onClick={() => useDiscoveryStore.getState().setTab(t.key)}
+              onClick={() => useDiscoveryStore.getState().setTab(item.key)}
             >
-              {t.label}
+              {item.label}
             </button>
           ))}
         </div>
         <span className="flex-1" />
-        <button className="btn-icon" title="关闭 (Esc)" onClick={close}>
+        <button className="btn-icon" title={t('panel.discovery.closeEsc')} onClick={close}>
           <X size={14} />
         </button>
       </div>
@@ -83,6 +85,7 @@ export function DiscoveryPanel(): React.JSX.Element | null {
  * ------------------------------------------------------------------ */
 
 function ScanView(): React.JSX.Element {
+  const { t } = useI18n()
   const ifaces = useDiscoveryStore((s) => s.ifaces)
   const cidr = useDiscoveryStore((s) => s.cidr)
   const portsText = useDiscoveryStore((s) => s.portsText)
@@ -98,29 +101,36 @@ function ScanView(): React.JSX.Element {
     <>
       <div className="rounded-lg border border-edge-soft bg-panel p-3">
         <div className="flex flex-wrap items-center gap-2">
-          <span className="text-2xs text-ink-3">本机网段</span>
+          <span className="text-2xs text-ink-3">{t('panel.discovery.localSubnet')}</span>
           <select
             className="input h-7 w-[240px]"
             value={cidr}
             onChange={(e) => useDiscoveryStore.getState().setCidr(e.target.value)}
           >
-            {ifaces.length === 0 && <option value="">未检测到网卡</option>}
+            {ifaces.length === 0 && <option value="">{t('panel.discovery.noIfaces')}</option>}
             {ifaces.map((i) => (
               <option key={`${i.name}-${i.address}`} value={i.cidr}>
-                {i.name} · {i.address} → {i.cidr}（{i.hostCount} 台）
+                {t('panel.discovery.ifaceOption', {
+                  name: i.name,
+                  address: i.address,
+                  cidr: i.cidr,
+                  count: i.hostCount
+                })}
               </option>
             ))}
-            {cidr && !ifaces.some((i) => i.cidr === cidr) && <option value={cidr}>{cidr}（手动）</option>}
+            {cidr && !ifaces.some((i) => i.cidr === cidr) && (
+              <option value={cidr}>{t('panel.discovery.manualOption', { cidr })}</option>
+            )}
           </select>
           <input
             className="input h-7 w-[180px]"
             value={cidr}
             onChange={(e) => useDiscoveryStore.getState().setCidr(e.target.value)}
-            placeholder="也可手动输入 192.168.1.0/24"
+            placeholder={t('panel.discovery.cidrPlaceholder')}
           />
           <button
             className="btn-icon"
-            title="重新读取网卡"
+            title={t('panel.discovery.reloadIfaces')}
             onClick={() => void useDiscoveryStore.getState().loadIfaces()}
           >
             <RefreshCw size={13} />
@@ -128,7 +138,7 @@ function ScanView(): React.JSX.Element {
         </div>
 
         <div className="mt-2 flex flex-wrap items-center gap-2">
-          <span className="text-2xs text-ink-3">探测端口</span>
+          <span className="text-2xs text-ink-3">{t('panel.discovery.probePorts')}</span>
           <input
             className="input h-7 w-[180px] font-mono"
             value={portsText}
@@ -136,7 +146,7 @@ function ScanView(): React.JSX.Element {
             placeholder="22, 80, 443"
           />
           <label className="flex items-center gap-1 text-2xs text-ink-3">
-            单端口超时
+            {t('panel.discovery.portTimeout')}
             <input
               className="input h-7 w-[64px] font-mono"
               value={String(timeoutMs)}
@@ -153,7 +163,7 @@ function ScanView(): React.JSX.Element {
           {scanning ? (
             <button className="btn h-7 px-3 text-xs" onClick={() => void useDiscoveryStore.getState().cancelScan()}>
               <X size={12} />
-              停止（{scanned}/{total || '…'}）
+              {t('panel.discovery.stopScan', { scanned, total: total || '…' })}
             </button>
           ) : (
             <button
@@ -161,7 +171,7 @@ function ScanView(): React.JSX.Element {
               onClick={() => void useDiscoveryStore.getState().startScan()}
             >
               <Search size={12} />
-              开始扫描
+              {t('panel.discovery.startScan')}
             </button>
           )}
         </div>
@@ -179,75 +189,85 @@ function ScanView(): React.JSX.Element {
       {hosts.length === 0 ? (
         <EmptyState
           icon={<Radar size={28} />}
-          title={scanning ? '正在扫描…' : '还没有发现结果'}
-          hint="扫描会对网段内每个 IP 的指定端口做一次 TCP 连接探测（含 ARP 厂商与主机名反查）；请确认你与设备在同一局域网"
+          title={scanning ? t('panel.discovery.scanningTitle') : t('panel.discovery.emptyScanTitle')}
+          hint={t('panel.discovery.emptyScanHint')}
         />
       ) : (
         <div className="overflow-hidden rounded-lg border border-edge-soft bg-panel">
           <div className="flex items-center gap-2 border-b border-edge-soft px-3 py-1.5">
-            <span className="text-2xs font-semibold text-ink-2">发现 {hosts.length} 台设备</span>
+            <span className="text-2xs font-semibold text-ink-2">
+              {t('panel.discovery.foundHosts', { count: hosts.length })}
+            </span>
             <span className="flex-1" />
-            <span className="text-3xs text-ink-3">点击「新建连接」可直接把 IP 填进连接编辑器</span>
+            <span className="text-3xs text-ink-3">{t('panel.discovery.foundHostsHint')}</span>
           </div>
           {hosts.length > MAX_HOSTS && (
             <div className="px-2 py-1 text-2xs text-ink-3">
-              仅显示前 {MAX_HOSTS} 项，共 {hosts.length} 项 —— 请缩小网段后重新扫描
+              {t('panel.discovery.truncatedHint', { max: MAX_HOSTS, total: hosts.length })}
             </div>
           )}
-          {hosts.slice(0, MAX_HOSTS).map((h) => (
-            <div
-              key={h.ip}
-              className="flex items-center gap-2.5 border-b border-edge-soft/60 px-3 py-1.5 last:border-b-0 hover:bg-hover/40"
-            >
-              <Wifi size={12} className="shrink-0 text-success" />
-              <span className="w-[120px] shrink-0 font-mono text-xs text-ink">{h.ip}</span>
-              <span className="w-[110px] shrink-0 font-mono text-3xs text-ink-3">
-                {h.mac ? `${h.mac}${guessVendor(h.mac) ? `（${guessVendor(h.mac)}）` : ''}` : '—'}
-              </span>
-              <span className="w-[150px] shrink-0 truncate text-2xs text-ink-3" title={h.hostname}>
-                {h.hostname ?? '—'}
-              </span>
-              <span className="shrink-0 space-x-1">
-                {h.openPorts.map((p) => (
-                  <span
-                    key={p}
-                    className={cn(
-                      'rounded px-1 py-px font-mono text-3xs',
-                      p === 22 ? 'bg-accent/15 text-accent' : 'bg-raised text-ink-3'
-                    )}
-                  >
-                    {p}
-                  </span>
-                ))}
-              </span>
-              {h.latencyMs !== undefined && (
-                <span className="shrink-0 font-mono text-3xs text-ink-3">{h.latencyMs}ms</span>
-              )}
-              <span className="flex-1" />
-              <button
-                className="btn-icon h-6 w-6"
-                title="复制 IP"
-                onClick={() => {
-                  // 写剪贴板也会失败（无焦点窗口 / 被占用），失败就别报成功
-                  void call(window.api.clip.write(h.ip), { silent: true }).then((ok) => {
-                    if (ok !== null) {
-                      useToastStore.getState().push({ kind: 'success', title: `已复制 ${h.ip}` })
-                    }
-                  })
-                }}
+          {hosts.slice(0, MAX_HOSTS).map((h) => {
+            const vendor = h.mac ? guessVendor(h.mac) : undefined
+            return (
+              <div
+                key={h.ip}
+                className="flex items-center gap-2.5 border-b border-edge-soft/60 px-3 py-1.5 last:border-b-0 hover:bg-hover/40"
               >
-                <Copy size={11} />
-              </button>
-              <button
-                className="btn h-6 px-2 text-2xs"
-                title={`为 ${h.ip} 新建连接`}
-                onClick={() => useDiscoveryStore.getState().makeConnection(h.ip, pickPort(h.openPorts))}
-              >
-                <Plug size={11} />
-                新建连接
-              </button>
-            </div>
-          ))}
+                <Wifi size={12} className="shrink-0 text-success" />
+                <span className="w-[120px] shrink-0 font-mono text-xs text-ink">{h.ip}</span>
+                <span className="w-[110px] shrink-0 font-mono text-3xs text-ink-3">
+                  {h.mac
+                    ? `${h.mac}${vendor ? t('panel.discovery.vendorParens', { vendor }) : ''}`
+                    : '—'}
+                </span>
+                <span className="w-[150px] shrink-0 truncate text-2xs text-ink-3" title={h.hostname}>
+                  {h.hostname ?? '—'}
+                </span>
+                <span className="shrink-0 space-x-1">
+                  {h.openPorts.map((p) => (
+                    <span
+                      key={p}
+                      className={cn(
+                        'rounded-sm px-1 py-px font-mono text-3xs',
+                        p === 22 ? 'bg-accent/15 text-accent' : 'bg-raised text-ink-3'
+                      )}
+                    >
+                      {p}
+                    </span>
+                  ))}
+                </span>
+                {h.latencyMs !== undefined && (
+                  <span className="shrink-0 font-mono text-3xs text-ink-3">{h.latencyMs}ms</span>
+                )}
+                <span className="flex-1" />
+                <button
+                  className="btn-icon h-6 w-6"
+                  title={t('panel.discovery.copyIp')}
+                  onClick={() => {
+                    // 写剪贴板也会失败（无焦点窗口 / 被占用），失败就别报成功
+                    void call(window.api.clip.write(h.ip), { silent: true }).then((ok) => {
+                      if (ok !== null) {
+                        useToastStore.getState().push({
+                          kind: 'success',
+                          title: t('panel.discovery.copiedIp', { ip: h.ip })
+                        })
+                      }
+                    })
+                  }}
+                >
+                  <Copy size={11} />
+                </button>
+                <button
+                  className="btn h-6 px-2 text-2xs"
+                  title={t('panel.discovery.newConnFor', { ip: h.ip })}
+                  onClick={() => useDiscoveryStore.getState().makeConnection(h.ip, pickPort(h.openPorts))}
+                >
+                  <Plug size={11} />
+                  {t('panel.discovery.newConn')}
+                </button>
+              </div>
+            )
+          })}
         </div>
       )}
     </>
@@ -259,6 +279,7 @@ function ScanView(): React.JSX.Element {
  * ------------------------------------------------------------------ */
 
 function MdnsView(): React.JSX.Element {
+  const { t } = useI18n()
   const running = useDiscoveryStore((s) => s.mdnsRunning)
   const done = useDiscoveryStore((s) => s.mdnsDone)
   const services = useDiscoveryStore((s) => s.mdnsServices)
@@ -267,8 +288,7 @@ function MdnsView(): React.JSX.Element {
     <>
       <div className="flex items-center gap-2 rounded-lg border border-edge-soft bg-panel px-3 py-2.5">
         <span className="text-2xs leading-relaxed text-ink-3">
-          查询局域网内的 DNS-SD 服务广播（_ssh / _http / _https 等），约需 6 秒。
-          部分企业网络会拦截组播，若结果为空属正常现象 —— 可改用「网段扫描」。
+          {t('panel.discovery.mdnsDesc')}
         </span>
         <span className="flex-1" />
         <button
@@ -276,31 +296,35 @@ function MdnsView(): React.JSX.Element {
           disabled={running}
           onClick={() => void useDiscoveryStore.getState().runMdns()}
         >
-          {running ? '发现中…（约 6 秒）' : '开始发现'}
+          {running ? t('panel.discovery.mdnsRunningBtn') : t('panel.discovery.mdnsStartBtn')}
         </button>
       </div>
 
       {services.length === 0 ? (
         <EmptyState
           icon={<Radar size={28} />}
-          title={running ? '正在监听 mDNS 广播…' : done ? '没有发现 mDNS 服务' : '尚未执行发现'}
+          title={
+            running
+              ? t('panel.discovery.mdnsListening')
+              : done
+                ? t('panel.discovery.mdnsEmpty')
+                : t('panel.discovery.mdnsIdle')
+          }
           hint={
-            done
-              ? '可能原因：网络策略拦截组播 / 设备未开启 mDNS（avahi、Bonjour 等）。可考虑用网段扫描兜底'
-              : 'mDNS 能发现主动广播服务的设备（如运行 avahi 的嵌入式 Linux）'
+            done ? t('panel.discovery.mdnsDoneHint') : t('panel.discovery.mdnsIdleHint')
           }
         />
       ) : (
         <div className="overflow-hidden rounded-lg border border-edge-soft bg-panel">
           <div className="border-b border-edge-soft px-3 py-1.5 text-2xs font-semibold text-ink-2">
-            发现 {services.length} 个服务实例
+            {t('panel.discovery.foundServices', { count: services.length })}
           </div>
           {services.map((s, idx) => (
             <div
               key={`${s.type}-${s.name}-${idx}`}
               className="flex items-center gap-2.5 border-b border-edge-soft/60 px-3 py-1.5 last:border-b-0 hover:bg-hover/40"
             >
-              <span className="shrink-0 rounded bg-accent/10 px-1.5 py-px font-mono text-3xs text-accent">
+              <span className="shrink-0 rounded-sm bg-accent/10 px-1.5 py-px font-mono text-3xs text-accent">
                 {s.type.replace(/^_|\._?/g, ' ').trim() || s.type}
               </span>
               <span className="min-w-0 flex-1 truncate text-xs text-ink-2">{s.name}</span>
@@ -317,7 +341,7 @@ function MdnsView(): React.JSX.Element {
                   }
                 >
                   <Plug size={11} />
-                  新建连接
+                  {t('panel.discovery.newConn')}
                 </button>
               )}
             </div>

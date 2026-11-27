@@ -1,12 +1,14 @@
 import type * as React from 'react'
 import { RotateCcw } from 'lucide-react'
 import type { LayoutSizes } from '@shared/types'
-import { KEYS, PANE_LABEL, PANE_SPECS, clampPane } from '@/lib/layout'
+import { KEYS, PANE_SPECS, clampPane } from '@/lib/layout'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { useToastStore } from '@/stores/toastStore'
+import { useI18n } from '@/i18n'
 
 /** 设置 → 侧栏宽度（与拖动分隔条共用同一套 clamp 规则） */
 export function LayoutSection(): React.JSX.Element {
+  const { t } = useI18n()
   const settings = useSettingsStore((s) => s.settings)
   const update = useSettingsStore((s) => s.update)
 
@@ -26,9 +28,12 @@ export function LayoutSection(): React.JSX.Element {
         {KEYS.map((key) => {
           const spec = PANE_SPECS[key]
           const value = layoutSizes[key]
+          const paneLabel = t(
+            key === 'sidebar' ? 'common.layout.paneSidebar' : 'common.layout.paneCommandRail'
+          )
           return (
             <div key={key} className="flex items-center gap-2">
-              <span className="w-24 shrink-0 text-xs text-ink-2">{PANE_LABEL[key]}</span>
+              <span className="w-24 shrink-0 text-xs text-ink-2">{paneLabel}</span>
               <input
                 className="input h-6 w-16 text-center font-mono text-2xs"
                 type="number"
@@ -40,13 +45,18 @@ export function LayoutSection(): React.JSX.Element {
               />
               <span className="text-2xs text-ink-3">px</span>
               <span className="flex-1" />
-              {/* 被拖窄到极限时给出提示，避免误以为卡住 */}
+              {/*
+                * 被拖窄到极限时给出提示，避免误以为卡住
+                */}
               <span className="shrink-0 text-2xs text-ink-3/70">
                 {spec.min}–{spec.max}
               </span>
               <button
                 className="btn-icon h-6 w-6 shrink-0"
-                title={`${PANE_LABEL[key]}恢复默认 ${spec.default}px`}
+                title={t('settings.ext.layout.resetPaneTitle', {
+                  pane: paneLabel,
+                  size: spec.default
+                })}
                 disabled={value === spec.default}
                 onClick={() => setPane(key, spec.default)}
               >
@@ -70,12 +80,14 @@ export function LayoutSection(): React.JSX.Element {
             commandRail: PANE_SPECS.commandRail.default
           }
           void update({ layout: next }).then(() => {
-            useToastStore.getState().push({ kind: 'success', title: '栏宽已全部恢复默认' })
+            useToastStore
+              .getState()
+              .push({ kind: 'success', title: t('settings.ext.layout.resetAllDone') })
           })
         }}
       >
         <RotateCcw size={11} />
-        全部恢复默认
+        {t('settings.ext.layout.resetAll')}
       </button>
     </>
   )

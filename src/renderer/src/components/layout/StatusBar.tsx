@@ -16,6 +16,7 @@ import { useSftpStore } from '@/stores/sftpStore'
 import { useTrzszStore } from '@/stores/trzszStore'
 import { call } from '@/lib/ipc'
 import { cn, latencyLevel } from '@/lib/utils'
+import { useI18n, type I18nKey } from '@/i18n'
 
 /**
  * 传输聚合。
@@ -68,11 +69,11 @@ function summarizeTransfers(list: TransferTask[]): TransferSummary {
   return { activeCount, activePct, firstDirection }
 }
 
-const STATUS_TEXT: Record<ConnStatus, string> = {
-  connecting: '连接中',
-  connected: '已连接',
-  disconnected: '已断开',
-  error: '连接错误'
+const STATUS_TEXT_KEY: Record<ConnStatus, I18nKey> = {
+  connecting: 'common.status.connecting',
+  connected: 'common.status.connected',
+  disconnected: 'common.status.disconnected',
+  error: 'common.status.error'
 }
 
 /*
@@ -82,15 +83,12 @@ const STATUS_TEXT: Record<ConnStatus, string> = {
  * tcp 未通要查网络/防火墙，auth 卡住要查凭据或键盘交互，jump 卡住要查跳板机。
  * 只说「连接中」等于什么都没说。
  */
-const PHASE_LABEL: Record<string, string> = {
-  tcp: '建立 TCP…',
-  handshake: '握手 / 协商…',
-  auth: '认证中…',
-  jump: '经跳板机…',
-  shell: '打开终端…'
-}
-function STATUS_PHASE_TEXT(phase: string): string | undefined {
-  return PHASE_LABEL[phase]
+const PHASE_LABEL_KEY: Record<string, I18nKey> = {
+  tcp: 'common.status.phase.tcp',
+  handshake: 'common.status.phase.handshake',
+  auth: 'common.status.phase.auth',
+  jump: 'common.status.phase.jump',
+  shell: 'common.status.phase.shell'
 }
 
 const STATUS_DOT: Record<ConnStatus, string> = {
@@ -129,6 +127,7 @@ function Sep(): React.JSX.Element {
  * 非 Git 目录 / 未连接时静默不显示 —— 这里不该出现「not a git repository」这种噪音。
  */
 export function StatusBar(): React.JSX.Element {
+  const { t } = useI18n()
   const activeId = useSessionStore((s) => s.activeId)
   // 只订阅当前会话本身；旧写法会在任意会话变化时重跑 find
   const session = useSessionById(activeId)
@@ -193,7 +192,9 @@ export function StatusBar(): React.JSX.Element {
 
   return (
     <footer className="statusbar">
-      {/* ---------- 左：SSH 状态 + Git 分支 ---------- */}
+      {/*
+        * ---------- 左：SSH 状态 + Git 分支 ----------
+        */}
       {session ? (
         <>
           <span
@@ -204,7 +205,9 @@ export function StatusBar(): React.JSX.Element {
           >
             <span className={cn('h-1.5 w-1.5 rounded-full', STATUS_DOT[session.status])} />
             <span className={cn(connected ? 'font-medium text-accent' : 'text-ink-2')}>
-              {(session.phase && STATUS_PHASE_TEXT(session.phase)) || STATUS_TEXT[session.status]}
+              {session.phase && PHASE_LABEL_KEY[session.phase]
+                ? t(PHASE_LABEL_KEY[session.phase])
+                : t(STATUS_TEXT_KEY[session.status])}
             </span>
           </span>
 
@@ -239,19 +242,25 @@ export function StatusBar(): React.JSX.Element {
       ) : (
         <span className="flex items-center gap-1.5">
           <Unplug size={11} />
-          未连接
-          {savedCount > 0 && <span className="text-ink-3/80">· 已保存 {savedCount} 个连接</span>}
+          {t('common.status.unconnected')}
+          {savedCount > 0 && (
+            <span className="text-ink-3/80">
+              {t('common.status.savedConnections', { count: savedCount })}
+            </span>
+          )}
         </span>
       )}
 
       <span className="flex-1" />
 
-      {/* ---------- 右：传输 · 编码 · 换行 · Shell · 尺寸 ---------- */}
+      {/*
+        * ---------- 右：传输 · 编码 · 换行 · Shell · 尺寸 ----------
+        */}
       {activeCount > 0 && (
         <>
           <button
-            className="flex items-center gap-1 rounded px-1 py-0.5 text-accent transition-colors duration-150 hover:bg-hover"
-            title="查看传输进度"
+            className="flex items-center gap-1 rounded-sm px-1 py-0.5 text-accent transition-colors duration-150 hover:bg-hover"
+            title={t('common.status.viewTransfers')}
             onClick={showDock}
           >
             {firstDirection === 'upload' ? (
@@ -260,7 +269,7 @@ export function StatusBar(): React.JSX.Element {
               <ArrowDownToLine size={10} />
             )}
             <span className="tabular-nums">
-              {activeCount} 项 · {activePct}%
+              {t('common.status.transferProgress', { count: activeCount, pct: activePct })}
             </span>
           </button>
           <Sep />
@@ -271,7 +280,11 @@ export function StatusBar(): React.JSX.Element {
         <>
           <span
             className="flex min-w-0 items-center gap-1 text-accent"
-            title={trzsz.file ? `trzsz 正在接收：${trzsz.file}` : 'trzsz 正在传输'}
+            title={
+              trzsz.file
+                ? t('common.status.trzszReceiving', { file: trzsz.file })
+                : t('common.status.trzszActive')
+            }
           >
             <FolderInput size={10} className="shrink-0" />
             <span className="max-w-[160px] truncate">{trzsz.file ?? 'trzsz'}</span>
@@ -285,7 +298,7 @@ export function StatusBar(): React.JSX.Element {
 
       {count > 1 && (
         <>
-          <span className="tabular-nums">{count} 个会话</span>
+          <span className="tabular-nums">{t('common.status.sessionCount', { count })}</span>
           <Sep />
         </>
       )}

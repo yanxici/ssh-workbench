@@ -1,4 +1,5 @@
 import type { TransferRecord } from '@shared/types'
+import { tNow } from '../i18n/core'
 import { formatBytes } from './utils'
 
 /**
@@ -20,7 +21,9 @@ export function parentOf(p: string): string {
 }
 
 export function amountText(r: TransferRecord): string {
-  if (r.unit === 'files') return `${r.transferred} / ${r.size} 个文件`
+  if (r.unit === 'files') {
+    return tNow('files.ui.transfer.filesCount', { done: r.transferred, total: r.size })
+  }
   if (r.size > 0) return `${formatBytes(r.transferred)} / ${formatBytes(r.size)}`
   return r.transferred > 0 ? formatBytes(r.transferred) : '—'
 }
@@ -46,13 +49,21 @@ export function locateKind(r: TransferRecord): LocateTarget {
   return r.direction === 'download' && r.localPath ? 'local-dir' : 'none'
 }
 
-export const STATUS_LABEL: Record<TransferRecord['status'], string> = {
-  pending: '排队中',
-  running: '进行中',
-  done: '完成',
-  error: '失败',
-  canceled: '已取消',
-  interrupted: '已中断'
+export function statusLabel(status: TransferRecord['status']): string {
+  switch (status) {
+    case 'pending':
+      return tNow('files.ui.transfer.status.pending')
+    case 'running':
+      return tNow('files.ui.transfer.status.running')
+    case 'done':
+      return tNow('files.ui.transfer.status.done')
+    case 'error':
+      return tNow('files.ui.transfer.status.error')
+    case 'canceled':
+      return tNow('files.ui.transfer.status.canceled')
+    case 'interrupted':
+      return tNow('files.ui.transfer.status.interrupted')
+  }
 }
 
 /** 状态对应的文字颜色 token（Tailwind class） */

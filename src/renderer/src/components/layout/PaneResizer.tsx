@@ -3,8 +3,8 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { LayoutSizes } from '@shared/types'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { cn } from '@/lib/utils'
+import { useI18n } from '@/i18n'
 import {
-  PANE_LABEL,
   PANE_SPECS,
   applyDrag,
   clampPane,
@@ -42,6 +42,10 @@ export function PaneResizer({
   /** 松手 / 双击 / 键盘调整后提交（父组件写入 settings） */
   onCommit: (next: number) => void
 }): React.JSX.Element {
+  const { t } = useI18n()
+  const paneLabel = t(
+    pane === 'sidebar' ? 'common.layout.paneSidebar' : 'common.layout.paneCommandRail'
+  )
   const spec = PANE_SPECS[pane]
   const horizontal = spec.axis === 'x'
   // dragging 用 ref 判定、用 state 上色：
@@ -115,12 +119,12 @@ export function PaneResizer({
     <div
       role="separator"
       aria-orientation={horizontal ? 'vertical' : 'horizontal'}
-      aria-label={`调整${PANE_LABEL[pane]}`}
+      aria-label={t('common.resizer.ariaLabel', { pane: paneLabel })}
       aria-valuenow={Math.round(value)}
       aria-valuemin={spec.min}
       aria-valuemax={spec.max}
       tabIndex={0}
-      title={`拖动调整${PANE_LABEL[pane]}，双击恢复默认`}
+      title={t('common.resizer.title', { pane: paneLabel })}
       className={cn(
         'group/rz relative z-20 shrink-0 focus:outline-none',
         horizontal ? 'mx-[-3px] w-[6px] cursor-col-resize' : 'my-[-3px] h-[6px] cursor-row-resize'
@@ -143,7 +147,9 @@ export function PaneResizer({
         onCommit(next)
       }}
     >
-      {/* 可见分隔线：常态边线色，悬停/拖拽/已自定义时点亮为强调色 */}
+      {/*
+        * 可见分隔线：常态边线色，悬停/拖拽/已自定义时点亮为强调色
+        */}
       <span
         className={cn(
           'pointer-events-none absolute bg-edge transition-colors duration-150',

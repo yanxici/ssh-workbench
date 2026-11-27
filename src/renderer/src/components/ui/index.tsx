@@ -22,6 +22,7 @@ import { cn } from '@/lib/utils'
 import { useToastStore } from '@/stores/toastStore'
 import { isImeComposing } from '@/lib/ime'
 import { useOverlayEscape } from '@/lib/overlayKeys'
+import { useI18n } from '@/i18n'
 
 /* ------------------------------------------------------------------ *
  *  Modal
@@ -46,6 +47,7 @@ export function Modal({
   width?: string
   bodyClassName?: string
 }): React.JSX.Element | null {
+  const { t } = useI18n()
   useOverlayEscape(open, onClose)
 
   if (!open) return null
@@ -60,7 +62,7 @@ export function Modal({
       <div className={cn('modal', width ?? 'max-w-lg')}>
         <div className="modal-header">
           <div className="modal-title">{title}</div>
-          <button className="btn-icon h-6 w-6" onClick={onClose} title="关闭">
+          <button className="btn-icon h-6 w-6" onClick={onClose} title={t('common.ui.close')}>
             <X size={13} />
           </button>
         </div>
@@ -122,6 +124,7 @@ export function Combobox({
   className?: string
   inputClassName?: string
 }): React.JSX.Element {
+  const { t } = useI18n()
   const [open, setOpen] = useState(false)
   /** null = 用户还没打字，显示全量；非 null = 当前输入串，按它过滤 */
   const [typed, setTyped] = useState<string | null>(null)
@@ -235,8 +238,8 @@ export function Combobox({
         <button
           type="button"
           tabIndex={-1}
-          title="展开候选"
-          className="absolute right-1 top-1/2 flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded text-ink-3 transition-colors hover:text-ink"
+          title={t('common.ui.expandOptions')}
+          className="absolute right-1 top-1/2 flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded-sm text-ink-3 transition-colors hover:text-ink"
           onMouseDown={(e) => e.preventDefault()}
           onClick={() => (open ? setOpen(false) : openList())}
         >
@@ -252,7 +255,9 @@ export function Combobox({
         >
           {shown.length === 0 ? (
             <div className="px-2 py-1.5 text-2xs text-ink-3">
-              {value.trim() ? `回车使用「${value.trim()}」` : '暂无候选'}
+              {value.trim()
+                ? t('common.ui.pressEnterToUse', { value: value.trim() })
+                : t('common.ui.noOptions')}
             </div>
           ) : (
             shown.map((o, i) => (
@@ -320,7 +325,7 @@ export function ConfirmDialog({
   open,
   title,
   message,
-  confirmText = '确认',
+  confirmText,
   danger,
   onConfirm,
   onCancel
@@ -333,6 +338,7 @@ export function ConfirmDialog({
   onConfirm: () => void
   onCancel: () => void
 }): React.JSX.Element | null {
+  const { t } = useI18n()
   useOverlayEscape(open, onCancel)
 
   if (!open) return null
@@ -352,13 +358,13 @@ export function ConfirmDialog({
         <div className="modal-body text-xs leading-relaxed text-ink-2">{message}</div>
         <div className="modal-footer">
           <button className="btn" onClick={onCancel}>
-            取消
+            {t('common.ui.cancel')}
           </button>
           <button
             className={cn('btn', danger ? 'btn-danger' : 'btn-primary')}
             onClick={onConfirm}
           >
-            {confirmText}
+            {confirmText ?? t('common.ui.confirm')}
           </button>
         </div>
       </div>
@@ -376,7 +382,7 @@ export function PromptDialog({
   label,
   defaultValue = '',
   placeholder,
-  confirmText = '确定',
+  confirmText,
   onConfirm,
   onCancel
 }: {
@@ -389,6 +395,7 @@ export function PromptDialog({
   onConfirm: (value: string) => void
   onCancel: () => void
 }): React.JSX.Element | null {
+  const { t } = useI18n()
   const [value, setValue] = useState(defaultValue)
 
   useEffect(() => {
@@ -433,10 +440,10 @@ export function PromptDialog({
         </div>
         <div className="modal-footer">
           <button className="btn" onClick={onCancel}>
-            取消
+            {t('common.ui.cancel')}
           </button>
           <button className="btn btn-primary" onClick={submit}>
-            {confirmText}
+            {confirmText ?? t('common.ui.ok')}
           </button>
         </div>
       </div>

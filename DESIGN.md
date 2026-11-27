@@ -1,7 +1,7 @@
 # Portix（SSH Workbench）— 架构与设计概要
 
 > 零遥测、免外挂的开源桌面 SSH 与串口终端工作台，面向嵌入式研发、现场运维与 SRE。
-> 更新日期：2026-11-27 ｜ 发布线：**v2.5.1**（`yanxici/ssh-workbench`）｜ 升级实验线：**v2.5.0**（`yanxici/ssh-workbench-upgrade-x`）
+> 更新日期：2026-11-27 ｜ 发布线：**v2.5.2**（`yanxici/ssh-workbench`）｜ 升级实验线：**v2.5.2**（`yanxici/ssh-workbench-upgrade-x`）
 
 详细历史演进见 [CHANGELOG.md](./CHANGELOG.md) 与 [Releases](https://github.com/yanxici/ssh-workbench/releases)。
 
@@ -19,7 +19,7 @@
 
 全仓业务逻辑双向同步，仅底层桌面/样式栈分轨维护：
 
-| 层次 | 正式发布线（`ssh-workbench` v2.5.1） | 实验升级线（`ssh-workbench-upgrade-x` v2.5.0） | 核心说明 |
+| 层次 | 正式发布线（`ssh-workbench` v2.5.2） | 实验升级线（`ssh-workbench-upgrade-x` v2.5.2） | 核心说明 |
 | --- | --- | --- | --- |
 | 桌面框架 | Electron `^33.3.1` + Vite `^5.4.11` | Electron `^45.3.1` + Vite `^7.3.8` | 离线/LTSC 内网免 WebView2 开箱即用；GPU 崩自动降级软件渲染 |
 | 前端 / UI | React `^18.3.1` + Tailwind `^3.4.17` | React `^19.3.1` + Tailwind `^4.3.5` | 语义色 CSS 变量（R G B 三通道）；`@tanstack/react-virtual` 虚拟滚动 |
@@ -81,7 +81,8 @@ xterm.write ◀── EVT_SESSION_DATA ◀── adaptiveFlush(8ms → 20/32ms, 
 2. **布局与性能约束**：
    - 左侧栏 `SideNav`（默认 280px）对视图做按需首次挂载 + `display` keep-alive 切换，保留滚动与展开状态；`settings` 已重构为 6 选项卡双语结构（`general / terminal / workflow / shortcuts / security / system`）。
    - 大规模连接（实测 2900+）采用组内分页（60/页）+ 超长组默认折叠 + 结构化字段（`host`/`port`/`serial.path`/`username`）及数字连续匹配 + 全局单轮转探活定时器 + `latencyById` 独立映射。
-   - **渲染铁律**：全站禁用 `backdrop-filter`（防 Windows 合成器残影发虚）；禁止 `transition-all`，过渡时长 `<= 150ms`；仅对 `opacity` / `transform` / `backgroundColor` 做动画；禁止任意 `text-[Npx]` 字号；`<button>` 内纵向 flex 子项必须配 `w-full min-w-0` 防文本撑破截断。
+   - **渲染与内存铁律**：全站禁用 `backdrop-filter`（防 Windows 合成器残影发虚）；禁止 `transition-all`，过渡时长 `<= 150ms`；仅对 `opacity` / `transform` / `backgroundColor` 做动画；禁止任意 `text-[Npx]` 字号；`<button>` 内纵向 flex 子项必须配 `w-full min-w-0`；默认 DOM 渲染关闭硬件 GPU 加速并按活跃标签池化 WebGL 上下文，重型面板/弹窗均懒加载（鼠标悬停工具栏按需预热）；打包经 `scripts/after-pack.cjs` 仅留 `zh-CN`/`en-US` 语言 pak 与目标架构原生二进制。
+   - **全量双语 `i18n`**：`src/renderer/src/i18n/core.ts` 保持零 React/Electron 依赖，7 个分域词典实现渲染层 `verify:i18n` 0 行硬编码中文基线，并由 `verify-i18n-en.cjs` 做全英文零溢出回归。
 3. **品牌与仓库 Naming 收口**：
    自 **v2.5.1** 起应用端正式启用 **Portix**（窗口标题、`Portix.exe` 与 `make-icon.cjs` 生成的 7 尺寸 BMP+PNG `.ico`）；为维持老版自动更新与 `%APPDATA%/ssh-workbench/data/` 兼容性，仓库、安装包名（`ssh-workbench-Setup-*.exe`）与数据目录延续 `ssh-workbench` 命名。
 

@@ -243,7 +243,8 @@ function tokenize(segment: string): { argv: string[]; dynamic: boolean } {
     has = true
   }
   if (has) argv.push(cur)
-  if (quote !== null) dynamic = true // 引号没闭合：这行不完整
+  // 引号没闭合：这行不完整
+  if (quote !== null) dynamic = true
   return { argv, dynamic }
 }
 
@@ -319,7 +320,8 @@ function resolveArg(arg: string, base: string, home: string): string | null {
   let p = arg
   if (p === '~') p = home
   else if (p.startsWith('~/')) p = home + p.slice(1)
-  else if (p.startsWith('~')) return null // ~user：查不到别人的 home
+  // ~user：查不到别人的 home
+  else if (p.startsWith('~')) return null
   if (!p) return null
 
   if (!p.startsWith('/')) {

@@ -2,6 +2,7 @@ import { useSettingsStore } from '@/stores/settingsStore'
 import { useSessionStore } from '@/stores/sessionStore'
 import { useToastStore, type ToastKind } from '@/stores/toastStore'
 import { uid } from '@/lib/utils'
+import { tNow } from '../i18n/core'
 import {
   buildNotifyText,
   heuristicHit,
@@ -195,18 +196,26 @@ export function queueTransferNotify(args: {
     const title =
       agg.count === 1
         ? agg.failed
-          ? `传输失败：${agg.lastName}`
-          : `传输完成：${agg.lastName}`
-        : `传输完成：${agg.count - agg.failed}/${agg.count} 个文件`
+          ? tNow('term.notify.transferFailed', { name: agg.lastName })
+          : tNow('term.notify.transferDoneSingle', { name: agg.lastName })
+        : tNow('term.notify.transferDoneBatch', {
+            ok: agg.count - agg.failed,
+            total: agg.count
+          })
     void notifyTask({
       kind: 'sftp',
       title,
       detail:
         agg.count === 1
           ? agg.failed
-            ? '失败'
+            ? tNow('term.notify.failed')
             : formatBytes(agg.bytes)
-          : `共 ${formatBytes(agg.bytes)}${agg.failed ? `，${agg.failed} 个失败` : ''}`,
+          : tNow('term.notify.batchDetail', {
+              bytes: formatBytes(agg.bytes),
+              failedSuffix: agg.failed
+                ? tNow('term.notify.batchFailedSuffix', { count: agg.failed })
+                : ''
+            }),
       connectionId: agg.connectionId,
       sessionId: agg.sessionId
     })
@@ -285,8 +294,8 @@ export function startHeuristicSweep(): void {
       if (!session) continue
       void notifyTask({
         kind: 'heuristic',
-        title: `疑似完成：${session.title || session.host}`,
-        detail: '终端已静默 1.5 秒以上（启发式判断，不一定是真的结束）',
+        title: tNow('term.notify.heuristicTitle', { name: session.title || session.host }),
+        detail: tNow('term.notify.heuristicDetail'),
         connectionId: session.connectionId,
         sessionId
       })

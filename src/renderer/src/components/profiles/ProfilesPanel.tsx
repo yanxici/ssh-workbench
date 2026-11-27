@@ -15,6 +15,7 @@ import {
 } from 'lucide-react'
 import type { Connection, DeviceProfile, DeviceProfileInput } from '@shared/types'
 import { connectionTarget } from '@shared/serialDisplay'
+import { useI18n } from '@/i18n'
 import { cn, formatTime } from '@/lib/utils'
 import { useOverlayEscape } from '@/lib/overlayKeys'
 import { ConfirmDialog, EmptyState, Field } from '@/components/ui'
@@ -31,6 +32,7 @@ import { useToastStore } from '@/stores/toastStore'
  * 左侧档案列表；右侧详情：基本信息编辑 + 关联连接 + 该客户诊断报告 + 常用命令分组。
  */
 export function ProfilesPanel(): React.JSX.Element | null {
+  const { t } = useI18n()
   const panelOpen = useProfileStore((s) => s.panelOpen)
   const profiles = useProfileStore((s) => s.profiles)
   const keyword = useProfileStore((s) => s.keyword)
@@ -67,20 +69,24 @@ export function ProfilesPanel(): React.JSX.Element | null {
     <div className="panel-shell fixed inset-x-0 z-30 flex flex-col bg-app">
       <div className="flex h-9 shrink-0 items-center gap-2 border-b border-edge bg-panel px-3">
         <BookUser size={14} className="text-accent" />
-        <span className="text-xs font-semibold">客户 / 设备档案</span>
-        <span className="text-2xs text-ink-3">{profiles.length} 份</span>
+        <span className="text-xs font-semibold">{t('panel.profiles.title')}</span>
+        <span className="text-2xs text-ink-3">
+          {t('panel.profiles.count', { count: profiles.length })}
+        </span>
         <span className="flex-1" />
         <button className="btn h-7 px-3 text-xs" onClick={createNew}>
           <Plus size={12} />
-          新建档案
+          {t('panel.profiles.newBtn')}
         </button>
-        <button className="btn-icon" title="关闭 (Esc)" onClick={close}>
+        <button className="btn-icon" title={t('panel.profiles.closeEsc')} onClick={close}>
           <X size={14} />
         </button>
       </div>
 
       <div className="flex min-h-0 flex-1">
-        {/* 左：档案列表 */}
+        {/*
+         * 左：档案列表
+         */}
         <div className="flex w-[280px] shrink-0 flex-col border-r border-edge bg-panel">
           <div className="shrink-0 p-2 pb-1.5">
             <div className="relative">
@@ -90,7 +96,7 @@ export function ProfilesPanel(): React.JSX.Element | null {
               />
               <input
                 className="input pl-7"
-                placeholder="搜索客户 / 型号 / SN…"
+                placeholder={t('panel.profiles.searchPlaceholder')}
                 value={keyword}
                 onChange={(e) => useProfileStore.getState().setKeyword(e.target.value)}
               />
@@ -100,8 +106,8 @@ export function ProfilesPanel(): React.JSX.Element | null {
             {filtered.length === 0 && (
               <div className="px-2 py-4 text-2xs leading-relaxed text-ink-3">
                 {profiles.length === 0
-                  ? '还没有档案。点右上角「新建档案」，把客户、设备型号、SN、固件版本、工单等信息记在这里，并与连接、命令分组关联。'
-                  : '没有匹配的档案'}
+                  ? t('panel.profiles.emptyList')
+                  : t('panel.profiles.emptySearch')}
               </div>
             )}
             {filtered.map((p) => (
@@ -124,7 +130,7 @@ export function ProfilesPanel(): React.JSX.Element | null {
                   </span>
                   {p.connectionIds.length > 0 && (
                     <span className="shrink-0 font-mono text-3xs text-ink-3">
-                      {p.connectionIds.length} 连接
+                      {t('panel.profiles.connCount', { count: p.connectionIds.length })}
                     </span>
                   )}
                 </span>
@@ -136,7 +142,9 @@ export function ProfilesPanel(): React.JSX.Element | null {
           </div>
         </div>
 
-        {/* 右：详情 */}
+        {/*
+         * 右：详情
+         */}
         <div className="min-w-0 flex-1">
           {selectedId === '__new__' || selected ? (
             <ProfileDetail
@@ -148,8 +156,8 @@ export function ProfilesPanel(): React.JSX.Element | null {
           ) : (
             <EmptyState
               icon={<BookUser size={30} />}
-              title="选择或新建一份档案"
-              hint="档案把客户信息、现场设备（连接）、常用命令分组和历史诊断报告串在一起，出问题时一眼看清全貌"
+              title={t('panel.profiles.emptyDetailTitle')}
+              hint={t('panel.profiles.emptyDetailHint')}
             />
           )}
         </div>
@@ -211,6 +219,7 @@ function ProfileDetail({
   profile: DeviceProfile | null
   onDone: () => void
 }): React.JSX.Element {
+  const { t } = useI18n()
   const isNew = profile === null
   const connections = useConnectionStore((s) => s.connections)
   const reports = useDiagStore((s) => s.reports)
@@ -242,7 +251,7 @@ function ProfileDetail({
   }
 
   const submit = async (): Promise<void> => {
-    if (!form.customerName.trim()) return setError('请填写客户名称')
+    if (!form.customerName.trim()) return setError(t('panel.profiles.errCustomerName'))
     setSaving(true)
     setError(null)
     const input: DeviceProfileInput = {
@@ -301,7 +310,7 @@ function ProfileDetail({
     useProfileStore.setState({ panelOpen: false })
     useToastStore.getState().push({
       kind: 'info',
-      title: `已在常用命令面板筛选「${form.commandGroup.trim()}」`
+      title: t('panel.profiles.filteredToast', { group: form.commandGroup.trim() })
     })
   }
 
@@ -309,10 +318,14 @@ function ProfileDetail({
     <div className="scroll-thin h-full overflow-y-auto p-4">
       <div className="mb-3 flex items-center gap-2">
         <span className="text-sm font-semibold text-ink">
-          {isNew ? '新建档案' : form.customerName || '未命名客户'}
+          {isNew
+            ? t('panel.profiles.newTitle')
+            : form.customerName || t('panel.profiles.unnamed')}
         </span>
         {!isNew && (
-          <span className="text-2xs text-ink-3">更新于 {formatTime(profile.updatedAt)}</span>
+          <span className="text-2xs text-ink-3">
+            {t('panel.profiles.updatedAt', { time: formatTime(profile.updatedAt) })}
+          </span>
         )}
         <span className="flex-1" />
         {dirty && (
@@ -325,7 +338,7 @@ function ProfileDetail({
               }}
             >
               <Undo2 size={12} />
-              取消
+              {t('panel.profiles.cancel')}
             </button>
             <button
               className="btn btn-primary h-7 px-3 text-xs"
@@ -333,7 +346,7 @@ function ProfileDetail({
               onClick={() => void submit()}
             >
               <Save size={12} />
-              {saving ? '保存中…' : '保存'}
+              {saving ? t('panel.profiles.saving') : t('panel.profiles.save')}
             </button>
           </>
         )}
@@ -343,7 +356,7 @@ function ProfileDetail({
             onClick={() => setPendingDelete(true)}
           >
             <Trash2 size={12} />
-            删除档案
+            {t('panel.profiles.deleteBtn')}
           </button>
         )}
       </div>
@@ -352,78 +365,83 @@ function ProfileDetail({
 
       <div className="flex max-w-[760px] flex-col gap-5">
         <div className="rounded-lg border border-edge-soft bg-panel p-3.5">
-          <div className="mb-2.5 text-2xs font-semibold tracking-wide text-ink-3">基本信息</div>
+          <div className="mb-2.5 text-2xs font-semibold tracking-wide text-ink-3">
+            {t('panel.profiles.basicInfo')}
+          </div>
           <div className="grid grid-cols-2 gap-x-3 gap-y-3">
-            <Field label="客户名称 *">
+            <Field label={t('panel.profiles.fieldCustomer')}>
               <input
                 className="input selectable"
                 value={form.customerName}
                 onChange={(e) => set('customerName', e.target.value)}
-                placeholder="例如：某某客户"
+                placeholder={t('panel.profiles.fieldCustomerPlaceholder')}
               />
             </Field>
-            <Field label="项目">
+            <Field label={t('panel.profiles.fieldProject')}>
               <input
                 className="input selectable"
                 value={form.project}
                 onChange={(e) => set('project', e.target.value)}
-                placeholder="例如：网关项目二期"
+                placeholder={t('panel.profiles.fieldProjectPlaceholder')}
               />
             </Field>
-            <Field label="设备型号">
+            <Field label={t('panel.profiles.fieldModel')}>
               <input
                 className="input selectable"
                 value={form.deviceModel}
                 onChange={(e) => set('deviceModel', e.target.value)}
-                placeholder="例如：XR-2000"
+                placeholder={t('panel.profiles.fieldModelPlaceholder')}
               />
             </Field>
-            <Field label="序列号 SN">
+            <Field label={t('panel.profiles.fieldSn')}>
               <input
                 className="input selectable font-mono"
                 value={form.sn}
                 onChange={(e) => set('sn', e.target.value)}
-                placeholder="例如：XR2000-2024-0137"
+                placeholder={t('panel.profiles.fieldSnPlaceholder')}
               />
             </Field>
-            <Field label="固件版本">
+            <Field label={t('panel.profiles.fieldFirmware')}>
               <input
                 className="input selectable font-mono"
                 value={form.firmwareVersion}
                 onChange={(e) => set('firmwareVersion', e.target.value)}
-                placeholder="例如：v2.3.1"
+                placeholder={t('panel.profiles.fieldFirmwarePlaceholder')}
               />
             </Field>
-            <Field label="现场联系人">
+            <Field label={t('panel.profiles.fieldContact')}>
               <input
                 className="input selectable"
                 value={form.contact}
                 onChange={(e) => set('contact', e.target.value)}
-                placeholder="姓名 / 电话"
+                placeholder={t('panel.profiles.fieldContactPlaceholder')}
               />
             </Field>
-            <Field label="工单号">
+            <Field label={t('panel.profiles.fieldTicket')}>
               <input
                 className="input selectable font-mono"
                 value={form.ticketNo}
                 onChange={(e) => set('ticketNo', e.target.value)}
-                placeholder="例如：FW-2026-1014"
+                placeholder={t('panel.profiles.fieldTicketPlaceholder')}
               />
             </Field>
-            <Field label="常用命令分组" hint="与右侧命令面板的分组名一致，可一键筛选该客户在用的命令">
+            <Field
+              label={t('panel.profiles.fieldCmdGroup')}
+              hint={t('panel.profiles.fieldCmdGroupHint')}
+            >
               <input
                 className="input selectable"
                 value={form.commandGroup}
                 onChange={(e) => set('commandGroup', e.target.value)}
-                placeholder="例如：某某客户"
+                placeholder={t('panel.profiles.fieldCustomerPlaceholder')}
               />
             </Field>
-            <Field label="备注" className="col-span-2">
+            <Field label={t('panel.profiles.fieldRemark')} className="col-span-2">
               <input
                 className="input selectable"
                 value={form.remark}
                 onChange={(e) => set('remark', e.target.value)}
-                placeholder="现场环境、特殊约定等"
+                placeholder={t('panel.profiles.fieldRemarkPlaceholder')}
               />
             </Field>
           </div>
@@ -432,12 +450,12 @@ function ProfileDetail({
         <div className="rounded-lg border border-edge-soft bg-panel p-3.5">
           <div className="mb-2.5 flex items-center gap-2">
             <span className="text-2xs font-semibold tracking-wide text-ink-3">
-              关联连接（{form.connectionIds.length}）
+              {t('panel.profiles.linkedConns', { count: form.connectionIds.length })}
             </span>
-            <span className="text-2xs text-ink-3/70">勾选属于该客户的设备连接</span>
+            <span className="text-2xs text-ink-3/70">{t('panel.profiles.linkedConnsHint')}</span>
           </div>
           {connections.length === 0 ? (
-            <div className="text-2xs text-ink-3">还没有任何连接，先在左侧「连接」页添加设备。</div>
+            <div className="text-2xs text-ink-3">{t('panel.profiles.noConns')}</div>
           ) : (
             <div className="scroll-thin grid max-h-[168px] grid-cols-2 gap-1 overflow-y-auto pr-1">
               {connections.map((c) => {
@@ -478,33 +496,38 @@ function ProfileDetail({
                 <button
                   key={c.id}
                   className="btn h-6 px-2 text-2xs"
-                  title={`打开 ${connectionTarget(c)} 的会话`}
+                  title={t('panel.profiles.openSessionTitle', { target: connectionTarget(c) })}
                   onClick={() => openSession(c)}
                 >
                   <Terminal size={11} />
-                  连接 {c.name}
+                  {t('panel.profiles.connectBtn', { name: c.name })}
                 </button>
               ))}
             </div>
           )}
         </div>
 
-        {/* 关联信息（只读） */}
+        {/*
+         * 关联信息（只读）
+         */}
         {!isNew && (
           <div className="rounded-lg border border-edge-soft bg-panel p-3.5">
             <div className="mb-2.5 text-2xs font-semibold tracking-wide text-ink-3">
-              关联信息（自动汇总）
+              {t('panel.profiles.linkedSummary')}
             </div>
             <div className="space-y-2.5">
               <div>
                 <div className="mb-1 flex items-center gap-1.5">
                   <FileText size={11} className="text-ink-3" />
                   <span className="text-2xs text-ink-2">
-                    诊断报告 <span className="text-ink-3">（{linkedReports.length} 份）</span>
+                    {t('panel.profiles.diagReports')}{' '}
+                    <span className="text-ink-3">
+                      {t('panel.profiles.diagReportsCount', { count: linkedReports.length })}
+                    </span>
                   </span>
                   {linkedReports.length === 0 && (
                     <span className="text-2xs text-ink-3/70">
-                      关联的连接还没有生成过诊断报告
+                      {t('panel.profiles.noDiagReports')}
                     </span>
                   )}
                 </div>
@@ -542,18 +565,22 @@ function ProfileDetail({
               <div className="flex items-center gap-2">
                 <ListFilter size={11} className="text-ink-3" />
                 <span className="text-2xs text-ink-2">
-                  常用命令分组{' '}
+                  {t('panel.profiles.cmdGroupLabel')}{' '}
                   <span className="text-ink-3">
-                    {form.commandGroup.trim() ? `「${form.commandGroup.trim()}」` : '（未设置）'}
+                    {form.commandGroup.trim()
+                      ? t('panel.profiles.cmdGroupQuoted', { group: form.commandGroup.trim() })
+                      : t('panel.profiles.cmdGroupUnset')}
                   </span>
                   {form.commandGroup.trim() && (
-                    <span className="text-ink-3">：{groupCommands.length} 条</span>
+                    <span className="text-ink-3">
+                      {t('panel.profiles.cmdGroupCount', { count: groupCommands.length })}
+                    </span>
                   )}
                 </span>
                 <span className="flex-1" />
                 {form.commandGroup.trim() && groupCommands.length > 0 && (
                   <button className="btn h-6 px-2 text-2xs" onClick={filterCommands}>
-                    在命令面板筛选
+                    {t('panel.profiles.filterInCmdPanel')}
                   </button>
                 )}
               </div>
@@ -564,15 +591,18 @@ function ProfileDetail({
 
       <ConfirmDialog
         open={pendingDelete}
-        title="删除档案"
+        title={t('panel.profiles.deleteDialogTitle')}
         danger
-        confirmText="删除"
+        confirmText={t('panel.profiles.deleteConfirm')}
         message={
           <>
-            确定删除档案
-            <span className="font-medium text-ink">「{profile?.customerName}」</span>吗？
+            {t('panel.profiles.deletePrefix')}
+            <span className="font-medium text-ink">
+              {t('panel.profiles.deleteQuoted', { name: profile?.customerName ?? '' })}
+            </span>
+            {t('panel.profiles.deleteSuffix')}
             <div className="mt-1 text-2xs text-ink-3">
-              仅删除档案本身，不影响关联的连接、命令与报告。
+              {t('panel.profiles.deleteNote')}
             </div>
           </>
         }

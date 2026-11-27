@@ -26,6 +26,10 @@ import { useDiscoveryStore } from '@/stores/discoveryStore'
 import { useBackupStore } from '@/stores/backupStore'
 import { useTransferStore } from '@/stores/transferStore'
 import { cn } from '@/lib/utils'
+import { prefetchPanelsIdle } from '@/lib/panelPrefetch'
+import { useI18n, type I18nKey } from '@/i18n'
+
+let toolsPrefetched = false
 
 /**
  * 左侧活动栏（44px，图标竖排）。
@@ -48,15 +52,16 @@ import { cn } from '@/lib/utils'
  * 活动栏就能保持 5 个主视图 + 1 个工具入口的克制数量。
  */
 
-const MAIN_ITEMS: Array<{ view: ActivityView; label: string; icon: typeof FolderTree }> = [
-  { view: 'connections', label: '连接', icon: TerminalSquare },
-  { view: 'files', label: '文件', icon: FolderTree },
-  { view: 'history', label: '命令历史', icon: History },
-  { view: 'logs', label: '会话日志', icon: ScrollText },
-  { view: 'tunnels', label: '端口隧道', icon: Cable }
+const MAIN_ITEMS: Array<{ view: ActivityView; labelKey: I18nKey; icon: typeof FolderTree }> = [
+  { view: 'connections', labelKey: 'common.activity.connections', icon: TerminalSquare },
+  { view: 'files', labelKey: 'common.activity.files', icon: FolderTree },
+  { view: 'history', labelKey: 'common.activity.history', icon: History },
+  { view: 'logs', labelKey: 'common.activity.logs', icon: ScrollText },
+  { view: 'tunnels', labelKey: 'common.activity.tunnels', icon: Cable }
 ]
 
 export function ActivityBar(): React.JSX.Element {
+  const { t } = useI18n()
   const activityView = useLayoutStore((s) => s.activityView)
   const sidebarVisible = useLayoutStore((s) => s.sidebarVisible)
   const commandRailVisible = useLayoutStore((s) => s.commandRailVisible)
@@ -86,26 +91,27 @@ export function ActivityBar(): React.JSX.Element {
 
   return (
     <nav
-      aria-label="活动栏"
+      aria-label={t('common.activity.navLabel')}
       className="flex w-11 shrink-0 flex-col items-stretch border-r border-edge bg-chrome"
     >
-      {MAIN_ITEMS.map(({ view, label, icon: Icon }) => {
+      {MAIN_ITEMS.map(({ view, labelKey, icon: Icon }) => {
+        const label = t(labelKey)
         const active = activityView === view && sidebarVisible
         return (
           <button
             key={view}
             data-activity={view}
             className={cn('activity-item', active && 'activity-item-active')}
-            title={active ? `${label}（再次点击收起侧栏）` : label}
+            title={active ? t('common.activity.collapseHint', { label }) : label}
             aria-label={label}
             aria-pressed={active}
             onClick={() => toggleActivityView(view)}
           >
             {/*
-              激活指示线：2px 品牌色，绝对定位贴在左沿（不占布局宽度）。
-              用 top-[14px] 而不是 top-1/2 + -translate-y-1/2：活动栏有几何禁令，
-              静态居中也不该引入 transform。
-            */}
+              * 激活指示线：2px 品牌色，绝对定位贴在左沿（不占布局宽度）。
+              * 用 top-[14px] 而不是 top-1/2 + -translate-y-1/2：活动栏有几何禁令，
+              * 静态居中也不该引入 transform。
+              */}
             {active && (
               <span className="pointer-events-none absolute left-0 top-[14px] h-4 w-0.5 rounded-r bg-brand" />
             )}
@@ -125,21 +131,31 @@ export function ActivityBar(): React.JSX.Element {
 
       <span className="mx-3 my-1 h-px shrink-0 bg-edge-soft" />
 
-      {/* 工具：点开是弹层入口列表，而不是又一屏内容 */}
+      {/*
+        * 工具：点开是弹层入口列表，而不是又一屏内容
+        */}
       <ToolsButton active={toolsActive} />
 
       <div className="flex-1" />
 
-      {/* 第二道分组线：上方是「工具」，下方是常驻的全局入口（命令栏 / 设置） */}
+      {/*
+        * 第二道分组线：上方是「工具」，下方是常驻的全局入口（命令栏 / 设置）
+        */}
       <span className="mx-3 my-1 h-px shrink-0 bg-edge-soft" />
 
-      {/* 命令栏开关：命令栏有自己头部的关闭按钮，但收起之后那个按钮也跟着没了，
-          所以活动栏底部必须留一个常驻入口，否则收起后无法再打开。 */}
+      {/*
+        * 命令栏开关：命令栏有自己头部的关闭按钮，但收起之后那个按钮也跟着没了，
+        * 所以活动栏底部必须留一个常驻入口，否则收起后无法再打开。
+        */}
       <button
         data-activity="command-rail"
         className={cn('activity-item', commandRailVisible && 'activity-item-active')}
-        title={commandRailVisible ? '收起常用命令栏' : '展开常用命令栏'}
-        aria-label="常用命令栏"
+        title={
+          commandRailVisible
+            ? t('common.activity.commandRailCollapse')
+            : t('common.activity.commandRailExpand')
+        }
+        aria-label={t('common.activity.commandRail')}
         aria-pressed={commandRailVisible}
         onClick={() => toggleCommandRail()}
       >
@@ -160,8 +176,8 @@ export function ActivityBar(): React.JSX.Element {
 
       <button
         className="activity-item"
-        title="设置 (Ctrl+,)"
-        aria-label="设置"
+        title={t('common.activity.settingsTitle')}
+        aria-label={t('common.activity.settings')}
         onClick={() => setSettingsOpen(true)}
       >
         <span className="flex h-8 w-8 items-center justify-center rounded-md">
@@ -174,56 +190,65 @@ export function ActivityBar(): React.JSX.Element {
 
 /** 工具入口：悬浮出列表，避免在 48px 宽的竖条里塞二级菜单 */
 function ToolsButton({ active }: { active: boolean }): React.JSX.Element {
+  const { t } = useI18n()
   const items: Array<{ label: string; icon: React.JSX.Element; onClick: () => void }> = [
     {
-      label: '一键诊断巡检',
+      label: t('common.panel.diag'),
       icon: <Wrench size={14} />,
       onClick: () => useDiagStore.getState().togglePanel()
     },
     {
-      label: '批量执行',
+      label: t('common.panel.batch'),
       icon: <Boxes size={14} />,
       onClick: () => useBatchStore.getState().togglePanel()
     },
     {
-      label: '客户 / 设备档案',
+      label: t('common.panel.profile'),
       icon: <BookUser size={14} />,
       onClick: () => useProfileStore.getState().togglePanel()
     },
     {
-      label: '资源仪表盘',
+      label: t('common.panel.metrics'),
       icon: <Gauge size={14} />,
       onClick: () => useMetricsStore.getState().togglePanel()
     },
     {
-      label: '固件升级助手',
+      label: t('common.panel.firmware'),
       icon: <Rocket size={14} />,
       onClick: () => useFirmwareStore.getState().togglePanel()
     },
     {
-      label: '设备发现',
+      label: t('common.panel.discovery'),
       icon: <Radar size={14} />,
       onClick: () => useDiscoveryStore.getState().togglePanel()
     },
     {
-      label: '配置备份对比',
+      label: t('common.panel.backup'),
       icon: <Archive size={14} />,
       onClick: () => useBackupStore.getState().togglePanel()
     },
     {
-      label: '传输记录',
+      label: t('common.panel.transfer'),
       icon: <ArrowUpDown size={14} />,
       onClick: () => useTransferStore.getState().togglePanel()
     }
   ]
 
   return (
-    <div className="group/tools relative">
+    <div
+      className="group/tools relative"
+      onMouseEnter={() => {
+        if (!toolsPrefetched) {
+          toolsPrefetched = true
+          prefetchPanelsIdle()
+        }
+      }}
+    >
       <button
         data-activity="tools"
         className={cn('activity-item', active && 'activity-item-active')}
-        title="工具"
-        aria-label="工具"
+        title={t('common.activity.tools')}
+        aria-label={t('common.activity.tools')}
         aria-haspopup="menu"
       >
         {active && (
@@ -242,10 +267,10 @@ function ToolsButton({ active }: { active: boolean }): React.JSX.Element {
       </button>
 
       {/*
-        hover 展开的浮层用纯色底（不能 backdrop-blur：终端容器父级禁止该属性；
-        虽然这里不在终端链路上，但统一规则更容易守）。
-        用 left-full 贴住活动栏右沿，不留缝隙 —— 有缝就会「鼠标移过去菜单先关」。
-      */}
+        * hover 展开的浮层用纯色底（不能 backdrop-blur：终端容器父级禁止该属性；
+        * 虽然这里不在终端链路上，但统一规则更容易守）。
+        * 用 left-full 贴住活动栏右沿，不留缝隙 —— 有缝就会「鼠标移过去菜单先关」。
+        */}
       <div
         role="menu"
         className="invisible absolute left-full top-0 z-50 w-44 rounded-md border border-edge bg-panel p-1 opacity-0 shadow-pop transition-opacity duration-150 group-hover/tools:visible group-hover/tools:opacity-100"

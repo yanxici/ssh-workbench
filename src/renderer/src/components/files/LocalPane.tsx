@@ -24,10 +24,12 @@ import {
 } from '@/components/ui'
 import { isImeComposing } from '@/lib/ime'
 import { useTokenFlag } from '@/lib/useTokenFlag'
+import { useI18n } from '@/i18n'
 import { useVirtualizer } from '@tanstack/react-virtual'
 
 /** 文件管理器左栏：本地文件系统（上传来源 / 下载目标） */
 export function LocalPane(): React.JSX.Element {
+  const { t } = useI18n()
   const dir = useSftpStore((s) => s.localDir)
   /** 本面板所属会话：上传/下载执行链路要求显式传入（不再依赖 store.sessionId） */
   const sessionId = useSftpStore((s) => s.sessionId)
@@ -86,18 +88,18 @@ export function LocalPane(): React.JSX.Element {
     const targets = selSet.has(path) ? sel : [path]
     return [
       {
-        label: '上传到远端目录…',
+        label: t('files.ui.local.uploadMenu'),
         icon: <Upload size={12} />,
         onClick: () => void requestUpload(sessionId, targets)
       },
       {
-        label: '重命名',
+        label: t('files.ui.rename'),
         icon: <Pencil size={12} />,
         disabled: targets.length !== 1,
         onClick: () => setDialog({ kind: 'rename', target: path })
       },
       {
-        label: '删除',
+        label: t('files.ui.delete'),
         icon: <Trash2 size={12} />,
         danger: true,
         separatorBefore: true,
@@ -114,7 +116,7 @@ export function LocalPane(): React.JSX.Element {
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex shrink-0 items-center gap-1 border-b border-edge-soft px-2 py-1.5">
-        <span className="shrink-0 text-2xs font-semibold text-ink-2">本地</span>
+        <span className="shrink-0 text-2xs font-semibold text-ink-2">{t('files.ui.local.title')}</span>
         {drives.length > 1 && (
           <select
             className="input h-6 w-[68px] shrink-0 px-1 text-2xs"
@@ -132,7 +134,7 @@ export function LocalPane(): React.JSX.Element {
         )}
         <button
           className="btn-icon h-6 w-6 shrink-0"
-          title="上级目录"
+          title={t('files.ui.parentDir')}
           onClick={() => void nav(localDirname(dir))}
         >
           <ArrowUp size={13} />
@@ -149,21 +151,23 @@ export function LocalPane(): React.JSX.Element {
         />
         <button
           className="btn-icon h-6 w-6 shrink-0"
-          title="新建文件夹"
+          title={t('files.ui.newFolder')}
           onClick={() => setDialog({ kind: 'mkdir' })}
         >
           <FolderPlus size={13} />
         </button>
         <button
           className="btn-icon h-6 w-6 shrink-0"
-          title="刷新"
+          title={t('files.ui.refresh')}
           onClick={() => void refresh()}
         >
           <RefreshCw size={13} className={cn(loading && 'animate-spin')} />
         </button>
       </div>
 
-      {/* 列表（同时是下载落点） */}
+      {/*
+       * 列表（同时是下载落点）
+       */}
       <div
         ref={scrollRef}
         className="scroll-thin min-h-0 flex-1 overflow-y-auto p-1"
@@ -183,10 +187,12 @@ export function LocalPane(): React.JSX.Element {
       >
         {loading && files.length === 0 && (
           <div className="flex items-center justify-center gap-2 py-8 text-2xs text-ink-3">
-            <Loader2 size={13} className="animate-spin" /> 读取中…
+            <Loader2 size={13} className="animate-spin" /> {t('files.ui.reading')}
           </div>
         )}
-        {/* 虚拟滚动：只渲染视口内的行 */}
+        {/*
+         * 虚拟滚动：只渲染视口内的行
+         */}
         <div style={{ height: vrow.getTotalSize(), position: 'relative', width: '100%' }}>
           {vrow.getVirtualItems().map((vi) => {
             const f = files[vi.index]
@@ -249,8 +255,8 @@ export function LocalPane(): React.JSX.Element {
 
       <PromptDialog
         open={dialog !== null}
-        title={dialog?.kind === 'rename' ? '重命名' : '新建文件夹'}
-        label={dialog?.kind === 'rename' ? '新名称' : '文件夹名称'}
+        title={dialog?.kind === 'rename' ? t('files.ui.rename') : t('files.ui.newFolder')}
+        label={dialog?.kind === 'rename' ? t('files.ui.newName') : t('files.ui.folderName')}
         defaultValue={dialog?.kind === 'rename' ? (dialog.target?.split(/[\\/]/).pop() ?? '') : ''}
         onCancel={() => setDialog(null)}
         onConfirm={(value) => {
@@ -264,18 +270,21 @@ export function LocalPane(): React.JSX.Element {
 
       <ConfirmDialog
         open={pendingDelete !== null}
-        title="删除本地文件"
+        title={t('files.ui.deleteLocal.title')}
         danger
-        confirmText="删除"
+        confirmText={t('files.ui.delete')}
         message={
           <>
-            确定删除本地
-            {pendingDelete?.isDir ? '文件夹' : '文件'}
-            <span className="font-medium text-ink">「{pendingDelete?.name}」</span>吗？
+            {t('files.ui.deleteLocal.prefix')}
+            {pendingDelete?.isDir
+              ? t('files.ui.deleteLocal.kindDir')
+              : t('files.ui.deleteLocal.kindFile')}
+            <span className="font-medium text-ink">「{pendingDelete?.name}」</span>
+            {t('files.ui.deleteRemote.suffix')}
             <div className="mt-2 selectable break-all font-mono text-2xs text-ink-3">
               {pendingDelete?.path}
             </div>
-            <div className="mt-1 text-2xs text-danger">本地删除不进回收站，不可恢复。</div>
+            <div className="mt-1 text-2xs text-danger">{t('files.ui.deleteLocal.warn')}</div>
           </>
         }
         onCancel={() => setPendingDelete(null)}
