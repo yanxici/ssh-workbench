@@ -69,79 +69,79 @@ export interface ColorThemeDef {
 const VSCODE: ColorThemeDef = {
   id: 'vscode',
   name: 'Portix 默认',
-  swatch: ['#ffffff', '#0a7e5c', '#eff2f6'],
-  tagline: 'Crisp slate with jade emerald accents',
+  swatch: ['#ffffff', '#047857', '#000000'],
+  tagline: 'Pure black & white with emerald accents',
   light: {
     vars: {
-      chrome: '239 242 246', // #EFF2F6 chrome frame
-      app: '255 255 255', // #FFFFFF canvas & active tab
-      panel: '246 248 250', // #F6F8FA sidebar / command rail / statusbar
-      raised: '255 255 255', // #FFFFFF cards & inputs
-      hover: '233 238 244', // #E9EEF4 hover
-      edge: '223 228 235', // #DFE4EB hairline border
-      'edge-soft': '235 239 245', // #EBEFF5 subtle border
-      ink: '15 23 36', // #0F1724 primary text
-      'ink-2': '58 69 86', // #3A4556 body text
-      'ink-3': '104 115 131', // #687383 muted text
-      brand: '10 126 92', // #0A7E5C Portix jade emerald (5.06:1 vs white)
+      chrome: '252 252 252', // #FCFCFC near-pure white chrome
+      app: '255 255 255', // #FFFFFF pure white canvas
+      panel: '255 255 255', // #FFFFFF pure white sidebars & statusbar
+      raised: '255 255 255', // #FFFFFF pure white cards & inputs
+      hover: '242 250 246', // #F2FAF6 crisp mint-tinted hover
+      edge: '226 226 226', // #E2E2E2 crisp hairline border
+      'edge-soft': '240 240 240', // #F0F0F0 subtle border
+      ink: '0 0 0', // #000000 jet black primary text
+      'ink-2': '24 24 24', // #181818 deep black body text
+      'ink-3': '92 92 92', // #5C5C5C crisp charcoal secondary
+      brand: '4 120 87', // #047857 Portix emerald (5.48:1 vs white)
       'on-brand': '255 255 255',
-      select: '230 245 239', // #E6F5EF soft mint selection
-      accent: '10 126 92', // #0A7E5C unified interactive accent
+      select: '236 253 245', // #ECFDF5 crystal mint selection
+      accent: '4 120 87', // #047857 unified emerald accent
       'on-accent': '255 255 255',
-      success: '16 156 107', // #109C6B
-      warning: '202 138 4', // #CA8A04
-      danger: '217 45 56' // #D92D38
+      success: '5 150 105', // #059669
+      warning: '180 83 9', // #B45309
+      danger: '220 38 38' // #DC2626
     },
     terminal: {
       background: '#FFFFFF',
-      foreground: '#1E293B',
-      cursor: '#0A7E5C',
+      foreground: '#000000',
+      cursor: '#047857',
       cursorAccent: '#FFFFFF',
-      selectionBackground: 'rgba(10, 126, 92, 0.16)',
-      black: '#0F1724',
-      red: '#D92D38',
-      green: '#0A7E5C',
-      yellow: '#CA8A04',
-      blue: '#2563EB',
+      selectionBackground: 'rgba(4, 120, 87, 0.16)',
+      black: '#000000',
+      red: '#DC2626',
+      green: '#047857',
+      yellow: '#B45309',
+      blue: '#1D4ED8',
       magenta: '#7C3AED',
-      cyan: '#0891B2',
-      white: '#94A3B8',
-      brightBlack: '#64748B',
+      cyan: '#0E7490',
+      white: '#737373',
+      brightBlack: '#525252',
       brightRed: '#EF4444',
-      brightGreen: '#109C6B',
-      brightYellow: '#EAB308',
-      brightBlue: '#3B82F6',
+      brightGreen: '#059669',
+      brightYellow: '#D97706',
+      brightBlue: '#2563EB',
       brightMagenta: '#8B5CF6',
       brightCyan: '#06B6D4',
-      brightWhite: '#0F1724'
+      brightWhite: '#000000'
     }
   },
   dark: {
     vars: {
-      chrome: '15 17 21', // #0F1115 obsidian chrome
-      app: '13 15 19', // #0D0F13 terminal canvas
-      panel: '21 24 30', // #15181E sidebar / command rail / statusbar
-      raised: '29 33 41', // #1D2129 raised cards & inputs
-      hover: '37 42 52', // #252A34
-      edge: '46 52 64', // #2E3440
-      'edge-soft': '33 38 47', // #21262F
-      ink: '238 241 246', // #EEF1F6
-      'ink-2': '178 186 198', // #B2BAC6
-      'ink-3': '124 134 150', // #7C8696
-      brand: '46 211 154', // #2ED39A emerald (9.20:1 vs dark ink)
-      'on-brand': '7 28 20',
-      select: '20 56 46', // #14382E deep pine selection
+      chrome: '6 6 6', // #060606 near-pure black chrome
+      app: '0 0 0', // #000000 pure black canvas
+      panel: '0 0 0', // #000000 pure black sidebars & statusbar
+      raised: '10 10 10', // #0A0A0A deep black cards & inputs
+      hover: '16 28 22', // #101C16 subtle dark emerald hover
+      edge: '34 34 34', // #222222 crisp hairline border
+      'edge-soft': '24 24 24', // #181818
+      ink: '255 255 255', // #FFFFFF pure white primary text
+      'ink-2': '224 224 224', // #E0E0E0 bright crisp body text
+      'ink-3': '148 148 148', // #949494 legible secondary
+      brand: '46 211 154', // #2ED39A emerald (10.9:1 vs black)
+      'on-brand': '0 0 0',
+      select: '8 42 31', // #082A1F deep emerald selection
       accent: '46 211 154',
-      'on-accent': '7 28 20',
+      'on-accent': '0 0 0',
       success: '46 211 154',
-      warning: '245 185 66',
+      warning: '250 204 21',
       danger: '248 113 113'
     },
     terminal: {
-      background: '#0D0F13',
-      foreground: '#DCE3EC',
+      background: '#000000',
+      foreground: '#FFFFFF',
       cursor: '#2ED39A',
-      cursorAccent: '#0D0F13',
+      cursorAccent: '#000000',
       selectionBackground: 'rgba(46, 211, 154, 0.24)',
       black: '#1D2129',
       red: '#F87171',
@@ -376,30 +376,30 @@ const MONO: ColorThemeDef = {
   tagline: 'Pure monochrome black & white',
   dark: {
     vars: {
-      chrome: '12 12 12',
-      app: '0 0 0',
-      panel: '18 18 18',
-      raised: '26 26 26',
-      hover: '38 38 38',
-      edge: '46 46 46',
-      'edge-soft': '30 30 30',
-      ink: '250 250 250',
-      'ink-2': '184 184 184',
-      'ink-3': '128 128 128',
-      accent: '250 250 250',
-      'on-accent': '10 10 10',
+      chrome: '10 10 10',
+      app: '5 5 5',
+      panel: '5 5 5',
+      raised: '12 12 12',
+      hover: '24 24 24',
+      edge: '38 38 38',
+      'edge-soft': '26 26 26',
+      ink: '255 255 255',
+      'ink-2': '224 224 224',
+      'ink-3': '148 148 148',
+      accent: '255 255 255',
+      'on-accent': '0 0 0',
       success: '74 222 128',
       warning: '250 204 21',
       danger: '248 113 113',
-      brand: '250 250 250',
-      'on-brand': '10 10 10',
-      select: '42 42 42'
+      brand: '255 255 255',
+      'on-brand': '0 0 0',
+      select: '28 28 28'
     },
     terminal: {
-      background: '#000000',
-      foreground: '#F5F5F5',
+      background: '#050505',
+      foreground: '#FFFFFF',
       cursor: '#FFFFFF',
-      cursorAccent: '#000000',
+      cursorAccent: '#050505',
       selectionBackground: 'rgba(255, 255, 255, 0.22)',
       black: '#1A1A1A',
       red: '#F87171',
@@ -421,31 +421,31 @@ const MONO: ColorThemeDef = {
   },
   light: {
     vars: {
-      chrome: '236 236 236',
+      chrome: '250 250 250',
       app: '255 255 255',
-      panel: '245 245 245',
+      panel: '255 255 255',
       raised: '255 255 255',
-      hover: '232 232 232',
-      edge: '223 223 223',
-      'edge-soft': '238 238 238',
-      ink: '10 10 10',
-      'ink-2': '64 64 64',
-      'ink-3': '115 115 115',
-      accent: '17 17 17',
+      hover: '244 244 244',
+      edge: '224 224 224',
+      'edge-soft': '240 240 240',
+      ink: '0 0 0',
+      'ink-2': '24 24 24',
+      'ink-3': '92 92 92',
+      accent: '0 0 0',
       'on-accent': '255 255 255',
       success: '22 163 74',
       warning: '180 83 9',
       danger: '220 38 38',
-      brand: '17 17 17',
+      brand: '0 0 0',
       'on-brand': '255 255 255',
-      select: '229 229 229'
+      select: '240 240 240'
     },
     terminal: {
       background: '#FFFFFF',
-      foreground: '#111111',
-      cursor: '#111111',
+      foreground: '#000000',
+      cursor: '#000000',
       cursorAccent: '#FFFFFF',
-      selectionBackground: 'rgba(17, 17, 17, 0.14)',
+      selectionBackground: 'rgba(0, 0, 0, 0.14)',
       black: '#111111',
       red: '#DC2626',
       green: '#15803D',

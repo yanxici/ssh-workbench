@@ -117,7 +117,7 @@ function createWindow(): void {
     minHeight: 640,
     show: false,
     frame: false,
-    backgroundColor: startupPrefs.darkBg ? '#0F1115' : '#EFF2F6',
+    backgroundColor: startupPrefs.darkBg ? '#000000' : '#FFFFFF',
     title: 'Portix',
     /*
      * 显式给窗口一个图标。

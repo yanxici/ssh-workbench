@@ -54,7 +54,7 @@ export function ColorThemeGallery({
               style={{ background: `rgb(${variant.vars.app})` }}
             >
               <span
-                className="h-4 w-4 rounded-xs"
+                className="h-4 w-4 rounded-xs border border-edge-soft"
                 style={{ background: `rgb(${variant.vars.panel})` }}
               />
               <span
