@@ -291,7 +291,13 @@ async function main() {
     ' b.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, view: window }));' +
     ' return "ok"' +
   '})()')
-  await sleep(1200)
+  await sleep(600)
+  await p.evaluate('(() => {' +
+    ' const tab = document.querySelector("[data-settings-tab=\\"terminal\\"]");' +
+    ' if (tab) tab.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, view: window }));' +
+    ' return !!tab' +
+  '})()')
+  await sleep(800)
   const panel = await p.evaluate('(() => document.body.innerText.slice(0, 6000))()')
   check('设置面板出现「输出高亮」分区', String(panel).includes('输出高亮'), String(panel).slice(0, 120))
   check('试匹配框可见', String(panel).includes('试匹配'), null)

@@ -178,7 +178,13 @@ async function main() {
     ' b.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, view: window }));' +
     ' return "ok"' +
   '})()')
-  await sleep(1200)
+  await sleep(600)
+  await p.evaluate('(() => {' +
+    ' const tab = document.querySelector("[data-settings-tab=\\"terminal\\"]");' +
+    ' if (tab) tab.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, view: window }));' +
+    ' return !!tab' +
+  '})()')
+  await sleep(800)
   const panel = String(await p.evaluate('(() => document.body.innerText.slice(0, 8000))()'))
   check('设置面板出现「通知」分区', panel.includes('任务完成通知'), panel.slice(0, 120))
   check('四个开关都在（总开关/系统/提示音/启发式）',

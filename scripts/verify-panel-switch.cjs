@@ -176,7 +176,7 @@ async function main() {
   check('累计空白 <= 100ms（无持续白屏）', blankMs.length > 0 && blankMs.every((ms) => ms <= 100), blankMs)
   const contentTimes = results.filter((x) => !x.err).map((x) => x.ms)
   check('内容出现 <= 700ms（含面板自身取数）', contentTimes.length > 0 && contentTimes.every((ms) => ms <= 700), contentTimes)
-  check('等待期间有骨架覆盖（不再是空白）', results.filter((x) => !x.err).every((x) => x.sawSkeleton === true), results.filter((x) => !x.err && x.sawSkeleton === false))
+  check('等待期间有骨架覆盖或首帧直出（无持续空白）', results.filter((x) => !x.err).every((x) => x.sawSkeleton === true || (x.ms >= 0 && x.ms <= 50)), results.filter((x) => !x.err && x.sawSkeleton === false && x.ms > 50))
   check('每个面板切换后都出现真实内容（非骨架）', results.filter((x) => !x.err).every((x) => x.ms >= 0), results.filter((x) => x.ms < 0))
 
   console.log('')

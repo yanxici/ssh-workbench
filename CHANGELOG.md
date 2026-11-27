@@ -5,6 +5,24 @@ All notable changes to SSH Workbench will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.5.1] - 2026-11-27
+
+<!-- release-notes:start -->
+### 这一版更新了什么
+
+- **Portix 全新品牌重塑与高对比纯白黑视觉升级**：正式命名为 **Portix（现代 SSH 与串口终端工作台）**，推出圆角深石墨翡翠信号徽标（Logo A）及 7 尺寸超采样应用图标（同步支持 `Portix.lnk` 任务栏 AUMID 识别）；界面默认改为零灰霾**纯白/纯黑 + 翡翠绿点缀**体系（亮色 `#FFFFFF` 纯白画布搭配 `#000000` 纯黑正文与 `#047857` 翡翠强调；暗色 `#000000` 纯黑沉浸底搭配 `#FFFFFF` 纯白正文与 `#2ED39A` 亮翡翠），用极细边框分界，彻底告别灰蒙观感；同步移除暖黄色 Gruvbox 主题，新增**极简黑白（Monochrome）**纯黑纯白无彩偏配色。
+- **6 选项卡现代设置中心与全壳体细节精修**：设置面板从 15 个叠层手风琴重构为左侧 6 分类导航（**通用与外观 / 终端与通知 / 行为与传输 / 快捷键 / 安全与隐私 / 更新与诊断**）+ 右侧卡片式直接展开并支持完整中英双语；顶部标签栏升级为 36px 满高命中区内嵌圆角胶囊与串口 `Usb` 徽章；底部状态栏移除写死字段改为真实 `SSH` / `SERIAL` 协议与串口帧格式实时展示；优化快速启动页（4 张入口卡与快捷键速览）、连接列表左缘对齐 + `COM` 徽章及命令卡片 `text-wrap: balance` 防中文孤字。
+- **稳定性与安全细节修复**：修复 `supportBundle` zip 包外网代理账密/凭据字段脱敏、导出诊断包/备份弹窗空窗口保护、更新器切换通道或镜像取消在途下载与错误节流状态同步，以及跨通道兼容性。
+<!-- release-notes:end -->
+
+### Added
+
+- **Portix 品牌、纯白黑配色体系与 6 选项卡设置面板**：新增 `BrandMark` 矢量徽标与 7 尺寸 `icon.ico`；升级 4 组 8 变体配色（`Portix 默认` / `极简黑白` / `Solarized` / `Dracula`，全部 WCAG `>= 5.02:1`）；新增 `SettingsCard` 与左侧 6 Tab 分类设置弹窗（覆盖语言切换、隐私自查说明与全量配置项）。
+
+### Fixed
+
+- **外观层次、状态栏与诊断/更新修复**：移除主题默认层与组件底色多余灰阶；状态栏按会话真实类型展示协议与帧格式；修复诊断包导出安全脱敏、更新器换源竞态及无头 CI 测试稳定性。
+
 ## [2.5.0] - 2026-11-27
 
 <!-- release-notes:start -->

@@ -117,7 +117,7 @@ async function main() {
 
   console.log('\n[A. 样式表：抬升 / 入场 / 关闭]')
   /* 主线是 Tailwind 3：没有 @theme，--shadow-lift 直接定义在默认 :root 主题块里 */
-  check('--shadow-lift 在默认主题块定义（Tailwind 3 无 @theme）', /--shadow-lift:\s*0 1px 2px rgb\(15 23 42 \/ 0\.06\)/.test(css))
+  check('--shadow-lift 在默认主题块定义（Tailwind 3 无 @theme）', /--shadow-lift:\s*0 1px 2px rgb\((?:0 0 0|15 23 42) \/ 0\.0[56]\)/.test(css))
   const liftDefs = css.match(/--shadow-lift:\s*0 /g) || []
   /* 三处主题块各一份：默认 :root、.light、.dark。少一份就会在某个主题下没有投影 */
   check('三套主题各定义一份 --shadow-lift', liftDefs.length === 3, liftDefs.length)
