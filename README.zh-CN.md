@@ -31,20 +31,20 @@
 
 | 包 | 文件名 | 适合谁 |
 | --- | --- | --- |
-| 安装版（推荐） | `ssh-workbench-Setup-2.5.2.exe` | 装进系统，支持应用内自动更新 |
-| 便携版 | `ssh-workbench-2.5.2-portable.exe` | 拷 U 盘 / 跳板机直接用，不写注册表 |
-| 免安装压缩包 | `ssh-workbench-2.5.2-win.zip` | 解压即用，适合放进内网共享盘分发 |
+| 安装版（推荐） | `ssh-workbench-Setup-2.5.3.exe` | 装进系统，支持应用内自动更新 |
+| 便携版 | `ssh-workbench-2.5.3-portable.exe` | 拷 U 盘 / 跳板机直接用，不写注册表 |
+| 免安装压缩包 | `ssh-workbench-2.5.3-win.zip` | 解压即用，适合放进内网共享盘分发 |
 
 - 最新版固定入口：<https://github.com/yanxici/ssh-workbench/releases/latest>
-- 指定版本：<https://github.com/yanxici/ssh-workbench/releases/tag/v2.5.2>
+- 指定版本：<https://github.com/yanxici/ssh-workbench/releases/tag/v2.5.3>
 - 校验：同目录 `latest.yml` 里带 sha512，下载后可自行核对。
 
 **国内下载**
 
 1. 主入口：<https://gitee.com/w3554334905/ssh-workbench/releases> —— 三个包与 GitHub 同源同步，直连可用。
-2. 指定版本：`https://gitee.com/w3554334905/ssh-workbench/releases/download/v2.5.2/` + 上面的文件名。
-3. GitHub 备用（加速前缀）：<https://gh-proxy.com/https://github.com/yanxici/ssh-workbench/releases/download/v2.5.2/> + 文件名（第三方中转，可用性不由本项目保证）。
-4. 内网分发（最稳）：把 `ssh-workbench-2.5.2-win.zip` 放到公司共享盘或制品库，链接填在这里 —— `<内部镜像地址待填>`。
+2. 指定版本：`https://gitee.com/w3554334905/ssh-workbench/releases/download/v2.5.3/` + 上面的文件名。
+3. GitHub 备用（加速前缀）：<https://gh-proxy.com/https://github.com/yanxici/ssh-workbench/releases/download/v2.5.3/> + 文件名（第三方中转，可用性不由本项目保证）。
+4. 内网分发（最稳）：把 `ssh-workbench-2.5.3-win.zip` 放到公司共享盘或制品库，链接填在这里 —— `<内部镜像地址待填>`。
 
 > 应用内自动更新默认走「自动（优先国内）」多通道：未配代理时优先从 Gitee 国内同源镜像检查与下载，不通自动回退 GitHub 官方与内置加速站（且回退第三方代理时强制校验官方 sha512）；配了更新代理则优先走 GitHub 差量更新。也可在设置 → 软件更新中手动指定通道或点「从 Gitee 下载」。
 
@@ -156,5 +156,5 @@ Windows 下为 `%APPDATA%/ssh-workbench/data/`（设置面板里可以看到具�
 
 ## 版本
 
-当前版本：**v2.5.2** —— 各版本更新内容请直接查看 [GitHub Releases](https://github.com/yanxici/ssh-workbench/releases)、[Gitee Releases](https://gitee.com/w3554334905/ssh-workbench/releases) 或 [CHANGELOG.md](./CHANGELOG.md)。
+当前版本：**v2.5.3** —— 各版本更新内容请直接查看 [GitHub Releases](https://github.com/yanxici/ssh-workbench/releases)、[Gitee Releases](https://gitee.com/w3554334905/ssh-workbench/releases) 或 [CHANGELOG.md](./CHANGELOG.md)。
 

@@ -293,16 +293,42 @@ function makeSentry() {
   check('sz 发起时 role=receive（下载方向）', roleOf(zrq.to_hex()) === 'receive')
   check('rz 发起时 role=send（上传方向）', roleOf(zri.to_hex()) === 'send')
 
-  // 与 UI 文案一致性：receive 提示接收、send 提示发送
+  // 与 UI 文案一致性：receive 提示接收、send 提示发送（i18n key + 中文词条）
   const ui = fs.readFileSync(
     path.join(ROOT, 'src/renderer/src/components/terminal/ZmodemOverlay.tsx'),
     'utf8'
   )
-  check('UI 对 receive 显示「接收」文案', /receiving \? '接收远端文件'/.test(ui))
-  check('UI 对 send 显示「发送」文案', /'发送文件到远端'/.test(ui))
-  check('UI 提供「中断」按钮', /中断当前传输/.test(ui))
+  const settingsLocale = fs.readFileSync(
+    path.join(ROOT, 'src/renderer/src/i18n/locales/settings.ts'),
+    'utf8'
+  )
+  const termLocale = fs.readFileSync(
+    path.join(ROOT, 'src/renderer/src/i18n/locales/terminal.ts'),
+    'utf8'
+  )
+  check(
+    'UI 对 receive/send 使用对应标题 key 且中文文案正确',
+    /receiving \? t\('zmodem\.title\.receive'\) : t\('zmodem\.title\.send'\)/.test(ui) &&
+      settingsLocale.includes("'zmodem.title.receive': '接收远端文件'") &&
+      settingsLocale.includes("'zmodem.title.send': '发送文件到远端'")
+  )
+  check(
+    'UI 对 receive/send 使用对应提示与按钮文案',
+    /receiving \? t\('zmodem\.accept\.receive'\) : t\('zmodem\.accept\.send'\)/.test(ui) &&
+      settingsLocale.includes("'zmodem.accept.receive': '接收'") &&
+      settingsLocale.includes("'zmodem.accept.send': '选择文件并发送'")
+  )
+  check(
+    'UI 提供「中断」按钮',
+    /t\('term\.zmodem\.abortTitle'\)/.test(ui) &&
+      termLocale.includes("'term.zmodem.abortTitle': '中断当前传输（Esc）'")
+  )
   check('UI 支持 Esc 中断', /e\.key !== 'Escape'/.test(ui))
-  check('UI 提示接收需先选文件夹', /保存文件夹/.test(ui))
+  check(
+    'UI 提示接收需先选文件夹',
+    /t\('zmodem\.hint\.receive'\)/.test(ui) &&
+      /'zmodem\.hint\.receive':\s*'[^']*保存文件夹/.test(settingsLocale)
+  )
 })()
 
 /* ---------- 7. 传输残渣识别（用户反馈：结束后残留乱码与 **B01 头） ---------- */

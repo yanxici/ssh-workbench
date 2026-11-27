@@ -221,7 +221,7 @@ const PROBE = {
   overlays: '(() => { const vis = (el) => { const r = el.getBoundingClientRect(); return r.width > 10 && r.height > 10 };' +
     ' return [...document.querySelectorAll(".modal-overlay")].filter(vis).map((e) => (e.innerText || "").replace(/\\s+/g, " ").slice(0, 80)) })()',
   commandCenter: '(() => !!document.querySelector(\'input[placeholder^="搜索命令"]\'))()',
-  activeTab: '(() => { const t = [...document.querySelectorAll("[data-tab-id]")].find((x) => x.className.includes("bg-app"));' +
+  activeTab: '(() => { const t = [...document.querySelectorAll("[data-tab-id]")].find((x) => x.className.includes("bg-app") || !!(x.firstElementChild && x.firstElementChild.className.includes("bg-app")));' +
     ' return t ? t.getAttribute("data-tab-id") : null })()'
 }
 

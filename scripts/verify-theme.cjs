@@ -35,8 +35,9 @@ function ok(name, cond, detail) {
   }
 }
 
-// 与 styles/index.css 的 :root / .light 一一对应，缺一不可
+// 与 styles/index.css 的 :root / .light 及 colorThemes.ts ThemeVars 一一对应，缺一不可
 const REQUIRED_VARS = [
+  'chrome',
   'app',
   'panel',
   'raised',
@@ -46,7 +47,11 @@ const REQUIRED_VARS = [
   'ink',
   'ink-2',
   'ink-3',
+  'brand',
+  'on-brand',
+  'select',
   'accent',
+  'on-accent',
   'success',
   'warning',
   'danger'
@@ -67,10 +72,10 @@ const TERMINAL_KEYS = [
 ]
 
 /* ---------- 1. 主题清单 ---------- */
-ok('主题数量为 6', COLOR_THEMES.length === 6, `实际 ${COLOR_THEMES.length}`)
+ok('主题数量为 4', COLOR_THEMES.length === 4, `实际 ${COLOR_THEMES.length}`)
 const ids = COLOR_THEMES.map((t) => t.id)
 ok('主题 id 无重复', new Set(ids).size === ids.length, ids.join(','))
-ok('包含 workbench 默认主题', ids.includes('workbench'))
+ok('包含 vscode 默认主题', ids.includes('vscode'))
 
 /* ---------- 2. 结构完整性 ---------- */
 for (const t of COLOR_THEMES) {
@@ -121,18 +126,21 @@ const termBgs = COLOR_THEMES.map((t) => t.dark.terminal.background)
 ok('各主题终端背景互不相同', new Set(termBgs).size === COLOR_THEMES.length, termBgs.join('  '))
 
 /* ---------- 4. 回退行为 ---------- */
-ok('未知 id 回落到 workbench', getColorTheme('not-a-theme').id === 'workbench')
-ok('undefined 回落到 workbench', getColorTheme(undefined).id === 'workbench')
-ok('空字符串回落到 workbench', getColorTheme('').id === 'workbench')
+ok('未知 id 回落到 vscode', getColorTheme('not-a-theme').id === 'vscode')
+ok('undefined 回落到 vscode', getColorTheme(undefined).id === 'vscode')
+ok('空字符串回落到 vscode', getColorTheme('').id === 'vscode')
+ok('退役 id workbench 回落到 vscode', getColorTheme('workbench').id === 'vscode')
+ok('退役 id nord 回落到 vscode', getColorTheme('nord').id === 'vscode')
+ok('退役 id gruvbox 回落到 vscode', getColorTheme('gruvbox').id === 'vscode')
 ok('已知 id 正常返回', getColorTheme('dracula').id === 'dracula')
-ok('getThemeVariant dark 命中暗色', getThemeVariant('nord', true).vars.app === '36 41 51')
-ok('getThemeVariant light 命中亮色', getThemeVariant('nord', false).vars.app === '236 239 244')
+ok('getThemeVariant dark 命中暗色', getThemeVariant('solarized', true).vars.app === '0 43 54')
+ok('getThemeVariant light 命中亮色', getThemeVariant('solarized', false).vars.app === '253 246 227')
 ok(
   '未知 id 的 variant 也回落',
   getThemeVariant('zzz', true).vars.app === COLOR_THEMES[0].dark.vars.app
 )
-ok('getXtermTheme 返回终端调色板', getXtermTheme('gruvbox', true).background === '#1D2021')
-ok('getXtermTheme 亮色', getXtermTheme('gruvbox', false).background === '#FBF1C7')
+ok('getXtermTheme 返回终端调色板', getXtermTheme('mono', true).background === '#050505')
+ok('getXtermTheme 亮色', getXtermTheme('mono', false).background === '#FFFFFF')
 
 /* ---------- 5. 明暗两套变量必须不同（否则切换明暗无效果） ---------- */
 for (const t of COLOR_THEMES) {
@@ -215,12 +223,12 @@ ok('随机 2000 次查询无异常/无缺变量', rndFail === 0, `失败 ${rndFa
 
 /* ---------- 10. 源码接线断言：设置面板与终端确实用了新主题 ---------- */
 const fsx = require('fs')
-const settingsSrc = fsx.readFileSync(
-  path.join(ROOT, 'src/renderer/src/components/settings/SettingsPanel.tsx'),
+const appearanceSrc = fsx.readFileSync(
+  path.join(ROOT, 'src/renderer/src/components/settings/AppearanceSection.tsx'),
   'utf8'
 )
-ok('设置面板渲染 ColorThemeGallery', settingsSrc.includes('<ColorThemeGallery'))
-ok('设置面板提交 colorTheme', settingsSrc.includes('update({ colorTheme: v })'))
+ok('外观设置渲染 ColorThemeGallery', appearanceSrc.includes('<ColorThemeGallery'))
+ok('外观设置提交 colorTheme', appearanceSrc.includes('update({ colorTheme: v })'))
 
 const storeSrc = fsx.readFileSync(path.join(ROOT, 'src/renderer/src/stores/settingsStore.ts'), 'utf8')
 ok('settingsStore 写入 CSS 变量', storeSrc.includes('setProperty(`--c-${key}`'))
@@ -244,8 +252,8 @@ ok(
 const typesSrc = fsx.readFileSync(path.join(ROOT, 'src/shared/types.ts'), 'utf8')
 ok('types.ts 定义 ColorThemeId', typesSrc.includes('export type ColorThemeId'))
 ok('AppSettings 含 colorTheme', typesSrc.includes('colorTheme?: ColorThemeId'))
-const repoSrc = fsx.readFileSync(path.join(ROOT, 'src/main/store/repository.ts'), 'utf8')
-ok('主进程 DEFAULT_SETTINGS 含 colorTheme', repoSrc.includes("colorTheme: 'workbench'"))
+const repoSrc = fsx.readFileSync(path.join(ROOT, 'src/main/store/repo/settings.ts'), 'utf8')
+ok('主进程 DEFAULT_SETTINGS 含 colorTheme', repoSrc.includes("colorTheme: 'vscode'"))
 
 /* ---------- 12. CSS 变量表与主题定义必须对得上 ---------- */
 const cssSrc = fsx.readFileSync(path.join(ROOT, 'src/renderer/src/styles/index.css'), 'utf8')

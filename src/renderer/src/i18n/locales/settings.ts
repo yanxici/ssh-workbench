@@ -286,7 +286,7 @@ export const zhSettings = {
     '卡片悬停抬升、按钮按下回弹、折叠箭头旋转。关闭后过渡与动画立即停用；系统开启「减少动态效果」时同样会关闭',
   'settings.ext.exp.renderer': '终端渲染后端',
   'settings.ext.exp.rendererHint':
-    'DOM 为默认（字形与旧版一致）。WebGL 更省 CPU；挂载前会自检字形是否按配置光栅化，不成立自动回落 DOM',
+    'DOM 为默认（字形与旧版一致）。WebGL / 自动更省 CPU，挂载前会自检字形并在不成立时回落 DOM；在 DOM 与 WebGL/自动之间切换需重启应用以启停 GPU 硬件加速',
   'settings.ext.exp.rendererAuto': '自动',
   'settings.ext.exp.softwareRender': '强制软件渲染（关闭 GPU 加速）',
   'settings.ext.exp.softwareRenderHint':
@@ -780,7 +780,7 @@ export const enSettings: Record<keyof typeof zhSettings, string> = {
     'Card lift, button press, chevron rotation. Disabled immediately when off or OS prefers-reduced-motion',
   'settings.ext.exp.renderer': 'Terminal renderer',
   'settings.ext.exp.rendererHint':
-    'DOM is default. WebGL reduces CPU usage and auto-falls back to DOM if glyph check fails',
+    'DOM is default. WebGL / Auto reduces CPU usage and falls back to DOM if glyph check fails; switching between DOM and WebGL/Auto requires a restart to toggle GPU hardware acceleration',
   'settings.ext.exp.rendererAuto': 'Auto',
   'settings.ext.exp.softwareRender': 'Force software rendering (disable GPU)',
   'settings.ext.exp.softwareRenderHint':

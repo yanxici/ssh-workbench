@@ -8,8 +8,7 @@
  *
  * 设计要点：
  *   1. 每个脚本独立子进程，互不污染环境（多个脚本会自己起 ssh2 server / 临时 userData）。
- *   2. 已知历史失败（verify-cdsync / verify-theme / verify-zmodem）默认跳过，
- *      --include-known-fail 可纳入。基线是用 git stash 对比过的，不是「跑不过就排除」。
+ *   2. 历史失败脚本已全部修复并纳入门禁（KNOWN_FAIL 为空，仍保留 --include-known-fail 兼容旧调用）。
  *   3. 需要 Electron 的脚本自动用 node_modules/electron 的二进制跑（app 对象只在 Electron 里存在）；
  *      verify-zip 需要先把 .tsc-verify 编译出来，这里自动补一步。
  *   4. 退出码：有任一条失败即 1，供 CI 直接使用。
@@ -21,8 +20,8 @@ const { spawnSync } = require('node:child_process')
 const ROOT = path.join(__dirname, '..')
 const SCRIPTS = path.join(ROOT, 'scripts')
 
-/** 已知在改动前就失败的脚本（见 AGENTS.md 2.5），默认不纳入门禁 */
-const KNOWN_FAIL = new Set(['verify-cdsync.cjs', 'verify-theme.cjs', 'verify-zmodem.cjs'])
+/** 已知在改动前就失败的脚本（目前已全部修复并纳入门禁） */
+const KNOWN_FAIL = new Set()
 
 /**
  * 依赖真实交互式 Windows 桌面（user32 mouse_event 原生鼠标点击）的脚本。

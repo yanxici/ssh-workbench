@@ -111,30 +111,51 @@ for (const sh of shells) {
 }
 
 /* ---------- 3：真实目录 cd 后 pwd 一致 ---------- */
+function sanitizeDirPath(p) {
+  const segs = p
+    .replace(/[:*?"<>|\\]/g, '_')
+    .split('/')
+    .filter(Boolean)
+    .map((seg) => {
+      if (seg === '.' || seg === '..') return '_'
+      // Win32 会静默剥离目录名末尾的点和空格，导致创建后实际路径名与预期不符
+      const cleaned = seg.replace(/[. ]+$/g, '_')
+      return cleaned || '_'
+    })
+  return path.posix.join(work.replace(/\\/g, '/'), 'dirs', ...segs)
+}
+
 const dirCases = cases
   .filter((p) => p.length < 200 && !/[\n\t]/.test(p))
   .slice(0, 300)
-  .map((p) => path.posix.join(work.replace(/\\/g, '/'), 'dirs', p.replace(/[:*?"<>|\\]/g, '_')))
-for (const sh of shells) {
-  let created = 0
-  const lines = []
-  for (const d of dirCases) {
-    try {
-      fs.mkdirSync(d, { recursive: true })
-      created++
-      lines.push(`cd ${shellQuote(d)} && pwd -P | tr -d '\\n' && printf '\\0' || printf 'FAIL\\0'`)
-    } catch {
-      /* Windows 下部分字符无法建目录，跳过 */
-    }
+  .map(sanitizeDirPath)
+
+const createdDirs = []
+for (const d of dirCases) {
+  try {
+    fs.mkdirSync(d, { recursive: true })
+    createdDirs.push(d)
+  } catch {
+    /* Windows 下部分字符无法建目录，跳过 */
   }
+}
+
+for (const sh of shells) {
+  // 全部使用 shell 内建 cd / pwd / echo（dirCases 已过滤换行和制表符），避免外部 tr 进程分叉放大延迟与句柄抖动
+  const lines = createdDirs.map((d) => `cd ${shellQuote(d)} && pwd -P || echo FAIL`)
   // 写成脚本文件执行：-c 传大段脚本会超过 Windows 命令行长度上限
   const cdFile = path.join(work, `cd-${sh}.sh`)
   fs.writeFileSync(cdFile, lines.join('\n'))
   const r = spawnSync(sh, [cdFile], { cwd: work, maxBuffer: 1 << 26 })
   if (r.error) throw r.error
-  const out = r.stdout.toString('utf8').split('\0')
+  const out = r.stdout.toString('utf8').split(/\r?\n/)
   out.pop()
-  check(`${sh} cd 全部成功`, !out.includes('FAIL') && out.length === created, `成功 ${out.filter((x) => x !== 'FAIL').length}/${created}`)
+  const okCount = out.filter((x) => x !== 'FAIL').length
+  check(
+    `${sh} cd 全部成功`,
+    !out.includes('FAIL') && out.length === createdDirs.length,
+    `成功 ${okCount}/${createdDirs.length} (out=${out.length}, status=${r.status}, stderr=${r.stderr.toString().slice(0, 200)})`
+  )
 }
 
 /* ---------- 4：expandChain ---------- */

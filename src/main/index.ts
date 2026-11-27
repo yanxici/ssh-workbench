@@ -3,6 +3,7 @@ import { appendFileSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { is, optimizer } from '@electron-toolkit/utils'
 import { IPC } from '@shared/ipc'
+import type { TerminalRenderer } from '@shared/types'
 import { registerAllIpc } from './ipc'
 import { getSettings, seedCommandsIfNeeded } from './store/repository'
 import { updateSettings } from './app/settingsService'
@@ -77,19 +78,22 @@ bootLog('boot: module loaded')
 function readStartupPrefsSync(): {
   softwareRender: boolean
   darkBg: boolean
-  terminalRenderer: 'dom' | 'webgl'
+  terminalRenderer: TerminalRenderer
 } {
   try {
     const p = join(app.getPath('userData'), 'data', 'settings.json')
     const raw = readFileSync(p, 'utf-8')
     const parsed = JSON.parse(raw) as {
       theme?: string
-      experimental?: { softwareRender?: boolean; terminalRenderer?: 'dom' | 'webgl' }
+      experimental?: { softwareRender?: boolean; terminalRenderer?: TerminalRenderer }
     }
+    const rawRenderer = parsed?.experimental?.terminalRenderer
+    const terminalRenderer: TerminalRenderer =
+      rawRenderer === 'webgl' || rawRenderer === 'auto' ? rawRenderer : 'dom'
     return {
       softwareRender: parsed?.experimental?.softwareRender === true,
       darkBg: parsed?.theme === 'dark',
-      terminalRenderer: parsed?.experimental?.terminalRenderer === 'webgl' ? 'webgl' : 'dom'
+      terminalRenderer
     }
   } catch {
     return { softwareRender: false, darkBg: false, terminalRenderer: 'dom' }
@@ -98,8 +102,8 @@ function readStartupPrefsSync(): {
 
 const startupPrefs = readStartupPrefsSync()
 const softwareRender = startupPrefs.softwareRender
-// 默认 DOM 渲染不拉起空转 GPU 进程（可省 ~50-90 MB 内存）；仅显式选择 WebGL 且未强制软渲染时保留硬件加速
-if (softwareRender || startupPrefs.terminalRenderer !== 'webgl') {
+// 默认 DOM 渲染不拉起空转 GPU 进程（可省 ~50-90 MB 内存）；选择 WebGL 或自动且未强制软渲染时保留硬件加速
+if (softwareRender || startupPrefs.terminalRenderer === 'dom') {
   app.disableHardwareAcceleration()
   if (softwareRender) bootLog('software render forced by settings.experimental.softwareRender')
   else bootLog('hardware acceleration disabled for default DOM renderer')

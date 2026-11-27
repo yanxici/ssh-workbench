@@ -5,6 +5,19 @@ All notable changes to SSH Workbench will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.5.3] - 2026-11-27
+
+<!-- release-notes:start -->
+### 这一版更新了什么
+
+- **修复「自动」终端渲染后端误关 GPU 硬件加速**：此前主进程启动读取配置时仅对 `webgl` 保留硬件加速，`auto` 会被归入 `dom` 分支并调用 `app.disableHardwareAcceleration()`，导致选择「自动」后重启仍只能走 SwiftShader 软件光栅化、性能优化失效；现已保留 `auto` 的硬件加速能力，并在设置 → 扩展与实验 →「终端渲染后端」提示中明确说明在 DOM 与 WebGL/自动之间切换需重启应用以启停 GPU 硬件加速。
+- **修复标签栏回归探针假红与三项长期跳过门禁**：修正 `verify-tabbar-os.cjs` 中 `activeTab` 探针选择器以匹配真实子元素上的 `bg-app` 样式；同步更新过期断言（`verify-theme.cjs` 对齐 4 套主题与 18 个语义变量、`verify-zmodem.cjs` 对齐双语 i18n 词条、`verify-cdsync.cjs` 消除外部 `tr` 分叉并补齐 Win32 路径边界清洗），清空 `run-all-verify.cjs` 的 `KNOWN_FAIL` 将三项回归全面纳回默认门禁。
+<!-- release-notes:end -->
+
+### Fixed
+
+- **GPU startup guard, tabbar OS probe, and verification gate restoration** (`src/main/index.ts`, `src/renderer/src/i18n/locales/settings.ts`, `scripts/verify-tabbar-os.cjs`, `scripts/verify-theme.cjs`, `scripts/verify-zmodem.cjs`, `scripts/verify-cdsync.cjs`, `scripts/run-all-verify.cjs`): Keep hardware acceleration enabled for `terminalRenderer: 'auto'`, document restart requirement in zh/en `rendererHint`, inspect `firstElementChild` in `PROBE.activeTab`, and restore `verify-theme` / `verify-zmodem` / `verify-cdsync` to the default CI gate.
+
 ## [2.5.2] - 2026-11-27
 
 <!-- release-notes:start -->

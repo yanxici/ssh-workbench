@@ -31,20 +31,20 @@ Windows 10/11 (x64) only. Pick one of the three packages — **use the [Gitee mi
 
 | Package | File name | Best for |
 | --- | --- | --- |
-| Installer (recommended) | `ssh-workbench-Setup-2.5.2.exe` | Installs into the system, supports in-app auto-update |
-| Portable | `ssh-workbench-2.5.2-portable.exe` | Run from a USB stick / jump host, writes no registry keys |
-| Zip bundle | `ssh-workbench-2.5.2-win.zip` | Unzip and run; easiest to mirror onto an internal share |
+| Installer (recommended) | `ssh-workbench-Setup-2.5.3.exe` | Installs into the system, supports in-app auto-update |
+| Portable | `ssh-workbench-2.5.3-portable.exe` | Run from a USB stick / jump host, writes no registry keys |
+| Zip bundle | `ssh-workbench-2.5.3-win.zip` | Unzip and run; easiest to mirror onto an internal share |
 
 - Always latest: <https://github.com/yanxici/ssh-workbench/releases/latest>
-- Pinned: <https://github.com/yanxici/ssh-workbench/releases/tag/v2.5.2>
+- Pinned: <https://github.com/yanxici/ssh-workbench/releases/tag/v2.5.3>
 - Integrity: `latest.yml` in the same release carries the sha512 of each artifact.
 
 **Mainland China**
 
 1. Primary: <https://gitee.com/w3554334905/ssh-workbench/releases> — mirrored in sync with GitHub, no proxy needed.
-2. Pinned: `https://gitee.com/w3554334905/ssh-workbench/releases/download/v2.5.2/` + the file name above.
-3. GitHub + proxy prefix (third-party relay, availability not guaranteed): `https://gh-proxy.com/https://github.com/yanxici/ssh-workbench/releases/download/v2.5.2/` + file name.
-4. Internal mirror (most reliable): copy `ssh-workbench-2.5.2-win.zip` to a company share or artifact store and link it here — `<internal mirror URL>`.
+2. Pinned: `https://gitee.com/w3554334905/ssh-workbench/releases/download/v2.5.3/` + the file name above.
+3. GitHub + proxy prefix (third-party relay, availability not guaranteed): `https://gh-proxy.com/https://github.com/yanxici/ssh-workbench/releases/download/v2.5.3/` + file name.
+4. Internal mirror (most reliable): copy `ssh-workbench-2.5.3-win.zip` to a company share or artifact store and link it here — `<internal mirror URL>`.
 
 > In-app auto-update now uses an automatic multi-channel feed: without a proxy it tries the official Gitee mirror first and falls back to GitHub Releases and built-in mirrors (verifying the first-party sha512 before downloading from any third-party relay); with an update proxy configured it prefers GitHub first for differential updates. You can also pick a specific channel or custom feed URL under Settings → Updates.
 
@@ -157,7 +157,7 @@ Architecture, directory layout and roadmap (Chinese): [DESIGN.md](./DESIGN.md)
 
 ## Version
 
-Current: **v2.5.2** — see [GitHub Releases](https://github.com/yanxici/ssh-workbench/releases), [Gitee Releases](https://gitee.com/w3554334905/ssh-workbench/releases), or [CHANGELOG.md](./CHANGELOG.md) for release notes and version history.
+Current: **v2.5.3** — see [GitHub Releases](https://github.com/yanxici/ssh-workbench/releases), [Gitee Releases](https://gitee.com/w3554334905/ssh-workbench/releases), or [CHANGELOG.md](./CHANGELOG.md) for release notes and version history.
 
 ## License
 
