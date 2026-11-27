@@ -557,7 +557,7 @@ export function ConnectionSidebar({
             </span>
             <button
               type="button"
-              className="shrink-0 rounded border border-accent/35 bg-app/80 px-1.5 py-0.5 text-3xs font-medium text-accent transition-colors hover:bg-accent hover:text-white"
+              className="shrink-0 rounded border border-accent/35 bg-app/80 px-1.5 py-0.5 text-3xs font-medium text-accent transition-colors hover:bg-accent hover:text-on-accent"
               onClick={() => setOnlyGroup(null)}
             >
               {t('conn.onlyGroup.showAll')}

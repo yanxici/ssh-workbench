@@ -399,7 +399,7 @@ export type ThemeMode = 'dark' | 'light' | 'system'
  *   colorTheme 在这套明暗之上换一整套配色
  * 每个配色主题都同时提供 dark 与 light 两套变量，因此任意组合都成立。
  */
-export type ColorThemeId = 'vscode' | 'gruvbox' | 'solarized' | 'dracula'
+export type ColorThemeId = 'vscode' | 'mono' | 'solarized' | 'dracula'
 
 export interface TerminalPrefs {
   fontFamily: string

@@ -122,13 +122,13 @@ async function main() {
 
   check(
     'ACTIVE_COLOR_THEMES 恰好是 4 套且顺序稳定',
-    JSON.stringify(compat.ACTIVE_COLOR_THEMES) === JSON.stringify(['vscode', 'gruvbox', 'solarized', 'dracula']),
+    JSON.stringify(compat.ACTIVE_COLOR_THEMES) === JSON.stringify(['vscode', 'mono', 'solarized', 'dracula']),
     compat.ACTIVE_COLOR_THEMES
   )
-  for (const id of ['vscode', 'gruvbox', 'solarized', 'dracula']) {
+  for (const id of ['vscode', 'mono', 'solarized', 'dracula']) {
     check('合法 ID 原样保留：' + id, compat.normalizeColorTheme(id) === id, compat.normalizeColorTheme(id))
   }
-  for (const id of ['nord', 'workbench', 'onedark', 'no-such-theme', '', undefined, null]) {
+  for (const id of ['nord', 'workbench', 'onedark', 'gruvbox', 'no-such-theme', '', undefined, null]) {
     check(
       '退役/未知 ID 回落 vscode：' + String(id),
       compat.normalizeColorTheme(id) === 'vscode',
@@ -167,8 +167,8 @@ async function main() {
   check('自定义字号保留', legacy.value.terminal.fontSize === 15, legacy.value.terminal.fontSize)
   fs.rmSync(legacy.tmp, { recursive: true, force: true })
 
-  const keep = await settingsAfter({ uiShellVersion: 2, theme: 'system', colorTheme: 'gruvbox' })
-  check('仍在的配色不改写：gruvbox', keep.value.colorTheme === 'gruvbox', keep.value.colorTheme)
+  const keep = await settingsAfter({ uiShellVersion: 2, theme: 'system', colorTheme: 'mono' })
+  check('仍在的配色不改写：mono', keep.value.colorTheme === 'mono', keep.value.colorTheme)
   check('跟随系统的 theme 保留', keep.value.theme === 'system', keep.value.theme)
   fs.rmSync(keep.tmp, { recursive: true, force: true })
 
@@ -205,7 +205,7 @@ async function main() {
   check('COLOR_THEMES 恰好 4 套', defs.length === 4, defs.map((t) => t.id))
   check(
     '4 套 ID 顺序稳定且与共享层一致',
-    JSON.stringify(defs.map((t) => t.id)) === JSON.stringify(['vscode', 'gruvbox', 'solarized', 'dracula']),
+    JSON.stringify(defs.map((t) => t.id)) === JSON.stringify(['vscode', 'mono', 'solarized', 'dracula']),
     defs.map((t) => t.id)
   )
   check(

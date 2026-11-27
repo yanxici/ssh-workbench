@@ -10,7 +10,7 @@ import type { ColorThemeId } from './types'
  */
 export const ACTIVE_COLOR_THEMES: readonly ColorThemeId[] = [
   'vscode',
-  'gruvbox',
+  'mono',
   'solarized',
   'dracula'
 ]
