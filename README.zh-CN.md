@@ -2,9 +2,28 @@
 
 [English](./README.md) | 简体中文
 
-现代 SSH 与串口终端工作台，面向服务器运维、设备调试与嵌入式开发场景。基于 Electron + React + TypeScript。
+面向嵌入式研发、现场运维与 SRE 的开源桌面 SSH 与串口终端工作台 —— 零遥测、免外挂，基于 Electron + React + TypeScript（MobaXterm / Xshell 的离线安全替代方案）。
+
+> **品牌与仓库说明：** 本项目自 **v2.5.1** 起正式启用全新品牌名 **Portix**（窗口标题、图标与主程序 `Portix.exe`）。为保证老版本的应用内自动更新链路及本地历史数据平滑兼容、不触发迁移断档，当前公开主仓库（`yanxici/ssh-workbench`）、安装包文件名前缀（`ssh-workbench-Setup-*.exe` / `ssh-workbench-*-win.zip`）与本地数据目录（`%APPDATA%/ssh-workbench/data/`）仍保留原标识 `ssh-workbench`，两者对应同一项目。
 
 ![Portix 主界面](docs/ui/overview.png)
+
+## 核心场景演示
+
+### 1. 串口倒计时连发抢 U-Boot + 内置 TFTP 刷机 + 不重连切波特率
+勾选「自动连发」用 250ms 脉冲 `2` 稳稳卡进上电 2 秒 U-Boot 窗口，直接由内置只读 TFTP 服务端（支持 `blksize=1468`）下发固件，并在刷写完成后 `57600 → 115200` 原地切波特率不断流。
+
+![串口连发抢 U-Boot 与内置 TFTP 刷机](docs/ui/demo-serial-tftp.gif)
+
+### 2. 无 SFTP 的 BusyBox 设备自动降级（ShellFS）+ 远程 `.bak` 编辑
+面对未装 `sftp-server` 的 OpenWrt / BusyBox 设备自动切入「Shell 兼容」通道，侧栏跟随终端 `cd` 跳转，并直接双击编辑配置文件（保存时自动保留 `.bak` 备份）。
+
+![无 SFTP BusyBox 设备 ShellFS 远程编辑](docs/ui/demo-shellfs-editor.gif)
+
+### 3. `Ctrl+K` 命令中心快速执行 + 31 项内置巡检一键导出 HTML 报告
+`Ctrl+K` 模糊检索并执行常用命令，随后一键运行 31 项 BusyBox 兼容系统巡检并导出单文件 HTML 诊断报告用于工单归档或交付。
+
+![命令中心与一键诊断导出 HTML 报告](docs/ui/demo-cmd-diag.gif)
 
 ## 下载安装
 

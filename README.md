@@ -2,9 +2,28 @@
 
 English | [简体中文](./README.zh-CN.md)
 
-Modern desktop SSH & Serial terminal workbench for developers, SREs, and embedded engineers. Built with Electron, React and TypeScript.
+Open-source, zero-telemetry desktop SSH & Serial terminal workbench for embedded engineers, SREs, and field operations (MobaXterm / Xshell alternative built with Electron, React, and TypeScript).
+
+> **Naming & repository note:** Starting from **v2.5.1**, the application has been rebranded to **Portix** (window title, app icon, and `Portix.exe`). To keep in-app auto-update feeds and existing user data compatible across upgrades, this canonical public repository (`yanxici/ssh-workbench`), release installer filenames (`ssh-workbench-Setup-*.exe` / `ssh-workbench-*-win.zip`), and local data directory (`%APPDATA%/ssh-workbench/data/`) keep the original `ssh-workbench` identifier. They belong to the exact same project.
 
 ![Portix overview](docs/ui/overview.png)
+
+## Live demos
+
+### 1. Serial U-Boot Auto-Burst & Built-in TFTP Flashing
+Countdown burst (`2`) catches the 2-second U-Boot boot window automatically, serves firmware via the built-in RFC 1350 TFTP server (`blksize=1468`), and switches baud rate live (`57600 → 115200`) without reopening the port.
+
+![Serial U-Boot auto-burst and built-in TFTP flashing](docs/ui/demo-serial-tftp.gif)
+
+### 2. Zero-SFTP BusyBox Fallback (ShellFS) & Remote Editor
+When `sftp-server` is missing on embedded OpenWrt / BusyBox devices, Portix falls back automatically to POSIX Shell (`Shell 兼容`), tracks terminal `cd`, and edits remote config files with automatic `.bak` backup.
+
+![BusyBox ShellFS fallback and remote editor](docs/ui/demo-shellfs-editor.gif)
+
+### 3. Command Center (`Ctrl+K`) & 31-Check Diagnostics HTML Export
+Jump to saved commands via fuzzy `Ctrl+K` search, run all 31 BusyBox-friendly diagnostics checks with live progress, and export a self-contained HTML report for field handoff.
+
+![Command Center and 31-check diagnostics HTML export](docs/ui/demo-cmd-diag.gif)
 
 ## Download & install
 
