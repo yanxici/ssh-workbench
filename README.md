@@ -157,46 +157,7 @@ Architecture, directory layout and roadmap (Chinese): [DESIGN.md](./DESIGN.md)
 
 ## Version
 
-Current: **v2.5.1**
-
-Recent updates:
-- **v2.5.1** — Portix rebrand, pure black/white + emerald visual overhaul, 6-tab settings & stability fixes: officially rebranded to Portix with a custom SVG brand mark and 7-size supersampled icons; redesigned default light/dark themes into pure white/black surfaces with jade-emerald accents and hairline borders (eliminating gray haze) and replaced Gruvbox with a pure Monochrome black & white theme; upgraded Settings to a bilingual 6-tab two-column layout; refined capsule tabs, dynamic SSH/Serial status bar, Welcome quick launch, connection alignment, balanced command cards, support-bundle redaction, and multi-channel updater cancellation.
-- **v2.5.0** — Precision connection search, auto-expanding groups, clear group-focus affordance, compact long-command tips & full-codebase hardening: restricted structured fields (`host`, `port`, `host:port`, `serial.path`, `username`) and numeric/ID queries to contiguous matching so searching `1022` no longer matches thousands of hosts sharing `10.42.42.200`; auto-expanded folded groups temporarily on search matches without overwriting fold preferences; added a visible "Only group" banner with a one-click "Show all" exit and hover double-click hint; replaced oversized multiline command hover previews with a single concise line; and completed a 60+ bug stability & security hardening pass across SFTP/ShellFS, `pathGuard`, `JsonStore`, SOCKS5/HTTP proxies, multi-`-R` tunnels, `trzsz`, split panes, overlay Escape layering, and the multi-channel updater (preserving the Electron 33 / React 18 / Tailwind 3 stack).
-- **v2.4.3** — Hardened the entire ZMODEM pipeline and fixed abort terminal deadlocks: switched all abort paths to the standard 10×CAN + 10×BS sequence (with follow-up guard) so remote `lrzsz` exits raw mode cleanly while blocking in-flight raw-mode log text from leaking onto the terminal; fixed growing log files stalling at 100%, high-RTT resync throttle false aborts, receive backpressure and async serialized disk writes, `wx` TOCTOU-safe naming with Windows reserved-device sanitization, 256MB upload guard, trailing progress flush, and live ZMODEM progress bars with batch counters in TransferTab and TransferPanel.
-- **v2.4.2** — Fixed multi-file ZMODEM `sz` batch downloads (e.g. `sz robottest*`) aborting after the first file or corrupting per-file state: unified the receive state machine (`primeReceiveSession`) to handle multi-frame `ZDATA` (`ZCRCW`/`ZCRCE`), 0-byte empty files (`ZEOF(0)` without `ZDATA`), `_file_info` cleanup on mismatched `ZEOF`, inter-file retransmits, and deferred `ZRINIT` until disk flush/finish completes, plus added batch index display (`i/N`) in the transfer overlay.
-- **v2.4.1** — Fixed the built-in remote editor `<textarea>` collapsing to ~3 rows with blank space below (and collapsing short files) due to `modal-body` (`flex: 1`) + `h-full` blocking flex stretch; exempted xterm DOM `.xterm-cursor-blink` from `.motion-off *` so terminal cursor blinking keeps working when Windows reduced motion or UI motion-off is active; fixed blank white taskbar icons on Windows unpacked/portable builds by binding `AppUserModelID` only when a matching Start Menu shortcut exists.
-- **v2.4.0** — Embedded SSH resilience, terminal workflow & precision instrument shell: per-connection legacy SSH algorithms (SHA-1/CBC/DSS) with one-click reconnect recovery; automatic BusyBox/POSIX Shell file-channel fallback when `sftp-server` is absent; tunnel reconnect auto-restore, connection auto-start, remote listening port discovery (`ss` / `netstat` / `/proc/net/tcp(6)`) and one-click ephemeral quick-forwarding; drag-and-drop SFTP upload straight to terminal `cwd`, editable multiline paste guard with Markdown fence stripping, one-click import from `~/.ssh/config`, MobaXterm, Xshell, SecureCRT & FinalShell, split-pane sync input and background tab unread dots; unified 36px monochrome instrument chrome, 4 curated high-contrast themes (7→4 with v3 silent migration), quick-launch welcome view and `Ctrl+Shift+Z` Zen focus mode.
-- **v2.3.2** — Added a zero-proxy domestic in-app auto-update channel: Auto mode tries the official Gitee mirror first (resolving the latest tag via public API and disabling differential Range downloads on Gitee CDN) and falls back across `Gitee → GitHub → gh-proxy.com → ghfast.top` with first-party `sha512` verification; Settings → Updates now supports choosing a channel or custom intranet feed and displays the active source; added `scripts/sync-gitee-release.ps1` and an optional Gitee sync step in CI.
-- **v2.3.1** — Smart terminal `Ctrl+C` / `Ctrl+V` by default (copy with selection, pass `SIGINT` through without), optional copy-on-select and right-click copy/paste (`Shift+right-click` opens menu), per-terminal `Ctrl+wheel` zoom (`Ctrl+0` reset), export terminal buffer to `.txt`, adaptive 8–32ms output coalescing, upgraded built-in remote editor (line numbers, `Ctrl+F`/`Ctrl+H` find/replace, `Ctrl+S` in-place save, encoding/cursor bar, `Tab` indent, dirty-close prompt), and fixed right-click "Send files…".
-- **v2.3.0** — Interaction feedback landed: command cards lift on hover and dip on press, the command wall fades in with a 12ms stagger, connection rows show a brand-colored tick on the left, group arrows rotate instead of swapping icons, and Settings → Experimental → "Motion" turns all of it off (and follows the system reduce-motion preference).
-- **v2.2.1** — Transfers stopped lying about being finished: ZMODEM resumes instead of stalling, downloads and uploads land whole, editing a remote file no longer damages it, a transfer history panel was added, and refreshing the file tree no longer costs more the deeper you have expanded.
-- **v2.2.0** — Serial line: switch baud rate without reconnecting, send BREAK, and write a plain-text `.log` alongside every recording (ANSI stripped, timestamped); bare-LF output no longer staircases.
-- **v2.1.9** — Fixed a finished ZMODEM overlay reappearing after a tab switch, and "save as new device and connect" losing the saved credentials.
-- **v2.1.7** — Split panes are now reachable from the terminal context menu, not only the tab strip.
-- **v2.1.6** — trzsz file transfer (`trz` / `tsz`) over a text protocol, with directories and a progress bar.
-- **v2.1.5** — Nested split panes: one tab holds up to 4 panes, layouts persist per connection.
-- **v2.1.4** — Task completion notifications, with a pure decision layer for when and how to notify.
-- **v2.1.3** — Keyword highlighting of terminal output, line level, with a live rule tester.
-- **v2.1.2** — Fixed the shrunken WebGL glyphs for real: a stray leading space in the canvas font string.
-- **v2.1.1** — Temporary workaround for the glyph regression: terminal renderer defaults back to DOM.
-- **v2.1.0** — Client-feel pass: design tokens, unified row heights, skeleton panel loading, real virtual scrolling.
-- **v2.0.0** — Serial console: USB-to-serial devices open in the same terminal, plus a flashing guide and a built-in TFTP server.
-- **v1.9.0** — Command rail columns follow the pane width; cards get a full-width two-line name.
-- **v1.8.1** — ZMODEM reliability in both directions (stalled downloads, uploads stuck at 0 bytes).
-- **v1.8.0** — IME composition guard across all 13 Enter handlers.
-- **v1.6.8** — CI gate split into explicit `typecheck + verify` and `UI e2e` steps.
-- **v1.6.7** — Fixed same-name batch download collisions and the dropped `allowLan` flag.
-- **v1.6.6** — Fixed two P0s: downloads truncating existing files, and orphaned tunnel runtimes.
-- **v1.6.5** — Release pipeline hardening: version-consistency gate, unified artifact policy.
-- **v1.6.4** — Fixed three folder-upload bugs.
-- **v1.6.3** — Split `repository.ts` and `SettingsPanel.tsx` into domain modules.
-- **v1.6.2** — Added type-aware ESLint and fixed what its first run found.
-- **v1.6.1** — Moved upload/download logic into the store; split `main/index.ts` by domain.
-- **v1.6.0** — Folder upload and host-key fingerprint update.
-- **v1.5.2** — Fixed the file panel not following `cd`.
-- **v1.5.1** — Batched directory listing: 256 directories now cost one IPC call.
-- **v1.5.0** — File panel follows the terminal, in-app auto update, sidebar right-click menu.
-- Earlier versions: see the Releases page.
+Current: **v2.5.1** — see [GitHub Releases](https://github.com/yanxici/ssh-workbench/releases), [Gitee Releases](https://gitee.com/w3554334905/ssh-workbench/releases), or [CHANGELOG.md](./CHANGELOG.md) for release notes and version history.
 
 ## License
 

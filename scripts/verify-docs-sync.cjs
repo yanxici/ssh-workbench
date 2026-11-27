@@ -35,8 +35,6 @@ const fs = require('node:fs')
 const path = require('node:path')
 
 const ROOT = path.join(__dirname, '..')
-/** 单条更新的正文长度下限：只写「- **v1.9.0**」这种占位符要判红 */
-const MIN_ENTRY_CHARS = 60
 /** Release 正文下限：与 scripts/release-notes.cjs 的 MIN_CHARS 同值 */
 const MIN_RELEASE_CHARS = 200
 
@@ -104,39 +102,7 @@ check(`CHANGELOG.md 有 [${VER}] 条目`, () => {
   return `CHANGELOG.md:${idx + 1} [${VER}] - ${m[1]}`
 })
 
-// ── 4/5. 两份 README 的「最近更新」第一条就是本版，且不是占位符 ──────
-function assertFirstEntry(rel, anchorRe) {
-  const lines = readLines(rel)
-  const start = lines.findIndex((l) => anchorRe.test(l))
-  assert(start >= 0, `${rel} 找不到「最近更新」锚点行`)
-  // 锚点后第一个以 "- " 开头的列表项
-  let i = start + 1
-  while (i < lines.length && !/^-\s/.test(lines[i])) {
-    // 遇到下一个二级标题说明列表根本没开始
-    assert(!/^##\s/.test(lines[i]), `${rel}:${start + 1} 的「最近更新」下面没有任何条目`)
-    i++
-  }
-  assert(i < lines.length, `${rel}:${start + 1} 的「最近更新」下面没有任何条目`)
-  const first = lines[i]
-  assert(
-    first.includes(`v${VER}`),
-    `${rel}:${i + 1} 最近更新第一条不是 v${VER}，实际是：${first.slice(0, 60)}`
-  )
-  assert(
-    first.length >= MIN_ENTRY_CHARS,
-    `${rel}:${i + 1} 本版条目只有 ${first.length} 字符（下限 ${MIN_ENTRY_CHARS}），疑似占位符`
-  )
-  return `${rel}:${i + 1} 首条 v${VER}，${first.length} 字符`
-}
-
-check(`README.md 最近更新首条 = v${VER} 且有正文`, () =>
-  assertFirstEntry('README.md', /^Recent updates:\s*$/)
-)
-check(`README.zh-CN.md 最近更新首条 = v${VER} 且有正文`, () =>
-  assertFirstEntry('README.zh-CN.md', /^最近更新：\s*$/)
-)
-
-// ── 6. Release 正文能从 CHANGELOG 抽出 ──────────────────────────────
+// ── 4. Release 正文能从 CHANGELOG 抽出 ──────────────────────────────
 // 仓库里已没有 release-notes-v<ver>.md（一次性文件，看着像重复碎片），
 // Release 正文统一由 scripts/release-notes.cjs 从 CHANGELOG 的 [<ver>] 段现抽。
 // 这里直接调那个脚本，判据与发版链路完全同源，不会出现「校验过了、发版抽不到」。
