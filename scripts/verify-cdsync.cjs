@@ -14,10 +14,10 @@ const { spawnSync } = require('child_process')
 const ts = require('typescript')
 
 const SRC = path.join(__dirname, '../src/renderer/src/components/files/SessionFileTree.tsx')
-const src = fs.readFileSync(SRC, 'utf8')
+const src = fs.readFileSync(SRC, 'utf8').replace(/\r\n/g, '\n')
 
 function extract(name) {
-  const m = src.match(new RegExp(`function ${name}\\([\\s\\S]*?\\n}\\n`))
+  const m = src.match(new RegExp(`function ${name}\\([\\s\\S]*?\\r?\\n}\\r?\\n`))
   if (!m) throw new Error(`源码中找不到 ${name}`)
   return m[0]
 }
@@ -118,17 +118,18 @@ function sanitizeDirPath(p) {
     .filter(Boolean)
     .map((seg) => {
       if (seg === '.' || seg === '..') return '_'
-      // Win32 会静默剥离目录名末尾的点和空格，导致创建后实际路径名与预期不符
-      const cleaned = seg.replace(/[. ]+$/g, '_')
-      return cleaned || '_'
+      // Win32 会静默剥离目录名末尾的点和空格，并拦截保留设备名，导致创建后路径名不符或失败
+      const cleaned = seg.replace(/[. ]+$/g, '_') || '_'
+      return /^(?:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\.|$)/i.test(cleaned) ? `_${cleaned}` : cleaned
     })
   return path.posix.join(work.replace(/\\/g, '/'), 'dirs', ...segs)
 }
 
 const dirCases = cases
-  .filter((p) => p.length < 200 && !/[\n\t]/.test(p))
-  .slice(0, 300)
+  .filter((p) => p.length < 150 && !/[\n\t]/.test(p))
   .map(sanitizeDirPath)
+  .filter((d) => d.length < 220)
+  .slice(0, 300)
 
 const createdDirs = []
 for (const d of dirCases) {
