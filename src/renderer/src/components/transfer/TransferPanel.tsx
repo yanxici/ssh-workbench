@@ -6,7 +6,6 @@ import {
   ArrowUpFromLine,
   Ban,
   CheckCircle2,
-  ChevronDown,
   ChevronRight,
   Clock,
   ExternalLink,
@@ -204,7 +203,7 @@ function RecordRow({ record }: { record: TransferRecord }): React.JSX.Element {
             title={expanded ? t('files.ui.transfer.collapseFailure') : t('files.ui.transfer.expandFailure')}
             onClick={() => toggleExpanded(record.id)}
           >
-            {expanded ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
+            <ChevronRight size={11} className={cn('chev-rot shrink-0', expanded && 'rotate-90')} />
           </button>
         ) : (
           <span className="w-3 shrink-0" aria-hidden />
@@ -286,20 +285,20 @@ function RecordRow({ record }: { record: TransferRecord }): React.JSX.Element {
       </div>
 
       {record.retriedBy && (
-        <div className="mt-0.5 pl-[38px] text-3xs text-ink-3">
+        <div className="mt-0.5 pl-10 text-3xs text-ink-3">
           {t('files.ui.transfer.retriedByRow', { id: record.retriedBy })}
         </div>
       )}
 
       {record.status === 'error' && record.error && (
-        <div className="mt-0.5 flex items-start gap-1 pl-[38px] text-3xs leading-4 text-danger">
+        <div className="mt-0.5 flex items-start gap-1 pl-10 text-3xs leading-4 text-danger">
           <AlertTriangle size={9} className="mt-0.5 shrink-0" />
           <span className="min-w-0 flex-1">{record.error}</span>
         </div>
       )}
 
       {record.note && !record.error && (
-        <div className="mt-0.5 pl-[38px] text-3xs leading-4 text-warning">{record.note}</div>
+        <div className="mt-0.5 pl-10 text-3xs leading-4 text-warning">{record.note}</div>
       )}
 
       {expanded && hasDetail && <FailureDetails record={record} />}
@@ -417,7 +416,7 @@ function RemoteLocate({ record }: { record: TransferRecord }): React.JSX.Element
 function FailureDetails({ record }: { record: TransferRecord }): React.JSX.Element {
   const { t } = useI18n()
   return (
-    <div className="ml-[38px] mt-1 space-y-1 rounded-sm bg-raised/60 p-1.5">
+    <div className="motion-reveal ml-10 mt-1 space-y-1 rounded-sm bg-raised/60 p-1.5">
       <div className="text-3xs text-ink-3">
         {t('files.ui.transfer.failureSummary', { count: record.failureCount ?? 0 })}
       </div>

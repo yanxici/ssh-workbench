@@ -42,7 +42,7 @@ import { COLORS } from '@/lib/icons'
 import { cn } from '@/lib/utils'
 import { call } from '@/lib/ipc'
 import { useI18n, type I18nKey } from '@/i18n'
-import { Combobox, Field, Modal, Toggle } from '@/components/ui'
+import { Combobox, Field, FieldRow, Modal, Segmented, Toggle } from '@/components/ui'
 
 /** 未分组连接的内部数据分组名（与主进程/JSON 存储一致，不随界面语言改变） */
 const DEFAULT_GROUP = '\u9ed8\u8ba4'
@@ -797,36 +797,15 @@ export function ConnectionEditor({
           hint={initial ? t('conn.ui.editor.kindHintEdit') : undefined}
           className="col-span-2"
         >
-          <div className="flex gap-1">
-            <button
-              type="button"
-              disabled={Boolean(initial)}
-              onClick={() => set('kind', 'ssh')}
-              className={cn(
-                'h-7 flex-1 rounded-md border text-xs transition-colors',
-                form.kind === 'ssh'
-                  ? 'border-accent/60 bg-accent/15 text-accent'
-                  : 'border-edge bg-raised text-ink-3 hover:text-ink-2',
-                initial && 'cursor-not-allowed opacity-60'
-              )}
-            >
-              {t('conn.ui.editor.kindSsh')}
-            </button>
-            <button
-              type="button"
-              disabled={Boolean(initial)}
-              onClick={() => set('kind', 'serial')}
-              className={cn(
-                'h-7 flex-1 rounded-md border text-xs transition-colors',
-                form.kind === 'serial'
-                  ? 'border-accent/60 bg-accent/15 text-accent'
-                  : 'border-edge bg-raised text-ink-3 hover:text-ink-2',
-                initial && 'cursor-not-allowed opacity-60'
-              )}
-            >
-              {t('conn.ui.editor.kindSerial')}
-            </button>
-          </div>
+          <Segmented
+            disabled={Boolean(initial)}
+            value={form.kind}
+            onChange={(v) => set('kind', v)}
+            options={[
+              { value: 'ssh', label: t('conn.ui.editor.kindSsh') },
+              { value: 'serial', label: t('conn.ui.editor.kindSerial') }
+            ]}
+          />
         </Field>
 
         {
@@ -863,23 +842,11 @@ export function ConnectionEditor({
             </Field>
 
             <Field label={t('conn.ui.editor.authType')}>
-              <div className="flex gap-1">
-                {AUTH_OPTIONS.map((opt) => (
-                  <button
-                    key={opt.value}
-                    type="button"
-                    onClick={() => set('authType', opt.value)}
-                    className={cn(
-                      'h-7 flex-1 rounded-md border text-xs transition-colors',
-                      form.authType === opt.value
-                        ? 'border-accent/60 bg-accent/15 text-accent'
-                        : 'border-edge bg-raised text-ink-3 hover:text-ink-2'
-                    )}
-                  >
-                    {t(opt.labelKey)}
-                  </button>
-                ))}
-              </div>
+              <Segmented
+                value={form.authType}
+                onChange={(v) => set('authType', v)}
+                options={AUTH_OPTIONS.map((opt) => ({ value: opt.value, label: t(opt.labelKey) }))}
+              />
             </Field>
 
             {form.authType === 'password' && (
@@ -982,23 +949,14 @@ export function ConnectionEditor({
               className="col-span-2"
             >
               <div className="space-y-2">
-                <div className="flex gap-1.5">
-                  {PROXY_OPTIONS.map((opt) => (
-                    <button
-                      key={opt.value}
-                      type="button"
-                      onClick={() => set('proxyType', opt.value)}
-                      className={cn(
-                        'h-7 flex-1 rounded-md border text-xs transition-colors',
-                        form.proxyType === opt.value
-                          ? 'border-accent/60 bg-accent/15 text-accent'
-                          : 'border-edge bg-raised text-ink-3 hover:text-ink-2'
-                      )}
-                    >
-                      {t(opt.labelKey)}
-                    </button>
-                  ))}
-                </div>
+                <Segmented
+                  value={form.proxyType}
+                  onChange={(v) => set('proxyType', v)}
+                  options={PROXY_OPTIONS.map((opt) => ({
+                    value: opt.value,
+                    label: t(opt.labelKey)
+                  }))}
+                />
                 {form.proxyType !== 'none' && (
                   <div className="grid grid-cols-2 gap-x-3 gap-y-2">
                     <input
@@ -1147,7 +1105,16 @@ export function ConnectionEditor({
               <span className="text-3xs text-ink-3">{t('conn.ui.editor.presetEditableHint')}</span>
             </div>
 
-            <Field label={t('conn.ui.editor.baudRate')} hint={t('conn.ui.editor.baudRateHint')}>
+            {/*
+             * 布局：波特率独占一行（hint 长，半栏必折行）；数据位 + 停止位并排（选项都短）；
+             * 校验位、流控独占一行 —— 流控标签「硬件 (RTS/CTS)」在半栏里每个按钮只剩 ~86px，
+             * 折成两行撑破 h-7 按钮。带 hint 的成对字段用 FieldRow，保证两栏控件对齐。
+             */}
+            <Field
+              label={t('conn.ui.editor.baudRate')}
+              hint={t('conn.ui.editor.baudRateHint')}
+              className="col-span-2"
+            >
               <Combobox
                 value={form.serialBaud}
                 onChange={(v) => set('serialBaud', v)}
@@ -1157,125 +1124,58 @@ export function ConnectionEditor({
             </Field>
 
             <Field label={t('conn.ui.editor.dataBits')}>
-              <div className="flex gap-1">
-                {DATA_BITS_OPTIONS.map((bits) => (
-                  <button
-                    key={bits}
-                    type="button"
-                    onClick={() => set('serialDataBits', bits)}
-                    className={cn(
-                      'h-7 flex-1 rounded-md border text-xs transition-colors',
-                      form.serialDataBits === bits
-                        ? 'border-accent/60 bg-accent/15 text-accent'
-                        : 'border-edge bg-raised text-ink-3 hover:text-ink-2'
-                    )}
-                  >
-                    {bits}
-                  </button>
-                ))}
-              </div>
-            </Field>
-
-            <Field label={t('conn.ui.editor.parity')} className="col-span-2">
-              <div className="flex gap-1">
-                {PARITY_OPTIONS.map((opt) => (
-                  <button
-                    key={opt.value}
-                    type="button"
-                    onClick={() => set('serialParity', opt.value)}
-                    className={cn(
-                      'h-7 flex-1 rounded-md border text-xs transition-colors',
-                      form.serialParity === opt.value
-                        ? 'border-accent/60 bg-accent/15 text-accent'
-                        : 'border-edge bg-raised text-ink-3 hover:text-ink-2'
-                    )}
-                  >
-                    {t(opt.labelKey)}
-                  </button>
-                ))}
-              </div>
+              <Segmented
+                options={DATA_BITS_OPTIONS.map((bits) => ({ value: bits, label: String(bits) }))}
+                value={form.serialDataBits}
+                onChange={(v) => set('serialDataBits', v)}
+              />
             </Field>
 
             <Field label={t('conn.ui.editor.stopBits')}>
-              <div className="flex gap-1">
-                {STOP_BITS_OPTIONS.map((opt) => (
-                  <button
-                    key={opt.value}
-                    type="button"
-                    onClick={() => set('serialStopBits', opt.value)}
-                    className={cn(
-                      'h-7 flex-1 rounded-md border text-xs transition-colors',
-                      form.serialStopBits === opt.value
-                        ? 'border-accent/60 bg-accent/15 text-accent'
-                        : 'border-edge bg-raised text-ink-3 hover:text-ink-2'
-                    )}
-                  >
-                    {opt.label}
-                  </button>
-                ))}
-              </div>
+              <Segmented
+                options={STOP_BITS_OPTIONS}
+                value={form.serialStopBits}
+                onChange={(v) => set('serialStopBits', v)}
+              />
             </Field>
 
-            <Field label={t('conn.ui.editor.flowControl')}>
-              <div className="flex gap-1">
-                {FLOW_OPTIONS.map((opt) => (
-                  <button
-                    key={opt.value}
-                    type="button"
-                    onClick={() => set('serialFlow', opt.value)}
-                    className={cn(
-                      'h-7 flex-1 rounded-md border text-xs transition-colors',
-                      form.serialFlow === opt.value
-                        ? 'border-accent/60 bg-accent/15 text-accent'
-                        : 'border-edge bg-raised text-ink-3 hover:text-ink-2'
-                    )}
-                  >
-                    {t(opt.labelKey)}
-                  </button>
-                ))}
-              </div>
+            <Field label={t('conn.ui.editor.parity')} className="col-span-2">
+              <Segmented
+                options={PARITY_OPTIONS.map((opt) => ({ value: opt.value, label: t(opt.labelKey) }))}
+                value={form.serialParity}
+                onChange={(v) => set('serialParity', v)}
+              />
             </Field>
 
-            <Field label={t('editor.encoding')} hint={t('conn.ui.editor.charsetHint')}>
-              <div className="flex gap-1">
-                {CHARSET_OPTIONS.map((opt) => (
-                  <button
-                    key={opt.value}
-                    type="button"
-                    onClick={() => set('serialCharset', opt.value)}
-                    className={cn(
-                      'h-7 flex-1 rounded-md border text-xs transition-colors',
-                      form.serialCharset === opt.value
-                        ? 'border-accent/60 bg-accent/15 text-accent'
-                        : 'border-edge bg-raised text-ink-3 hover:text-ink-2'
-                    )}
-                  >
-                    {opt.label}
-                  </button>
-                ))}
-              </div>
+            <Field label={t('conn.ui.editor.flowControl')} className="col-span-2">
+              <Segmented
+                options={FLOW_OPTIONS.map((opt) => ({ value: opt.value, label: t(opt.labelKey) }))}
+                value={form.serialFlow}
+                onChange={(v) => set('serialFlow', v)}
+              />
             </Field>
 
-            <Field label={t('conn.ui.editor.newline')} hint={t('conn.ui.editor.newlineHint')}>
-              <div className="flex gap-1">
-                {NEWLINE_OPTIONS.map((opt) => (
-                  <button
-                    key={opt.value}
-                    type="button"
-                    onClick={() => set('serialNewline', opt.value)}
-                    title={opt.hint}
-                    className={cn(
-                      'h-7 flex-1 rounded-md border text-xs transition-colors',
-                      form.serialNewline === opt.value
-                        ? 'border-accent/60 bg-accent/15 text-accent'
-                        : 'border-edge bg-raised text-ink-3 hover:text-ink-2'
-                    )}
-                  >
-                    {opt.label}
-                  </button>
-                ))}
-              </div>
-            </Field>
+            <FieldRow>
+              <Field label={t('editor.encoding')} hint={t('conn.ui.editor.charsetHint')}>
+                <Segmented
+                  options={CHARSET_OPTIONS}
+                  value={form.serialCharset}
+                  onChange={(v) => set('serialCharset', v)}
+                />
+              </Field>
+
+              <Field label={t('conn.ui.editor.newline')} hint={t('conn.ui.editor.newlineHint')}>
+                <Segmented
+                  options={NEWLINE_OPTIONS.map((opt) => ({
+                    value: opt.value,
+                    label: opt.label,
+                    title: opt.hint
+                  }))}
+                  value={form.serialNewline}
+                  onChange={(v) => set('serialNewline', v)}
+                />
+              </Field>
+            </FieldRow>
 
             <Field
               label={t('conn.ui.editor.autoReset')}
@@ -1295,35 +1195,37 @@ export function ConnectionEditor({
               </div>
             </Field>
 
-            <Field label={t('conn.ui.editor.charDelay')} hint={t('conn.ui.editor.charDelayHint')}>
-              <div className="flex items-center gap-1.5">
-                <input
-                  className="input w-16 text-center"
-                  type="number"
-                  min={0}
-                  max={SERIAL_MAX_CHAR_DELAY_MS}
-                  step={1}
-                  value={form.serialCharDelay}
-                  onChange={(e) => set('serialCharDelay', e.target.value)}
-                />
-                <span className="text-2xs text-ink-3">ms</span>
-              </div>
-            </Field>
+            <FieldRow>
+              <Field label={t('conn.ui.editor.charDelay')} hint={t('conn.ui.editor.charDelayHint')}>
+                <div className="flex items-center gap-1.5">
+                  <input
+                    className="input w-16 text-center"
+                    type="number"
+                    min={0}
+                    max={SERIAL_MAX_CHAR_DELAY_MS}
+                    step={1}
+                    value={form.serialCharDelay}
+                    onChange={(e) => set('serialCharDelay', e.target.value)}
+                  />
+                  <span className="text-2xs text-ink-3">ms</span>
+                </div>
+              </Field>
 
-            <Field label={t('conn.ui.editor.lineDelay')} hint={t('conn.ui.editor.lineDelayHint')}>
-              <div className="flex items-center gap-1.5">
-                <input
-                  className="input w-16 text-center"
-                  type="number"
-                  min={0}
-                  max={SERIAL_MAX_LINE_DELAY_MS}
-                  step={10}
-                  value={form.serialLineDelay}
-                  onChange={(e) => set('serialLineDelay', e.target.value)}
-                />
-                <span className="text-2xs text-ink-3">ms</span>
-              </div>
-            </Field>
+              <Field label={t('conn.ui.editor.lineDelay')} hint={t('conn.ui.editor.lineDelayHint')}>
+                <div className="flex items-center gap-1.5">
+                  <input
+                    className="input w-16 text-center"
+                    type="number"
+                    min={0}
+                    max={SERIAL_MAX_LINE_DELAY_MS}
+                    step={10}
+                    value={form.serialLineDelay}
+                    onChange={(e) => set('serialLineDelay', e.target.value)}
+                  />
+                  <span className="text-2xs text-ink-3">ms</span>
+                </div>
+              </Field>
+            </FieldRow>
 
             <div className="col-span-2 rounded-lg border border-edge-soft bg-app/60 px-3 py-2 font-mono text-2xs text-ink-3">
               <div>

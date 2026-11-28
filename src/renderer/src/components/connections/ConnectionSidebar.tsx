@@ -502,39 +502,40 @@ export function ConnectionSidebar({
         <Plug size={13} className="shrink-0 text-ink-3" />
         <span className="panel-title">{t('conn.ui.sidebar.title')}</span>
         <span className="panel-count">{connections.length}</span>
-        <span className="flex-1" />
-        <button
-          className="btn-icon h-6 w-6"
-          title={t('conn.ui.sidebar.transferTitle')}
-          aria-label={t('conn.ui.sidebar.transferAria')}
-          onClick={(e) => transferMenu.openMenu(e, 'transfer')}
-        >
-          <ArrowDownUp size={13} />
-        </button>
-        <button
-          className="btn-icon h-6 w-6"
-          title={t('conn.ui.sidebar.clipboardTitle')}
-          aria-label={t('conn.ui.sidebar.clipboardAria')}
-          onClick={() => void importFromClipboard()}
-        >
-          <ClipboardPaste size={13} />
-        </button>
-        <button
-          className="btn-icon h-6 w-6"
-          title={t('conn.ui.sidebar.newGroup')}
-          aria-label={t('conn.ui.sidebar.newGroup')}
-          onClick={() => setNewGroupOpen(true)}
-        >
-          <FolderPlus size={13} />
-        </button>
-        <button
-          className="btn-icon h-6 w-6"
-          title={t('conn.ui.sidebar.newConnTitle')}
-          aria-label={t('conn.ui.sidebar.newConnAria')}
-          onClick={() => onEdit(null)}
-        >
-          <Plus size={14} />
-        </button>
+        <div className="ml-auto flex shrink-0 items-center gap-0.5">
+          <button
+            className="btn-icon h-6 w-6"
+            title={t('conn.ui.sidebar.transferTitle')}
+            aria-label={t('conn.ui.sidebar.transferAria')}
+            onClick={(e) => transferMenu.openMenu(e, 'transfer')}
+          >
+            <ArrowDownUp size={13} />
+          </button>
+          <button
+            className="btn-icon h-6 w-6"
+            title={t('conn.ui.sidebar.clipboardTitle')}
+            aria-label={t('conn.ui.sidebar.clipboardAria')}
+            onClick={() => void importFromClipboard()}
+          >
+            <ClipboardPaste size={13} />
+          </button>
+          <button
+            className="btn-icon h-6 w-6"
+            title={t('conn.ui.sidebar.newGroup')}
+            aria-label={t('conn.ui.sidebar.newGroup')}
+            onClick={() => setNewGroupOpen(true)}
+          >
+            <FolderPlus size={13} />
+          </button>
+          <button
+            className="btn-icon h-6 w-6"
+            title={t('conn.ui.sidebar.newConnTitle')}
+            aria-label={t('conn.ui.sidebar.newConnAria')}
+            onClick={() => onEdit(null)}
+          >
+            <Plus size={14} />
+          </button>
+        </div>
       </div>
 
       {

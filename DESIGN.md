@@ -1,7 +1,7 @@
 # Portix（SSH Workbench）— 架构与设计概要
 
 > 零遥测、免外挂的开源桌面 SSH 与串口终端工作台，面向嵌入式研发、现场运维与 SRE。
-> 更新日期：2026-11-27 ｜ 发布线：**v2.5.3**（`yanxici/ssh-workbench`）｜ 升级实验线：**v2.5.3**（`yanxici/ssh-workbench-upgrade-x`）
+> 更新日期：2026-11-28 ｜ 发布线：**v2.5.4**（`yanxici/ssh-workbench`）｜ 升级实验线：**v2.5.4**（`yanxici/ssh-workbench-upgrade-x`）
 
 详细历史演进见 [CHANGELOG.md](./CHANGELOG.md) 与 [Releases](https://github.com/yanxici/ssh-workbench/releases)。
 
@@ -19,7 +19,7 @@
 
 全仓业务逻辑双向同步，仅底层桌面/样式栈分轨维护：
 
-| 层次 | 正式发布线（`ssh-workbench` v2.5.3） | 实验升级线（`ssh-workbench-upgrade-x` v2.5.3） | 核心说明 |
+| 层次 | 正式发布线（`ssh-workbench` v2.5.4） | 实验升级线（`ssh-workbench-upgrade-x` v2.5.4） | 核心说明 |
 | --- | --- | --- | --- |
 | 桌面框架 | Electron `^33.3.1` + Vite `^5.4.11` | Electron `^45.3.1` + Vite `^7.3.8` | 离线/LTSC 内网免 WebView2 开箱即用；GPU 崩自动降级软件渲染 |
 | 前端 / UI | React `^18.3.1` + Tailwind `^3.4.17` | React `^19.3.1` + Tailwind `^4.3.5` | 语义色 CSS 变量（R G B 三通道）；`@tanstack/react-virtual` 虚拟滚动 |

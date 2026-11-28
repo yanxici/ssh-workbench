@@ -82,7 +82,7 @@ export function NotifySection(): React.JSX.Element {
               <button
                 key={id}
                 type="button"
-                className="flex h-6 items-center gap-1 rounded-md border border-edge bg-raised px-2 text-2xs text-ink-3 hover:text-danger"
+                className="flex h-6 max-w-full items-center gap-1 whitespace-nowrap rounded-md border border-edge bg-raised px-2 text-2xs text-ink-3 hover:text-danger"
                 title={t('settings.ext.notify.unmuteTitle')}
                 onClick={() =>
                   patch({
@@ -90,7 +90,7 @@ export function NotifySection(): React.JSX.Element {
                   })
                 }
               >
-                {name}
+                <span className="truncate">{name}</span>
               </button>
             ))}
           </div>

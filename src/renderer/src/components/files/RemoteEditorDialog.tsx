@@ -119,7 +119,7 @@ export function RemoteEditorDialog({
     syncCursor(el)
     // Approximate line scroll so matched line lands near center of viewport
     const { line } = getLineCol(el.value, target.start)
-    const lineHeight = 19.5
+    const lineHeight = 20
     const desiredTop = Math.max(0, (line - 1) * lineHeight - el.clientHeight / 2)
     el.scrollTop = desiredTop
     syncScroll()
@@ -353,7 +353,7 @@ export function RemoteEditorDialog({
               >
                 Aa
               </button>
-              <span className="min-w-[54px] text-center font-mono text-2xs text-ink-3">
+              <span className="min-w-14 text-center font-mono text-2xs text-ink-3">
                 {query
                   ? matches.length > 0
                     ? t('editor.matchOf', { current: displayMatchIdx || 1, total: matches.length })
@@ -460,15 +460,15 @@ export function RemoteEditorDialog({
           <div
             ref={gutterRef}
             aria-hidden="true"
-            className="shrink-0 select-none overflow-hidden border-r border-edge bg-panel px-2.5 pt-3 pb-7 text-right font-mono text-xs leading-[19.5px] text-ink-3"
+            className="shrink-0 select-none overflow-hidden border-r border-edge bg-panel px-2.5 pt-3 pb-7 text-right font-mono text-xs leading-5 text-ink-3"
           >
-            <pre className="m-0 font-mono text-xs leading-[19.5px]">{lineNumbers}</pre>
+            <pre className="m-0 font-mono text-xs leading-5">{lineNumbers}</pre>
           </div>
           <textarea
             ref={textareaRef}
             autoFocus
             wrap="off"
-            className="scroll-thin min-w-0 flex-1 resize-none overflow-auto whitespace-pre selectable bg-app p-3 font-mono text-xs leading-[19.5px] text-ink outline-none"
+            className="scroll-thin min-w-0 flex-1 resize-none overflow-auto whitespace-pre selectable bg-app p-3 font-mono text-xs leading-5 text-ink outline-none"
             value={text}
             onChange={(e) => {
               setText(e.target.value)

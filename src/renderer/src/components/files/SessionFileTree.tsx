@@ -3,7 +3,6 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { loadDir, peekDir } from '@/lib/dirCache'
 import { requestDirs } from '@/lib/dirLoader'
 import {
-  ChevronDown,
   ChevronRight,
   Columns2,
   Download,
@@ -734,7 +733,7 @@ function TreeRow({
               onToggle()
             }}
           >
-            {expanded ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
+            <ChevronRight size={11} className={cn('chev-rot shrink-0', expanded && 'rotate-90')} />
           </button>
         ) : (
           <span className="w-3.5 shrink-0" />

@@ -5,6 +5,22 @@ All notable changes to SSH Workbench will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.5.4] - 2026-11-28
+
+<!-- release-notes:start -->
+### 这一版更新了什么
+
+- **表单防溢出与窄栏排版优化**：抽取统一的 `Segmented` 分段选择器与 `FieldRow` CSS subgrid 子网格对齐组件，将串口连接编辑器中的「流控」「波特率」改为整行展示并让成对字段与提示对齐，彻底解决「硬件 (RTS/CTS)」「软件 (XON/XOFF)」文字折行撑破 `h-7` 按钮的问题；同时收紧连接侧栏头部内边距防止窄栏标题过早截断，并为全站定高按钮补齐防换行约束。
+- **4px 栅格骨架校准与视觉细节修复**：将状态栏 `--size-statusbar` 统一对齐至 `28px`，同步收敛 Toast 与传输进度浮窗偏移、`ActivityBar` 无位移居中指示条、字号基线行高（`3xs` 16px / `base` 24px）以及 30 处偏离栅格的任意值（含远程编辑器行高 `20px` 及 JS 滚动同步）；顺手修复浅色模式下未选中 `Toggle` 开关轨道对比度偏低的问题。
+- **轻量化 GPU 合成动效升级**：为全屏工具面板补齐基于 `wall-in` 的入场动画（跳过骨架屏避免闪烁），新增 `useExitTransition` 为弹窗与 Toast 提供柔和退场过渡（`.motion-off` 下零延迟立即卸载），为非虚拟化折叠区补齐 `.motion-reveal` 揭示动画，并将开关滑块位移与全站 5 处折叠箭头统一至 GPU `transform` / `.chev-rot` 通道。
+<!-- release-notes:end -->
+
+### Changed & Fixed
+
+- **UI Overflow & Form Alignment** (`src/renderer/src/components/ui/index.tsx`, `src/renderer/src/styles/index.css`, `src/renderer/src/components/connections/ConnectionEditor.tsx`, `ConnTransferDialog.tsx`, `CommandEditor.tsx`, `TunnelEditor.tsx`, `ConnectionSidebar.tsx`, `UpdateBadge.tsx`, `sectionUi.tsx`): Extract shared `Segmented` and `FieldRow` (subgrid), widen serial `flowControl`/`baudRate`, tighten `.panel-head`, and guard fixed-height buttons with `whitespace-nowrap`/`truncate`.
+- **4px Grid & Baseline Alignment** (`tailwind.config.js`, `src/renderer/src/styles/index.css`, `StatusBar.tsx`, `TitleBar.tsx`, `ActivityBar.tsx`, `TransferProgressDock.tsx`, `RemoteEditorDialog.tsx`, `FileExplorer.tsx`, `TransferPanel.tsx`, `CommandCenter.tsx`, `CommandPanel.tsx`, `TransferTab.tsx`, `BatchPanel.tsx`, `DiscoveryPanel.tsx`, `FirmwarePanel.tsx`, `scripts/verify-design-tokens.cjs`): Align statusbar (`28px`), derived offsets, typography line-heights (`16px`/`24px`), 30 off-grid arbitrary sizes, and light-mode `Toggle` contrast.
+- **GPU-Composited Motion** (`src/renderer/src/lib/useExitTransition.ts`, `src/renderer/src/stores/toastStore.ts`, `tailwind.config.js`, `src/renderer/src/styles/index.css`, `SessionFileTree.tsx`, `SerialBootBar.tsx`, `TransferPanel.tsx`, `TransferProgressDock.tsx`): Add modal/toast exit transitions (instant unmount under `.motion-off`), `.panel-shell` entrance, `.motion-reveal` collapsible reveal, and unified `.chev-rot` rotation.
+
 ## [2.5.3] - 2026-11-27
 
 <!-- release-notes:start -->

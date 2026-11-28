@@ -356,7 +356,7 @@ function StepUpgrade(): React.JSX.Element {
           <Timer size={11} />
           {t('panel.firmware.timeout')}
           <input
-            className="input h-6 w-[70px] font-mono"
+            className="input h-6 w-[72px] font-mono"
             value={String(Math.round(timeoutMs / 1000))}
             onChange={(e) =>
               useFirmwareStore

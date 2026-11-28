@@ -94,8 +94,8 @@ async function main() {
      本仓写成 0.16 的等价形式，所以比较前先归一化数字写法，只为格式差异不该变红。 */
   const normEase = (s) => String(s).replace(/\s+/g, '').replace(/0\./g, '.')
   check('主缓动曲线是 cubic-bezier(.16, 1, .3, 1)', normEase(vars.ease) === 'cubic-bezier(.16,1,.3,1)', vars.ease)
-  /* P2 把外壳换成「36px 顶栏 + 26px 状态栏 + 248px 左轨」的窄轨口径 */
-  check('语义尺寸 26/36/248px', vars.sb === '26px' && vars.tb === '36px' && vars.rail === '248px', vars)
+  /* 4px 栅格校准：外壳统一为「36px 顶栏 + 28px 状态栏 + 248px 左轨」 */
+  check('语义尺寸 28/36/248px', vars.sb === '28px' && vars.tb === '36px' && vars.rail === '248px', vars)
   /* 间距/圆角在 v3 里是 tailwind.config.js 的刻度，不会有 --spacing-* / --radius-* 变量，
      所以量渲染值。顺带记录一处有意的 2px 偏差：上游 v4 的圆角阶梯是 4/6/10px
      （@theme 里的 --radius-sm/md/lg），v3 默认 lg=8px；主仓既有 UI 一直按 8px 渲染，
@@ -112,7 +112,7 @@ async function main() {
 
   console.log('\n[B. 任意值收敛]')
   const shell = await p.evaluate(`(() => { const el = document.createElement('div'); el.className = 'panel-shell'; document.body.appendChild(el); const cs = getComputedStyle(el); const r = { top: cs.top, bottom: cs.bottom }; el.remove(); return r })()`)
-  check('panel-shell 的 top/bottom 等于 token', shell.top === '36px' && shell.bottom === '26px', shell)
+  check('panel-shell 的 top/bottom 等于 token', shell.top === '36px' && shell.bottom === '28px', shell)
   const rail = await p.evaluate(`(() => { const el = document.createElement('div'); el.className = 'rail-w'; document.body.appendChild(el); const w = getComputedStyle(el).width; el.remove(); return w })()`)
   check('rail-w 宽度等于 248px', rail === '248px', rail)
 
@@ -125,25 +125,23 @@ async function main() {
   })()`)
   check('默认全部 flag 关闭（旧视觉）', flagOff.anyOn === false, flagOff)
   /*
-   * 行高是「切面板时列表会不会跳」的直接度量，所以断言到小数位。
+   * 行高与过渡是「切面板时列表是否一致、开关是否生效」的直接度量，所以断言到小数位。
    * 探针用的都是组件里真实在用的类串：
-   *   文件行关：components/files/FileExplorer.tsx:862 `file-row-cv group … py-[3px] … text-xs` → 实测 28px
-   *             （.file-row-cv 自带 content-visibility:auto + contain-intrinsic-size: auto 22px，
-   *              所以盒高 = 22 占位内容 + 上下各 3px 内距）
+   *   文件行关：components/files/FileExplorer.tsx:1030 `file-row-cv group flex h-6 … transition-colors duration-150` → 实测 24px / 0.15s
    *   文件行开：components/files/RemotePane.tsx:246-248 `flex h-full … rounded px-2 text-xs` + `file-row-token-inner`，
-   *             外层高度由虚拟化给定（RemotePane.tsx:89 / LocalPane.tsx:68 `ROW_H = tokensOn ? 24 : 22`）
+   *             外层高度由虚拟化给定（RemotePane.tsx:92 / LocalPane.tsx:70 `ROW_H = tokensOn ? 24 : 22`），过渡走 --duration-fast（0.12s）
    *   连接行：  components/connections/ConnectionSidebar.tsx:639-642 `conn-row-token … py-1` vs `conn-row-cv … py-1.5`
    * 上游另有 .row-token / .file-row-token 两条 @utility，但两个仓库的组件都没引用它们，
    * 本仓 Tailwind 3 按需生成不会产出这两条规则，拿它们当探针只会测到空气。
    */
-  const rowOff = await p.evaluate(`(() => { const el = document.createElement('div'); el.className = 'file-row-cv group flex cursor-default items-center gap-1 py-[3px] pr-2 text-xs transition-colors duration-150'; el.textContent = 'file.txt'; document.body.appendChild(el); const cs = getComputedStyle(el); const r = { pad: cs.paddingTop, h: +el.getBoundingClientRect().height.toFixed(2) }; el.remove(); return r })()`)
+  const rowOff = await p.evaluate(`(() => { const html = document.documentElement; const off = html.classList.contains('motion-off'); if (off) html.classList.remove('motion-off'); const el = document.createElement('div'); el.className = 'file-row-cv group flex h-6 cursor-default items-center gap-1 pr-2 text-xs transition-colors duration-150'; el.textContent = 'file.txt'; document.body.appendChild(el); const cs = getComputedStyle(el); const r = { pad: cs.paddingTop, h: +el.getBoundingClientRect().height.toFixed(2), dur: cs.transitionDuration }; el.remove(); if (off) html.classList.add('motion-off'); return r })()`)
   /* 探针前先摘掉 .motion-off：本机开了「减少动态效果」时这条通配规则会把所有过渡
      归零，读回的 0s 就成了「动效被关掉」而不是「token 没接上」，断言也就失去区分度。 */
   const rowOn = await p.evaluate(`(() => { const html = document.documentElement; const off = html.classList.contains('motion-off'); if (off) html.classList.remove('motion-off'); const wrap = document.createElement('div'); wrap.style.height = '24px'; const el = document.createElement('div'); el.className = 'flex h-full cursor-default items-center gap-2 rounded px-2 text-xs file-row-token-inner'; el.textContent = 'file.txt'; wrap.appendChild(el); document.body.appendChild(wrap); const cs = getComputedStyle(el); const r = { pad: cs.paddingTop, h: +wrap.getBoundingClientRect().height.toFixed(2), innerH: +el.getBoundingClientRect().height.toFixed(2), dur: cs.transitionDuration }; wrap.remove(); if (off) html.classList.add('motion-off'); return r })()`)
   console.log('  文件行实测: 旧 ' + JSON.stringify(rowOff) + '  新 ' + JSON.stringify(rowOn))
-  check('flag 关闭：文件行是旧口径（py-[3px]，盒高 28px）', rowOff.pad === '3px' && rowOff.h === 28, rowOff)
+  check('flag 关闭：文件行已对齐 4px 栅格（h-6，盒高 24px，走默认 0.15s 过渡）', rowOff.pad === '0px' && rowOff.h === 24 && rowOff.dur === '0.15s', rowOff)
   check('flag 开启：文件行交给虚拟化 24px，行内不再有纵向内距', rowOn.h === 24 && rowOn.innerH === 24 && rowOn.pad === '0px', rowOn)
-  check('两套行高确实不同（证明开关有区分度）', rowOff.h !== rowOn.h, [rowOff.h, rowOn.h])
+  check('两套过渡时长确实不同（证明开关有区分度）', rowOff.dur !== rowOn.dur, [rowOff.dur, rowOn.dur])
   /* 这条是「token 真的接上了 CSS 变量」的证据：0.12s 只可能来自 index.css 里的
      .file-row-token-inner 规则 + --duration-fast，规则缺了会读回 0s。 */
   check('文件行 token 类的过渡吃到 --duration-fast（0.12s）', rowOn.dur === '0.12s', rowOn.dur)

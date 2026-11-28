@@ -71,7 +71,7 @@ export function Section({
         <span className="text-2xs font-semibold uppercase tracking-wider text-ink-2">{title}</span>
         {hint && <span className="ml-1 truncate text-2xs text-ink-3/80">{hint}</span>}
       </button>
-      {open && <div className="space-y-2.5 border-t border-edge-soft px-2.5 py-2.5">{children}</div>}
+      {open && <div className="motion-reveal space-y-2.5 border-t border-edge-soft px-2.5 py-2.5">{children}</div>}
     </div>
   )
 }
@@ -144,7 +144,7 @@ export function Segmented<T extends string>({
           key={opt.value}
           type="button"
           className={cn(
-            'flex h-7 items-center gap-1.5 rounded-md border px-2 text-xs transition-colors',
+            'flex h-7 items-center gap-1.5 whitespace-nowrap rounded-md border px-2 text-xs transition-colors',
             value === opt.value
               ? 'border-accent/60 bg-accent/15 text-accent'
               : 'border-edge bg-raised text-ink-3 hover:text-ink-2'

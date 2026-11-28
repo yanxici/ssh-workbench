@@ -19,7 +19,6 @@ import {
   ArrowUpFromLine,
   CheckCircle2,
   ChevronDown,
-  ChevronUp,
   Ban,
   Loader2,
   Pause,
@@ -230,8 +229,8 @@ export function TransferProgressDock(): React.JSX.Element | null {
   return (
     <div
       className={cn(
-        'fixed bottom-[34px] right-3 z-[35] animate-slide-up',
-        collapsed ? 'w-[250px]' : 'w-[380px] max-w-[calc(100vw-24px)]'
+        'fixed bottom-[calc(var(--size-statusbar)+8px)] right-3 z-[35] animate-slide-up',
+        collapsed ? 'w-[248px]' : 'w-[380px] max-w-[calc(100vw-24px)]'
       )}
     >
       <div className="overflow-hidden rounded-lg border border-edge bg-panel shadow-pop">
@@ -253,9 +252,9 @@ export function TransferProgressDock(): React.JSX.Element | null {
                 )}
               />
             ) : failed.length > 0 ? (
-              <AlertTriangle size={14} className="shrink-0 text-danger" />
+              <AlertTriangle size={14} className="shrink-0 animate-pop-in text-danger" />
             ) : (
-              <CheckCircle2 size={14} className="shrink-0 text-success" />
+              <CheckCircle2 size={14} className="shrink-0 animate-pop-in text-success" />
             )}
             <span className="shrink-0 text-xs font-semibold">
               {active.length > 0
@@ -280,11 +279,10 @@ export function TransferProgressDock(): React.JSX.Element | null {
               </span>
             )}
             <span className="flex-1" />
-            {collapsed ? (
-              <ChevronUp size={13} className="shrink-0 text-ink-3" />
-            ) : (
-              <ChevronDown size={13} className="shrink-0 text-ink-3" />
-            )}
+            <ChevronDown
+              size={13}
+              className={cn('chev-rot shrink-0 text-ink-3', collapsed && 'rotate-180')}
+            />
           </button>
           <button
             className="btn-icon h-5 w-5 shrink-0"
@@ -311,7 +309,7 @@ export function TransferProgressDock(): React.JSX.Element | null {
         )}
 
         {!collapsed && (
-          <div className="scroll-thin max-h-[248px] space-y-1 overflow-y-auto border-t border-edge-soft p-1.5">
+          <div className="motion-reveal scroll-thin max-h-[248px] space-y-1 overflow-y-auto border-t border-edge-soft p-1.5">
             {transfers.slice(0, MAX_TRANSFERS).map((task) => (
               <TransferRow key={task.id} task={task} onDismiss={() => dismissTask(task.id)} />
             ))}

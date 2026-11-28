@@ -49,7 +49,7 @@
   --duration-slow: 240ms;
   --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
   --size-rail: 248px;
-  --size-statusbar: 26px;
+  --size-statusbar: 28px;
   --size-titlebar: 36px;
 
   color-scheme: light;
@@ -169,7 +169,7 @@
 @layer components {
   /* ---------- 按钮 ---------- */
   .btn {
-    @apply inline-flex h-7 shrink-0 items-center justify-center gap-1.5 rounded-md border border-edge
+    @apply inline-flex h-7 shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-md border border-edge
       bg-raised px-2.5 text-xs font-medium text-ink-2
       transition-[color,background-color,border-color,transform] duration-150
       hover:bg-hover hover:text-ink
@@ -213,6 +213,20 @@
     @apply mb-1 block text-2xs font-medium tracking-wide text-ink-3;
   }
 
+  /* FieldRow：两个 Field 并排，标签行 / 控件行各自对齐（见 ui/index.tsx FieldRow） */
+  .field-grid {
+    @apply grid grid-cols-2 gap-x-3;
+    grid-template-rows: auto auto;
+  }
+
+  .field-grid > .field {
+    display: grid;
+    grid-row: span 2;
+    grid-template-rows: subgrid;
+    row-gap: 0;
+    min-width: 0;
+  }
+
   /* ---------- 右键菜单 ---------- */
   .menu {
     @apply fixed z-50 min-w-[168px] animate-pop-in overflow-hidden rounded-lg border border-edge
@@ -243,6 +257,14 @@
   .modal {
     @apply flex max-h-[76vh] w-full max-w-lg animate-pop-in flex-col overflow-hidden rounded-xl
       border border-edge bg-panel shadow-pop;
+  }
+
+  .modal-overlay-exit {
+    @apply pointer-events-none animate-fade-out;
+  }
+
+  .modal-exit {
+    @apply animate-pop-out;
   }
 
   .modal-header {
@@ -302,11 +324,12 @@
     @apply text-ink;
   }
 
-  /* 状态栏：面板底 + 极细上边框（26px，与 --size-statusbar 同口径）。
+  /* 状态栏：面板底 + 极细上边框（28px，与 --size-statusbar 同口径）。
      数字一律等宽（tabular-nums），否则延迟/尺寸变化时整条状态栏会左右抖动。 */
   .statusbar {
-    @apply flex h-[26px] shrink-0 items-center gap-3 border-t border-edge bg-panel px-3 text-2xs
+    @apply flex shrink-0 items-center gap-3 border-t border-edge bg-panel px-3 text-2xs
       text-ink-3 tabular-nums;
+    height: var(--size-statusbar);
   }
 
   /* 分段控件：选中只改底色，不做位移/缩放 */
@@ -326,7 +349,7 @@
    * 这几条类把「头部 32px / 工具栏 32px / 行高一致」定死，改面板时直接复用。
    */
   .panel-head {
-    @apply flex h-8 shrink-0 items-center gap-1.5 border-b border-edge px-2.5;
+    @apply flex h-8 shrink-0 items-center gap-1 border-b border-edge px-2;
   }
 
   .panel-title {
@@ -366,10 +389,10 @@
     contain-intrinsic-size: auto 52px;
   }
 
-  /* 文件树 / 双栏：py-[3px] + text-xs，实测行高 22px */
+  /* 文件树：h-6 + text-xs，固定行高 24px（4px 栅格） */
   .file-row-cv {
     content-visibility: auto;
-    contain-intrinsic-size: auto 22px;
+    contain-intrinsic-size: auto 24px;
   }
 
   /* 列表行：统一圆角、左右内距与 hover 色 */
@@ -590,6 +613,27 @@
 /* 入场：整墙一次性淡入像「闪一下」，前 12 张错峰 12ms，之后同步收尾 */
 .motion-in {
   animation: wall-in 180ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+/* 工具面板入场：复用 wall-in，跳过 aria-busy 的 PanelSkeleton 避免切换闪烁 */
+.panel-shell:not([aria-busy='true']) {
+  animation: wall-in var(--duration-base) var(--ease-out-expo) both;
+}
+
+@keyframes reveal-in {
+  from {
+    opacity: 0;
+    transform: translateY(-2px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* 非虚拟化折叠区展开：轻淡入 + 下落 2px，不触碰高度布局 */
+.motion-reveal {
+  animation: reveal-in var(--duration-fast) var(--ease-out-expo) both;
 }
 
 /* 连接行 hover：左侧 2px 品牌条淡入。伪元素 + 绝对定位，零布局占用 */

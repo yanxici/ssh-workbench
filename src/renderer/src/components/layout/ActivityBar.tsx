@@ -109,11 +109,11 @@ export function ActivityBar(): React.JSX.Element {
           >
             {/*
               * 激活指示线：2px 品牌色，绝对定位贴在左沿（不占布局宽度）。
-              * 用 top-[14px] 而不是 top-1/2 + -translate-y-1/2：活动栏有几何禁令，
-              * 静态居中也不该引入 transform。
+              * 用 inset-y-0 + my-auto 而不是 top-1/2 + -translate-y-1/2：活动栏有几何禁令，
+              * 静态居中也不引入 transform，且不写死像素偏移。
               */}
             {active && (
-              <span className="pointer-events-none absolute left-0 top-[14px] h-4 w-0.5 rounded-r bg-brand" />
+              <span className="pointer-events-none absolute inset-y-0 left-0 my-auto h-4 w-0.5 rounded-r bg-brand" />
             )}
             <span
               className={cn(
@@ -160,7 +160,7 @@ export function ActivityBar(): React.JSX.Element {
         onClick={() => toggleCommandRail()}
       >
         {commandRailVisible && (
-          <span className="pointer-events-none absolute left-0 top-[14px] h-4 w-0.5 rounded-r bg-brand" />
+          <span className="pointer-events-none absolute inset-y-0 left-0 my-auto h-4 w-0.5 rounded-r bg-brand" />
         )}
         <span
           className={cn(
@@ -252,7 +252,7 @@ function ToolsButton({ active }: { active: boolean }): React.JSX.Element {
         aria-haspopup="menu"
       >
         {active && (
-          <span className="pointer-events-none absolute left-0 top-[14px] h-4 w-0.5 rounded-r bg-brand" />
+          <span className="pointer-events-none absolute inset-y-0 left-0 my-auto h-4 w-0.5 rounded-r bg-brand" />
         )}
         <span
           className={cn(

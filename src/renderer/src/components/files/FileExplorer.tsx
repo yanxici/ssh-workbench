@@ -998,7 +998,7 @@ export function FileExplorer({
               return (
                 <div
                   key={`${file.path}\u0000err`}
-                  className="flex items-center gap-1 py-[3px] pr-2 text-2xs text-danger"
+                  className="flex h-6 items-center gap-1 pr-2 text-2xs text-danger"
                   style={{ paddingLeft: 6 + depth * 12 }}
                   title={rowError}
                 >
@@ -1027,7 +1027,7 @@ export function FileExplorer({
                  */
                 tabIndex={0}
                 className={cn(
-                  'file-row-cv group flex cursor-default items-center gap-1 py-[3px] pr-2 text-xs transition-colors duration-150',
+                  'file-row-cv group flex h-6 cursor-default items-center gap-1 pr-2 text-xs transition-colors duration-150',
                   'focus-visible:bg-hover focus-visible:outline-none',
                   isSel ? 'bg-select text-ink' : 'text-ink-2 hover:bg-hover'
                 )}
@@ -1240,7 +1240,7 @@ function ExplorerTabs({
             <button
               key={it.key}
               className={cn(
-                'flex h-[22px] items-center rounded px-2 text-2xs transition-colors duration-150',
+                'flex h-6 items-center whitespace-nowrap rounded px-2 text-2xs transition-colors duration-150',
                 on
                   ? 'bg-app font-medium text-ink shadow-[0_1px_2px_rgb(0_0_0/0.06)]'
                   : 'text-ink-3 hover:text-ink-2'

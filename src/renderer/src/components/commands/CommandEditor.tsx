@@ -8,7 +8,7 @@ import { useToastStore } from '@/stores/toastStore'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { COLORS, COMMAND_ICONS, DynamicIcon } from '@/lib/icons'
 import { cn } from '@/lib/utils'
-import { Combobox, Field, Modal, Toggle } from '@/components/ui'
+import { Combobox, Field, Modal, Segmented, Toggle } from '@/components/ui'
 import { useI18n } from '@/i18n'
 
 const VAR_RE = /\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}/g
@@ -280,23 +280,14 @@ export function CommandEditor({
           hint={t('cmd.editor.envHint')}
           className="col-span-2"
         >
-          <div className="flex gap-1">
-            {ENV_CHOICES.map((choice) => (
-              <button
-                key={choice.key}
-                type="button"
-                onClick={() => setEnvs(choice.value)}
-                className={cn(
-                  'h-7 flex-1 rounded-md border text-xs transition-colors',
-                  envKey === choice.key
-                    ? 'border-accent/60 bg-accent/15 text-accent'
-                    : 'border-edge bg-raised text-ink-3 hover:text-ink-2'
-                )}
-              >
-                {choice.label}
-              </button>
-            ))}
-          </div>
+          <Segmented
+            value={envKey}
+            onChange={(k) => {
+              const found = ENV_CHOICES.find((c) => c.key === k)
+              if (found) setEnvs(found.value)
+            }}
+            options={ENV_CHOICES.map((choice) => ({ value: choice.key, label: choice.label }))}
+          />
         </Field>
 
         <div className="col-span-2 flex items-center justify-between rounded-lg border border-edge-soft bg-app px-3 py-2.5">

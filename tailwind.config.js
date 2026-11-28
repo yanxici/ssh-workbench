@@ -50,14 +50,14 @@ module.exports = {
        *
        * 之前散落着 9px / 10px / 10.5px / 11px / 11.5px / 12.5px / 13px / 15px
        * 八种尺寸，同一屏里相邻文字差 0.5px —— 单看每一处都合理，并排就显脏。
-       * 现在统一成：10 / 11 / 12 / 13 / 15，行高按 1.33~1.54 配平。
+       * 现在统一成：10 / 11 / 12 / 13 / 15，行高统一落在 4px 栅格上（16 / 16 / 16 / 20 / 24）。
        */
       fontSize: {
-        '3xs': ['10px', '14px'],
+        '3xs': ['10px', '16px'],
         '2xs': ['11px', '16px'],
         xs: ['12px', '16px'],
         sm: ['13px', '20px'],
-        base: ['15px', '22px']
+        base: ['15px', '24px']
       },
       boxShadow: {
         /* 投影走 CSS 变量：浅色主题要轻（45% 黑在 #ffffff 上糊成脏灰），
@@ -72,13 +72,25 @@ module.exports = {
           from: { opacity: '0' },
           to: { opacity: '1' }
         },
+        'fade-out': {
+          from: { opacity: '1' },
+          to: { opacity: '0' }
+        },
         'pop-in': {
           from: { opacity: '0', transform: 'scale(0.96) translateY(4px)' },
           to: { opacity: '1', transform: 'scale(1) translateY(0)' }
         },
+        'pop-out': {
+          from: { opacity: '1', transform: 'scale(1) translateY(0)' },
+          to: { opacity: '0', transform: 'scale(0.96) translateY(4px)' }
+        },
         'slide-up': {
           from: { opacity: '0', transform: 'translateY(8px)' },
           to: { opacity: '1', transform: 'translateY(0)' }
+        },
+        'slide-out': {
+          from: { opacity: '1', transform: 'translateY(0)' },
+          to: { opacity: '0', transform: 'translateY(-6px)' }
         },
         'pulse-soft': {
           '0%, 100%': { opacity: '1' },
@@ -91,8 +103,11 @@ module.exports = {
       },
       animation: {
         'fade-in': 'fade-in 0.15s ease-out',
+        'fade-out': 'fade-out 0.12s ease-in forwards',
         'pop-in': 'pop-in 0.16s cubic-bezier(0.16, 1, 0.3, 1)',
+        'pop-out': 'pop-out 0.12s ease-in forwards',
         'slide-up': 'slide-up 0.2s cubic-bezier(0.16, 1, 0.3, 1)',
+        'slide-out': 'slide-out 0.14s ease-in forwards',
         'pulse-soft': 'pulse-soft 1.6s ease-in-out infinite',
         'flash-ok': 'flash-ok 0.6s ease-out'
       }

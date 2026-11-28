@@ -8,6 +8,7 @@ export interface Toast {
   kind: ToastKind
   title: string
   detail?: string
+  leaving?: boolean
 }
 
 interface ToastState {
@@ -15,6 +16,8 @@ interface ToastState {
   push: (t: Omit<Toast, 'id'>) => void
   dismiss: (id: string) => void
 }
+
+const TOAST_EXIT_MS = 140
 
 const AUTO_DISMISS: Record<ToastKind, number> = {
   info: 4000,
@@ -34,6 +37,20 @@ export const useToastStore = create<ToastState>((set, get) => ({
   },
 
   dismiss: (id) => {
-    set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) }))
+    const cur = get().toasts.find((t) => t.id === id)
+    if (!cur || cur.leaving) return
+    if (
+      typeof document !== 'undefined' &&
+      document.documentElement.classList.contains('motion-off')
+    ) {
+      set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) }))
+      return
+    }
+    set((s) => ({
+      toasts: s.toasts.map((t) => (t.id === id ? { ...t, leaving: true } : t))
+    }))
+    setTimeout(() => {
+      set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) }))
+    }, TOAST_EXIT_MS)
   }
 }))

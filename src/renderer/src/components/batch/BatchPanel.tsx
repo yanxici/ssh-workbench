@@ -196,7 +196,7 @@ function CommandAndResults(): React.JSX.Element {
         />
         <div className="mt-1.5 flex flex-wrap items-center gap-2">
           <select
-            className="input h-7 w-[190px]"
+            className="input h-7 w-48"
             value=""
             onChange={(e) => {
               insertCommand(e.target.value)

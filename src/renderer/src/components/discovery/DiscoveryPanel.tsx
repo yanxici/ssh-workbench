@@ -215,12 +215,12 @@ function ScanView(): React.JSX.Element {
               >
                 <Wifi size={12} className="shrink-0 text-success" />
                 <span className="w-[120px] shrink-0 font-mono text-xs text-ink">{h.ip}</span>
-                <span className="w-[110px] shrink-0 font-mono text-3xs text-ink-3">
+                <span className="w-28 shrink-0 font-mono text-3xs text-ink-3">
                   {h.mac
                     ? `${h.mac}${vendor ? t('panel.discovery.vendorParens', { vendor }) : ''}`
                     : '—'}
                 </span>
-                <span className="w-[150px] shrink-0 truncate text-2xs text-ink-3" title={h.hostname}>
+                <span className="w-[152px] shrink-0 truncate text-2xs text-ink-3" title={h.hostname}>
                   {h.hostname ?? '—'}
                 </span>
                 <span className="shrink-0 space-x-1">

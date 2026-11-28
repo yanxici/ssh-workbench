@@ -110,14 +110,14 @@ const LATENCY_CLS = {
  *
  * 原来写的是 `<span className="text-edge">|</span>` —— 用文字竖线假装分割线。
  * 问题是这个字符在字体的中线偏上、宽度随字号变化，相邻项一多就出现
- * 高低不齐的「锯齿」。改成 1px×9px 的纯色方块，垂直居中由 flex 保证。
+ * 高低不齐的「锯齿」。改成 1px×12px 的纯色方块，垂直居中由 flex 保证。
  */
 function Sep(): React.JSX.Element {
-  return <span className="h-[9px] w-px shrink-0 bg-edge" />
+  return <span className="h-3 w-px shrink-0 bg-edge" />
 }
 
 /**
- * 底部状态栏（26px，面板底 + 极细上边框，与 --size-statusbar 同口径）。
+ * 底部状态栏（28px，面板底 + 极细上边框，与 --size-statusbar 同口径）。
  *
  * 左：SSH 连接状态 · 会话名 · 延迟 · Git 分支
  * 右：传输进度 · 编码 · 换行符 · Shell · 终端尺寸

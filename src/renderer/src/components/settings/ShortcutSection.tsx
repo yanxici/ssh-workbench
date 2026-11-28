@@ -193,7 +193,7 @@ export function ShortcutSection(): React.JSX.Element {
               )}
               <button
                 className={cn(
-                  'flex h-7 min-w-[72px] items-center justify-center gap-1 rounded-md border px-2 font-mono text-xs transition-colors',
+                  'flex h-7 min-w-[72px] items-center justify-center gap-1 whitespace-nowrap rounded-md border px-2 font-mono text-xs transition-colors',
                   isRecording
                     ? 'border-accent bg-accent/15 text-accent'
                     : 'border-edge bg-raised text-ink-2 hover:border-accent/50'

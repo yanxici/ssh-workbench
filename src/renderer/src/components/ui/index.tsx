@@ -22,6 +22,7 @@ import { cn } from '@/lib/utils'
 import { useToastStore } from '@/stores/toastStore'
 import { isImeComposing } from '@/lib/ime'
 import { useOverlayEscape } from '@/lib/overlayKeys'
+import { useExitTransition } from '@/lib/useExitTransition'
 import { useI18n } from '@/i18n'
 
 /* ------------------------------------------------------------------ *
@@ -48,18 +49,19 @@ export function Modal({
   bodyClassName?: string
 }): React.JSX.Element | null {
   const { t } = useI18n()
+  const { mounted, exiting } = useExitTransition(open, 120)
   useOverlayEscape(open, onClose)
 
-  if (!open) return null
+  if (!mounted) return null
 
   return (
     <div
-      className="modal-overlay"
+      className={cn('modal-overlay', exiting && 'modal-overlay-exit')}
       onMouseDown={(e) => {
-        if (e.target === e.currentTarget) onClose()
+        if (!exiting && e.target === e.currentTarget) onClose()
       }}
     >
-      <div className={cn('modal', width ?? 'max-w-lg')}>
+      <div className={cn('modal', width ?? 'max-w-lg', exiting && 'modal-exit')}>
         <div className="modal-header">
           <div className="modal-title">{title}</div>
           <button className="btn-icon h-6 w-6" onClick={onClose} title={t('common.ui.close')}>
@@ -89,12 +91,78 @@ export function Field({
   className?: string
 }): React.JSX.Element {
   return (
-    <div className={className}>
+    <div className={cn('field min-w-0', className)}>
       <div className="field-label">
         {label}
         {hint && <span className="ml-1.5 font-normal text-ink-3/80">{hint}</span>}
       </div>
       {children}
+    </div>
+  )
+}
+
+/**
+ * 并排两个 Field：标签行与控件行分别对齐（subgrid）。
+ *
+ * 两栏的 hint 长度不同时，一边标签折两行、一边一行，控件就会上下错位。
+ * 用 FieldRow 包起来后，两栏共享「标签行高 = 较高者」，控件永远落在同一条线上。
+ * 必须放在外层 grid-cols-2 里（自身占满两列）。
+ */
+export function FieldRow({
+  children,
+  className
+}: {
+  children: ReactNode
+  className?: string
+}): React.JSX.Element {
+  return <div className={cn('field-grid col-span-2', className)}>{children}</div>
+}
+
+/**
+ * 分段选择器（单选按钮组）。
+ *
+ * 固定 h-7，所以文字绝不允许换行：truncate（自带 overflow-hidden + ellipsis + whitespace-nowrap），
+ * 放不下时显示省略号并用 title 补全 —— 宁可截断也不能撑破按钮。
+ * 真放不下时应该给它更宽的容器（col-span-2），而不是让文字折行。
+ */
+export function Segmented<T extends string | number>({
+  options,
+  value,
+  onChange,
+  disabled,
+  className
+}: {
+  options: ReadonlyArray<{ value: T; label: string; title?: string }>
+  value: T
+  onChange: (next: T) => void
+  disabled?: boolean
+  className?: string
+}): React.JSX.Element {
+  return (
+    <div className={cn('flex gap-1', className)} role="radiogroup">
+      {options.map((opt) => {
+        const active = opt.value === value
+        return (
+          <button
+            key={String(opt.value)}
+            type="button"
+            role="radio"
+            aria-checked={active}
+            disabled={disabled}
+            title={opt.title ?? opt.label}
+            onClick={() => onChange(opt.value)}
+            className={cn(
+              'h-7 min-w-0 flex-1 truncate rounded-md border px-2 text-xs transition-colors',
+              active
+                ? 'border-accent/60 bg-accent/15 text-accent'
+                : 'border-edge bg-raised text-ink-3 hover:text-ink-2',
+              disabled && 'cursor-not-allowed opacity-60'
+            )}
+          >
+            {opt.label}
+          </button>
+        )
+      })}
     </div>
   )
 }
@@ -298,19 +366,19 @@ export function Toggle({
       disabled={disabled}
       onClick={() => onChange(!checked)}
       className={cn(
-        'relative inline-block h-[18px] w-[32px] shrink-0 rounded-full border p-0 align-middle transition-colors duration-150',
-        checked ? 'border-accent/60 bg-accent/90' : 'border-edge bg-raised',
+        'relative inline-block h-5 w-9 shrink-0 rounded-full border p-0 align-middle transition-colors duration-150',
+        checked ? 'border-accent/60 bg-accent/90' : 'border-edge bg-edge/70 dark:bg-raised',
         disabled && 'pointer-events-none opacity-45'
       )}
     >
       {/*
-       * 用 left 定位而非纯 translate：轨道 32px = 2 边框 + 28 内容，
-       * 14px 旋钮的合法区间是 left 0~14px，取 1px / 14px 保证两端都不越界。
+       * 轨道 20×36（内径 18×34），旋钮 16×16 留 1px 四周内距，
+       * 行程恰好 16px（translate-x-4），走 GPU 合成通道避免重排。
        */}
       <span
         className={cn(
-          'absolute top-px h-[14px] w-[14px] rounded-full bg-white shadow-sm transition-[left] duration-150',
-          checked ? 'left-[14px]' : 'left-px'
+          'absolute left-px top-px h-4 w-4 rounded-full bg-white shadow-sm transition-transform duration-150',
+          checked ? 'translate-x-4' : 'translate-x-0'
         )}
       />
     </button>
@@ -339,19 +407,20 @@ export function ConfirmDialog({
   onCancel: () => void
 }): React.JSX.Element | null {
   const { t } = useI18n()
+  const { mounted, exiting } = useExitTransition(open, 120)
   useOverlayEscape(open, onCancel)
 
-  if (!open) return null
+  if (!mounted) return null
 
   return (
     <div
-      className="modal-overlay items-center pt-0"
+      className={cn('modal-overlay items-center pt-0', exiting && 'modal-overlay-exit')}
       style={{ zIndex: 55 }}
       onMouseDown={(e) => {
-        if (e.target === e.currentTarget) onCancel()
+        if (!exiting && e.target === e.currentTarget) onCancel()
       }}
     >
-      <div className="modal max-w-sm">
+      <div className={cn('modal max-w-sm', exiting && 'modal-exit')}>
         <div className="modal-header">
           <div className="modal-title">{title}</div>
         </div>
@@ -402,9 +471,11 @@ export function PromptDialog({
     if (open) setValue(defaultValue)
   }, [open, defaultValue])
 
+  const { mounted, exiting } = useExitTransition(open, 120)
+
   useOverlayEscape(open, onCancel)
 
-  if (!open) return null
+  if (!mounted) return null
 
   const submit = (): void => {
     if (!value.trim()) return
@@ -413,13 +484,13 @@ export function PromptDialog({
 
   return (
     <div
-      className="modal-overlay items-center pt-0"
+      className={cn('modal-overlay items-center pt-0', exiting && 'modal-overlay-exit')}
       style={{ zIndex: 57 }}
       onMouseDown={(e) => {
-        if (e.target === e.currentTarget) onCancel()
+        if (!exiting && e.target === e.currentTarget) onCancel()
       }}
     >
-      <div className="modal max-w-sm">
+      <div className={cn('modal max-w-sm', exiting && 'modal-exit')}>
         <div className="modal-header">
           <div className="modal-title">{title}</div>
         </div>
@@ -617,13 +688,16 @@ export function ToastHost(): React.JSX.Element {
 
   return (
     // 右上角通知：避开左下传输进度浮层与状态栏，避免长任务进行时被通知遮挡
-    <div className="pointer-events-none fixed right-3 top-[46px] z-[70] flex w-[340px] flex-col gap-2">
+    <div className="pointer-events-none fixed right-3 top-[calc(var(--size-titlebar)+12px)] z-[70] flex w-[340px] flex-col gap-2">
       {toasts.map((t) => {
         const cfg = TOAST_ICON[t.kind] ?? TOAST_ICON.info
         return (
           <div
             key={t.id}
-            className="pointer-events-auto animate-slide-up rounded-lg border border-edge bg-panel p-3 shadow-pop"
+            className={cn(
+              'rounded-lg border border-edge bg-panel p-3 shadow-pop',
+              t.leaving ? 'pointer-events-none animate-slide-out' : 'pointer-events-auto animate-slide-up'
+            )}
           >
             <div className="flex items-start gap-2.5">
               <span className={cn('mt-0.5 shrink-0', cfg.cls)}>{cfg.icon}</span>

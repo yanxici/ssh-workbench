@@ -128,7 +128,7 @@ export function UpdateBadge(): React.JSX.Element | null {
          * on-brand（品牌色之上的字色）落在这里会失去对比度。
          */
         className={cn(
-          'no-drag inline-flex h-7 shrink-0 items-center gap-1 rounded px-1.5 text-2xs',
+          'no-drag inline-flex h-7 shrink-0 items-center gap-1 whitespace-nowrap rounded px-1.5 text-2xs',
           'text-ink-2 transition-colors duration-150 hover:bg-hover hover:text-ink',
           panelOpen && 'bg-hover text-ink'
         )}
@@ -226,15 +226,15 @@ export function UpdateBadge(): React.JSX.Element | null {
               <>
                 <button
                   type="button"
-                  className="inline-flex h-7 flex-1 items-center justify-center gap-1 rounded bg-brand px-2 text-2xs font-medium text-on-brand transition-opacity hover:opacity-90"
+                  className="inline-flex h-7 min-w-0 flex-1 items-center justify-center gap-1 whitespace-nowrap rounded bg-brand px-2 text-2xs font-medium text-on-brand transition-opacity hover:opacity-90"
                   onClick={() => void download()}
                 >
-                  <Download size={12} />
-                  {t('common.update.now')}
+                  <Download size={12} className="shrink-0" />
+                  <span className="truncate">{t('common.update.now')}</span>
                 </button>
                 <button
                   type="button"
-                  className="inline-flex h-7 items-center rounded px-2 text-2xs text-ink-3 hover:bg-hover hover:text-ink"
+                  className="inline-flex h-7 shrink-0 items-center whitespace-nowrap rounded px-2 text-2xs text-ink-3 hover:bg-hover hover:text-ink"
                   onClick={() => void later()}
                 >
                   {t('common.update.later')}
@@ -252,15 +252,15 @@ export function UpdateBadge(): React.JSX.Element | null {
               <>
                 <button
                   type="button"
-                  className="inline-flex h-7 flex-1 items-center justify-center gap-1 rounded bg-brand px-2 text-2xs font-medium text-on-brand transition-opacity hover:opacity-90"
+                  className="inline-flex h-7 min-w-0 flex-1 items-center justify-center gap-1 whitespace-nowrap rounded bg-brand px-2 text-2xs font-medium text-on-brand transition-opacity hover:opacity-90"
                   onClick={() => void install()}
                 >
-                  <RotateCcw size={12} />
-                  {t('common.update.installNow')}
+                  <RotateCcw size={12} className="shrink-0" />
+                  <span className="truncate">{t('common.update.installNow')}</span>
                 </button>
                 <button
                   type="button"
-                  className="inline-flex h-7 items-center rounded px-2 text-2xs text-ink-3 hover:bg-hover hover:text-ink"
+                  className="inline-flex h-7 shrink-0 items-center whitespace-nowrap rounded px-2 text-2xs text-ink-3 hover:bg-hover hover:text-ink"
                   onClick={() => void later()}
                 >
                   {t('common.update.later')}
@@ -272,17 +272,17 @@ export function UpdateBadge(): React.JSX.Element | null {
               <button
                 type="button"
                 disabled
-                className="inline-flex h-7 flex-1 items-center justify-center gap-1 rounded border border-edge px-2 text-2xs text-ink-3"
+                className="inline-flex h-7 min-w-0 flex-1 items-center justify-center gap-1 whitespace-nowrap rounded border border-edge px-2 text-2xs text-ink-3"
               >
-                <Loader2 size={12} className="animate-spin" />
-                {t('common.update.pleaseWait')}
+                <Loader2 size={12} className="shrink-0 animate-spin" />
+                <span className="truncate">{t('common.update.pleaseWait')}</span>
               </button>
             )}
 
             <button
               type="button"
               className={cn(
-                'inline-flex h-7 shrink-0 items-center gap-1 rounded px-2 text-2xs text-ink-3',
+                'inline-flex h-7 shrink-0 items-center gap-1 whitespace-nowrap rounded px-2 text-2xs text-ink-3',
                 'hover:bg-hover hover:text-ink'
               )}
               title={t('common.update.openRelease')}
@@ -292,7 +292,7 @@ export function UpdateBadge(): React.JSX.Element | null {
             </button>
             <button
               type="button"
-              className="inline-flex h-7 shrink-0 items-center rounded-sm px-2 text-2xs text-ink-3 hover:bg-hover hover:text-ink"
+              className="inline-flex h-7 shrink-0 items-center whitespace-nowrap rounded-sm px-2 text-2xs text-ink-3 hover:bg-hover hover:text-ink"
               title={t('common.update.recheck')}
               onClick={() => void check()}
             >

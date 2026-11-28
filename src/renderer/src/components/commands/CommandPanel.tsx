@@ -560,7 +560,7 @@ export function CommandPanel({
               <button
                 key={s.scope.kind}
                 className={cn(
-                  'flex h-[22px] items-center gap-1 rounded px-1.5 text-2xs transition-colors duration-150',
+                  'flex h-6 items-center gap-1 whitespace-nowrap rounded px-1.5 text-2xs transition-colors duration-150',
                   on
                     ? 'bg-app font-medium text-ink shadow-[0_1px_2px_rgb(0_0_0/0.06)]'
                     : 'text-ink-3 hover:text-ink-2'
@@ -578,7 +578,7 @@ export function CommandPanel({
         </div>
         <span className="flex-1" />
         <button
-          className="flex h-[22px] items-center gap-1 rounded-sm px-1.5 text-2xs text-ink-3 transition-colors duration-150 hover:bg-hover hover:text-ink-2"
+          className="flex h-6 items-center gap-1 whitespace-nowrap rounded-sm px-1.5 text-2xs text-ink-3 transition-colors duration-150 hover:bg-hover hover:text-ink-2"
           title={t('cmd.panel.sortTitle', { label: sortLabel[sort] })}
           onClick={() =>
             pickSort(sort === 'smart' ? 'recent' : sort === 'recent' ? 'frequent' : 'smart')
@@ -687,7 +687,10 @@ export function CommandPanel({
                   className="flex min-w-0 flex-1 cursor-default items-center gap-1 rounded px-1 py-0 text-3xs font-medium text-ink-2 transition-colors hover:bg-hover hover:text-ink"
                   onClick={() => toggleGroup(group)}
                 >
-                  {isCollapsed ? <ChevronRight size={9} /> : <ChevronDown size={9} />}
+                  <ChevronRight
+                    size={9}
+                    className={cn('chev-rot shrink-0', !isCollapsed && 'rotate-90')}
+                  />
                   <span className="truncate">{group}</span>
                   <span className="font-mono text-3xs tabular-nums text-ink-3/70">
                     {items.length}

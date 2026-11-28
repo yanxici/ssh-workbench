@@ -36,11 +36,11 @@ export function TitleBar(): React.JSX.Element {
       {/*
         * 左：Logo + 产品名
         */}
-      <div className="no-drag flex shrink-0 items-center gap-2 pl-3 pr-2.5">
+      <div className="no-drag flex shrink-0 items-center gap-2 pl-3 pr-3">
         <BrandMark size={18} className="shrink-0" />
         <span className="text-sm font-semibold tracking-[-0.02em] text-ink">Portix</span>
       </div>
-      <span className="mr-1 h-3.5 w-px shrink-0 bg-edge" />
+      <span className="mr-1 h-3 w-px shrink-0 bg-edge" />
 
       {/*
         * 中：会话标签页（占据全部剩余宽度，过多时横向滚动）

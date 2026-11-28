@@ -7,7 +7,7 @@ import { useSettingsStore } from '@/stores/settingsStore'
 import { useToastStore } from '@/stores/toastStore'
 import { call } from '@/lib/ipc'
 import { cn } from '@/lib/utils'
-import { Field, Modal, Toggle } from '@/components/ui'
+import { Field, Modal, Segmented, Toggle } from '@/components/ui'
 import { isImeComposing } from '@/lib/ime'
 import type { ExternalImportPreview, ExternalImportSource } from '@shared/types'
 import { useI18n, type I18nKey } from '@/i18n'
@@ -381,32 +381,14 @@ function ImportDialog({ onClose }: { onClose: () => void }): React.JSX.Element {
       }
     >
       <div className="space-y-3">
-        <div className="flex gap-1.5">
-          <button
-            type="button"
-            onClick={() => setPage('backup')}
-            className={cn(
-              'h-7 flex-1 rounded-md border text-xs transition-colors',
-              page === 'backup'
-                ? 'border-accent/60 bg-accent/15 text-accent'
-                : 'border-edge bg-raised text-ink-3 hover:text-ink-2'
-            )}
-          >
-            {t('conn.extImport.tab.backup')}
-          </button>
-          <button
-            type="button"
-            onClick={() => setPage('external')}
-            className={cn(
-              'h-7 flex-1 rounded-md border text-xs transition-colors',
-              page === 'external'
-                ? 'border-accent/60 bg-accent/15 text-accent'
-                : 'border-edge bg-raised text-ink-3 hover:text-ink-2'
-            )}
-          >
-            {t('conn.extImport.tab.external')}
-          </button>
-        </div>
+        <Segmented
+          value={page}
+          onChange={setPage}
+          options={[
+            { value: 'backup', label: t('conn.extImport.tab.backup') },
+            { value: 'external', label: t('conn.extImport.tab.external') }
+          ]}
+        />
 
         {page === 'backup' && (
           <>
@@ -474,28 +456,14 @@ function ImportDialog({ onClose }: { onClose: () => void }): React.JSX.Element {
                 label={t('conn.extImport.duplicatesLabel')}
                 hint={t('conn.extImport.duplicates', { count: preview.duplicates })}
               >
-                <div className="flex gap-2">
-                  {(
-                    [
-                      ['skip', t('conn.extImport.duplicatesSkip')],
-                      ['overwrite', t('conn.ui.import.duplicatesOverwrite')]
-                    ] as const
-                  ).map(([v, label]) => (
-                    <button
-                      key={v}
-                      type="button"
-                      onClick={() => setMode(v)}
-                      className={cn(
-                        'h-7 flex-1 rounded-md border text-xs transition-colors',
-                        mode === v
-                          ? 'border-accent/60 bg-accent/15 text-accent'
-                          : 'border-edge bg-raised text-ink-3 hover:text-ink-2'
-                      )}
-                    >
-                      {label}
-                    </button>
-                  ))}
-                </div>
+                <Segmented
+                  value={mode}
+                  onChange={setMode}
+                  options={[
+                    { value: 'skip', label: t('conn.extImport.duplicatesSkip') },
+                    { value: 'overwrite', label: t('conn.ui.import.duplicatesOverwrite') }
+                  ]}
+                />
               </Field>
             )}
 
@@ -642,28 +610,14 @@ function DupMode({
 }): React.JSX.Element {
   return (
     <Field label={labels.label} hint={labels.hint}>
-      <div className="flex gap-2">
-        {(
-          [
-            ['skip', labels.skip],
-            ['overwrite', labels.overwrite]
-          ] as const
-        ).map(([v, label]) => (
-          <button
-            key={v}
-            type="button"
-            onClick={() => onChange(v)}
-            className={cn(
-              'h-7 flex-1 rounded-md border text-xs transition-colors',
-              mode === v
-                ? 'border-accent/60 bg-accent/15 text-accent'
-                : 'border-edge bg-raised text-ink-3 hover:text-ink-2'
-            )}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
+      <Segmented
+        value={mode}
+        onChange={onChange}
+        options={[
+          { value: 'skip', label: labels.skip },
+          { value: 'overwrite', label: labels.overwrite }
+        ]}
+      />
     </Field>
   )
 }

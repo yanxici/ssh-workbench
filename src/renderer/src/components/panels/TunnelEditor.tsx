@@ -5,7 +5,7 @@ import { isWildcardHost, needsLanGrant } from '@shared/bindHost'
 import { connectionTarget } from '@shared/serialDisplay'
 import { useI18n } from '@/i18n'
 import { cn } from '@/lib/utils'
-import { Field, Modal } from '@/components/ui'
+import { Field, Modal, Segmented } from '@/components/ui'
 import { useConnectionStore } from '@/stores/connectionStore'
 import { useTunnelStore } from '@/stores/tunnelStore'
 
@@ -206,23 +206,11 @@ export function TunnelEditor({
         </Field>
 
         <Field label={t('panel.tunnel.fieldType')}>
-          <div className="flex gap-1.5">
-            {TYPE_OPTIONS.map((opt) => (
-              <button
-                key={opt.value}
-                type="button"
-                onClick={() => set('type', opt.value)}
-                className={cn(
-                  'h-7 flex-1 rounded-md border text-xs transition-colors',
-                  form.type === opt.value
-                    ? 'border-accent/60 bg-accent/15 text-accent'
-                    : 'border-edge bg-raised text-ink-3 hover:text-ink-2'
-                )}
-              >
-                {t(opt.labelKey)}
-              </button>
-            ))}
-          </div>
+          <Segmented
+            value={form.type}
+            onChange={(v) => set('type', v)}
+            options={TYPE_OPTIONS.map((opt) => ({ value: opt.value, label: t(opt.labelKey) }))}
+          />
           <div className="mt-1 text-2xs leading-relaxed text-ink-3">{typeHint}</div>
         </Field>
 

@@ -559,7 +559,7 @@ export function CommandCenter({
                                 <span className="pointer-events-none absolute right-0 top-0 opacity-0 transition-opacity duration-150 group-hover:pointer-events-auto group-hover:opacity-100">
                                   <button
                                     className={cn(
-                                      'flex h-[18px] w-[18px] items-center justify-center rounded text-ink-3 hover:text-warning',
+                                      'flex h-5 w-5 items-center justify-center rounded text-ink-3 hover:text-warning',
                                       pinned && 'text-warning'
                                     )}
                                     title={pinned ? t('cmd.card.unpin') : t('cmd.card.pin')}
@@ -751,7 +751,7 @@ function SortChip({
   return (
     <button
       className={cn(
-        'flex h-5 items-center gap-1 rounded px-1.5 text-2xs transition-colors',
+        'flex h-5 items-center gap-1 whitespace-nowrap rounded px-1.5 text-2xs transition-colors',
         active ? 'bg-accent/15 text-accent' : 'text-ink-3 hover:bg-hover hover:text-ink-2'
       )}
       onClick={onClick}

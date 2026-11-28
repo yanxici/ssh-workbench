@@ -86,7 +86,7 @@ export function TransferTab(): React.JSX.Element {
             <button
               key={f.key}
               className={cn(
-                'flex h-[22px] items-center gap-1 rounded-sm px-1.5 text-2xs transition-colors duration-150',
+                'flex h-6 items-center gap-1 whitespace-nowrap rounded-sm px-1.5 text-2xs transition-colors duration-150',
                 filter === f.key
                   ? 'bg-app font-medium text-ink shadow-[0_1px_2px_rgb(0_0_0/0.06)]'
                   : 'text-ink-3 hover:text-ink-2'

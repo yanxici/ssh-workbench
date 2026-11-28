@@ -1,7 +1,6 @@
 import type * as React from 'react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
-  ChevronDown,
   ChevronRight,
   Gauge,
   HardDriveDownload,
@@ -269,15 +268,15 @@ export function SerialBootBar({ session }: Props): React.JSX.Element {
         /* 折叠头：一行说清"这条是干什么的" + 当前波特率 */
       }
       <button
-        className="flex h-7 w-full items-center gap-1.5 px-3 text-left text-2xs text-ink-3 hover:text-ink-2"
+        className="flex h-7 w-full min-w-0 items-center gap-1.5 overflow-hidden whitespace-nowrap px-3 text-left text-2xs text-ink-3 hover:text-ink-2"
         onClick={() => setOpen((v) => !v)}
       >
-        {open ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
-        <Usb size={11} />
-        <span className="text-ink-2">{t('term.serial.barTitle')}</span>
-        <span className="text-ink-3">{t('term.serial.barSub')}</span>
+        <ChevronRight size={11} className={cn('chev-rot shrink-0', open && 'rotate-90')} />
+        <Usb size={11} className="shrink-0" />
+        <span className="shrink-0 text-ink-2">{t('term.serial.barTitle')}</span>
+        <span className="min-w-0 truncate text-ink-3">{t('term.serial.barSub')}</span>
         {sessionBaud !== undefined && (
-          <span className="flex items-center gap-0.5 font-mono text-ink-3">
+          <span className="flex shrink-0 items-center gap-0.5 font-mono text-ink-3">
             <Gauge size={10} />
             {sessionBaud}
           </span>
@@ -299,7 +298,7 @@ export function SerialBootBar({ session }: Props): React.JSX.Element {
       </button>
 
       {open && (
-        <div className="flex flex-col gap-2 px-3 pb-2.5">
+        <div className="motion-reveal flex flex-col gap-2 px-3 pb-2.5">
           {/*
            * 串口参数：与刷机三步分开，因为「设备不吐字」和「刷机」是两件事。
            * 波特率错了的表现就是一片空白或满屏乱码 —— 这里能就地试另一个速率，
